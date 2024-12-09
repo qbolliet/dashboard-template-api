@@ -1,0 +1,26 @@
+{
+  "name": "dashboard-template-api",
+  "version": "1.0.0",
+  "description": "GraphQL API for DuckDB schema database",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "github.com/qbolliet/dashboard-template-api"
+  },
+  "keywords": [
+    "GraphQL",
+    "DuckDB",
+    "API"
+  ],
+  "author": "Quentin Bolliet",
+  "license": "MIT",
+  "dependencies": {
+    "apollo-server": "^3.13.0",
+    "duckdb": "^1.1.3",
+    "graphql": "^16.9.0",
+    "winston": "^3.17.0"
+  }
+}
