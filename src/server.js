@@ -4,11 +4,12 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const yaml = require('js-yaml');
 // Modules ad hoc
-import { typeDefs } from './schema';
-import { resolvers } from './resolvers';
+const { typeDefs } = require('./schema');
+const { resolvers } = require('./resolvers');
+const { logger } = require('./utils/logger')
 
 // Chargement du fichier de configuration
-const config = yaml.load(fs.readFileSync('./../config/config.yaml', 'utf8'));
+const config = yaml.load(fs.readFileSync('./config/config.yaml', 'utf8'));
 
 
 // Apollo Server
