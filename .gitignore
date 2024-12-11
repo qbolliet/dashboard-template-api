@@ -1,1 +1,6 @@
+# Modules
 node_modules/
+
+# Logs
+logs/
+!logs/.gitkeep
