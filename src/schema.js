@@ -48,6 +48,12 @@ const typeDefs = gql`
     COUNT
   }
 
+  type SelectOption {
+    value: String!
+    label: String!
+  }
+
+
   type Query {
     getMetaData(name: String!): Metadata
     getDimensionTable(name: String!): [Dimension]
@@ -65,6 +71,12 @@ const typeDefs = gql`
       groupBy: String!
       aggregation: Aggregation!
     ): [AggregatedFact]
+    # Enhanced query to get options for select components
+    getSelectOptions(
+      fieldName: String!, 
+      limit: Int = 50, 
+      searchTerm: String = ""
+    ): [SelectOption!]!
   }
 `;
 
