@@ -2,7 +2,7 @@
 const { gql } = require('apollo-server');
 
 
-// Define the GraphQL schema
+// Définition du schéma graphQL
 const typeDefs = gql`
   type Metadata {
     name: String
@@ -40,6 +40,16 @@ const typeDefs = gql`
     value: String
   }
 
+  input SortInput {
+    field: String!
+    order: SortOrder = ASC
+  }
+
+  enum SortOrder {
+    ASC
+    DESC
+  }
+
   enum Aggregation {
     SUM
     AVG
@@ -63,6 +73,7 @@ const typeDefs = gql`
       structuredFilters: [Filter]
       limit: Int!
       offset: Int!
+      sort: [SortInput!]
     ): PaginatedFacts
     getAggregatedFacts(
       indicator: String!
@@ -70,6 +81,7 @@ const typeDefs = gql`
       structuredFilters: [Filter]
       groupBy: String!
       aggregation: Aggregation!
+      sort: [SortInput!]
     ): [AggregatedFact]
     # Enhanced query to get options for select components
     getSelectOptions(
