@@ -4,7 +4,11 @@
   "description": "GraphQL API for DuckDB schema database",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "lint": "eslint src/",
+    "format": "prettier --write 'src/**/*.js'"
   },
   "repository": {
     "type": "git",
