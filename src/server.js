@@ -60,3 +60,38 @@ const server = new ApolloServer({
 server.listen({ port: config.PORT }).then(({ url }) => {
   logger.info(`🚀 Server ready at ${url}`);
 });
+
+
+const { ApolloServer } = require('apollo-server');
+const { v4: uuidv4 } = require('uuid');
+const { schema } = require('./schema');
+const { createLoaders } = require('./loaders');
+const { logger } = require('./utils/logger');
+const { closeConnections } = require('./db');
+const { redis } = require('./cache');
+
+async function startServer() {
+  const server = new ApolloServer({
+    schema,
+    context: async ({ req }) => ({
+      requestId: uuidv4(),
+      loaders: createLoaders(),
+      // ... other context items
+    }),
+    // ... other server config
+  });
+
+  // Graceful shutdown
+  process.on('SIGTERM', async () => {
+    await Promise.all([
+      redis.quit(),
+      closeConnections()
+    ]);
+    process.exit(0);
+  });
+
+  const { url } = await server.listen({ port: process.env.PORT });
+  logger.info(`🚀 Server ready at ${url}`);
+}
+
+exports.startServer = startServer;
