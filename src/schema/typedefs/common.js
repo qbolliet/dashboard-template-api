@@ -14,7 +14,16 @@ const commonTypeDefs = gql`
     MAX
     MIN
     COUNT
+    MEDIAN
+    MODE
   }
+  
+  type AggregatedFact {
+      key: String!
+      aggregatedValue: Float!
+      count: Int!
+  }
+
 
   input Filter {
     key: String!
