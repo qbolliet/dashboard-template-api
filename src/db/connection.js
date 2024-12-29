@@ -1,4 +1,4 @@
-// Importation des
+// Importation des modules
 const { DuckDBPool } = require('./pool');
 const config = require('../config');
 // Chargement du fichier de configuration
