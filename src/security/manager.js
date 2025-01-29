@@ -5,12 +5,24 @@ const xss = require('xss');
 const { validateInput } = require('./validation');
 const { logger } = require('../utils/logger');
 const { performance } = require('perf_hooks');
+const crypto = require('crypto');
 
 // Gestionnaire de la sécurité
+// /!\ Le rate limiter n'est actuellement pas inclu dans le performance Monitor
 class SecurityManager {
+    // Initialisation du registre des requêtes
+    static requestStore = new Map();
+    // Initialisation du coût par défaut des différentes opérations
+    static complexityScores = {
+        query: 1,
+        aggregation: 2,
+        sort: 0.5,
+        filter: 0.5
+    };
+
     static async validateRequest(context, info) {
-    // Add request validation logic here
-    // E.g. rate limiting, etc.
+        // Add request validation logic here
+        // E.g. user authentification
         return true;
     }
 
@@ -20,50 +32,155 @@ class SecurityManager {
         const {
             maxRequests = 100,
             windowMs = 15 * 60 * 1000, // 15 minutes
-            keyGenerator = (context) => context.ip
+            maxBurstRequests = 20, // Nombre de requête maximal par période
+            burstWindowMs = 60 * 1000, // Durée de la période (1 minute)
         } = options;
 
-        const requestLog = new Map();
-
         return (context, next) => {
-            const key = keyGenerator(context);
-            const now = Date.now();
+            // Extraction de l'agent et de l'IP
+            const clientIp = context.req.ip || context.req.headers['x-forwarded-for'];
+            const userAgent = context.req.headers['user-agent'] || 'unknown';
 
-            // Suppression des anciennes entrées
-            for (const [k, entry] of requestLog.entries()) {
-                if (now - entry.timestamp > windowMs) {
-                    requestLog.delete(k);
-                }
+            // Création d'un identifiant unique à partir de ces éléments
+            const identifier = crypto
+                .createHash('sha256')
+                .update(`${clientIp}:${userAgent}`)
+                .digest('hex');
+            
+            // Initialisation de la date
+            const now = Date.now();
+            // Extraction des données de requêtes
+            const requestData = this.requestStore.get(identifier) || {
+                requests: [],
+                burstCount: 0,
+                lastBurstReset: now
+            };
+
+            // Suppression des anciennes requêtes
+            requestData.requests = requestData.requests.filter(time => now - time < windowMs);
+
+            // Réinitialisation du compteur si la période a expiré
+            if (now - requestData.lastBurstReset > burstWindowMs) {
+                requestData.burstCount = 0;
+                requestData.lastBurstReset = now;
             }
 
             // Vérification du respect de la fréquence limite
-            const userRequests = requestLog.get(key) || { count: 0, timestamp: now };
-            
-            if (userRequests.count >= maxRequests) {
-                throw new GraphQLError('Too many requests, please try again later', {
-                    extensions: { 
+            if (
+                requestData.requests.length >= maxRequests ||
+                requestData.burstCount >= maxBurstRequests
+            ) {
+                logger.warn(`Rate limit exceeded for ${identifier}`);
+                throw new GraphQLError('Rate limit exceeded', {
+                    extensions: {
                         code: 'RATE_LIMIT_EXCEEDED',
-                        retryAfter: Math.ceil((windowMs - (now - userRequests.timestamp)) / 1000)
+                        retryAfter: Math.ceil((windowMs - (now - requestData.requests[0])) / 1000)
                     }
                 });
             }
 
             // Mise à jour du compteur de requêtes
-            requestLog.set(key, {
-                count: userRequests.count + 1,
-                timestamp: now
-            });
+            requestData.requests.push(now);
+            requestData.burstCount++;
+            this.requestStore.set(identifier, requestData);
 
             return next();
         };
     }
 
+    // Analyse de la complexité des requêtes
+    static calculateQueryComplexity(info) {
+        // Calcul de la complexité
+        const complexity = this._recursiveComplexityCalculation(info.fieldNodes[0]);
+        
+        // Lance une erreur si la requête est excessivement complexe
+        if (complexity > 100) { // Seuil arbitraire
+            throw new GraphQLError('Query too complex', {
+                extensions: { code: 'QUERY_COMPLEXITY_EXCEEDED' }
+            });
+        }
+        
+        return complexity;
+    }
+
+    // Calcul récursif de la complexité des opérations de la requête
+    static _recursiveComplexityCalculation(node, depth = 0) {
+        // Initialisation de la complexité
+        let complexity = this.complexityScores[node.kind] || 1;
+        
+        // Ajout du coût associé à chaque argument
+        if (node.arguments) {
+            node.arguments.forEach(arg => {
+                if (arg.name.value === 'filter') complexity += this.complexityScores.filter;
+                if (arg.name.value === 'sort') complexity += this.complexityScores.sort;
+            });
+        }
+        
+        // Multipllication par un facteur de profondeur
+        complexity *= (1 + depth * 0.1);
+        
+        return complexity;
+    }
+
     // Gestion des injections SQL
     static preventSQLInjection(input) {
         if (typeof input !== 'string') return input;
+
+        // Suppression des commentaires
+        input = input.replace(/\/\*[\s\S]*?\*\/|--.*$/gm, '');
+        
+        // Gestion des attaques UNION
+        if (/\bunion\b/i.test(input)) {
+            throw new GraphQLError('Invalid SQL query', {
+                extensions: { code: 'SQL_INJECTION_PREVENTED' }
+            });
+        }
         
         // Utilisation des requêtes paramétrées pour éviter les caractères spéciaux
         return sqlstring.escape(input);
+    }
+
+    
+
+    // Gestion de la performance et de la sécurité
+    static createPerformanceMonitor() {
+        return async (resolve, root, args, context, info) => {
+            const start = performance.now();
+            const queryComplexity = this.calculateQueryComplexity(info);
+
+            try {
+                // Validation de la requête
+                await this.validateRequest(context, info);
+
+                // Vérification des arguments
+                const sanitizedArgs = this._sanitizeInputs(args);
+
+                // Résolution de la requête
+                const result = await resolve(root, sanitizedArgs, context, info);
+
+                // Monitorig de la performance
+                const executionTime = performance.now() - start;
+                this._logPerformanceMetrics(info, executionTime, queryComplexity);
+
+                return result;
+            } catch (error) {
+                this._handleError(error, info);
+                throw error;
+            }
+        };
+    }
+
+    // Méthodes auxiliaires
+    static _sanitizeInputs(args) {
+        return Object.entries(args).reduce((acc, [key, value]) => {
+            acc[key] = this.sanitizeXSS(
+                    this.preventSQLInjection(
+                        validateInput(value)
+                    )
+                );
+
+            return acc;
+        }, {});
     }
 
     // Protection XSS 
@@ -77,50 +194,26 @@ class SecurityManager {
         });
     }
 
-    // Gestion de la performance et de la sécurité
-    static createPerformanceMonitor() {
-        return async (resolve, root, args, context, info) => {
-            const start = performance.now();
-
-            try {
-                // Vérification et validation des arguments en entrée
-                const sanitizedArgs = Object.entries(args).reduce((acc, [key, value]) => {
-                    acc[key] = this.sanitizeXSS(
-                        this.preventSQLInjection(
-                            validateInput(value)
-                        )
-                    );
-                    return acc;
-                }, {});
-
-                // Exécution du resolver
-                const result = await resolve(root, sanitizedArgs, context, info);
-
-                const end = performance.now();
-                const executionTime = end - start;
-
-                // Affiche la performance si le temps d'exécution dépasse un certain seuil
-                if (executionTime > 1000) { // 1 second
-                    logger.warn(`Slow query detected`, {
-                        field: info.fieldName,
-                        executionTime,
-                        args: sanitizedArgs
-                    });
-                }
-
-                return result;
-            } catch (error) {
-                // Retour d'une erreur
-                logger.error('GraphQL Error', {
-                    error: error.message,
-                    stack: error.stack,
-                    field: info.fieldName
-                });
-
-                throw error;
-            }
-        };
+    // Log des performances
+    static _logPerformanceMetrics(info, executionTime, complexity) {
+        // Warning si le temps d'exécution excède un certain seuil
+        if (executionTime > 1000) { // Seuil arbitraire de 1000 ms
+            logger.warn('Slow query detected', {
+                field: info.fieldName,
+                executionTime,
+                complexity
+            });
+        }
     }
+
+    // Gestion des erreurs
+    static _handleError(error, info) {
+        logger.error('GraphQL Error', {
+            error: error.message,
+            stack: error.stack,
+            field: info.fieldName
+        });
+    }    
 }
 
 module.exports = SecurityManager;

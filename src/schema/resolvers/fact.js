@@ -1,6 +1,6 @@
 // Importation des modules
 const { withTimeout } = require('../../utils/timeout');
-import { buildWhereClause } from '../../utils/utils';
+const { buildWhereClause } = require('../../utils/utils');
 
 // Construction d'un resolver pour la table des données
 const factResolvers = {

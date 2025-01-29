@@ -1,6 +1,6 @@
 // Importation des modules
 const typeDefs = require('./typedefs');
-const { resolvers } = require('../resolvers');
+const { resolvers } = require('./resolvers');
 
 // Construction du schéma
 const schema = {
