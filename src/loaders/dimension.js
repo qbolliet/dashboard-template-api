@@ -1,4 +1,5 @@
 // Importation des modules
+const DataLoader = require('dataloader');
 
 // Fonction de chargement des méta-données
 const createDimensionLoader = () => new DataLoader(async (names) => {

@@ -1,5 +1,5 @@
 // Importation des modules
-const { withTimeout } = require('../utils/timeout');
+const { withTimeout } = require('../../utils/timeout');
 const { ValidationError } = require('apollo-server');
 
 // Resolver pour les données agrégées

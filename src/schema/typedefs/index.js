@@ -1,5 +1,6 @@
 // Importation des éléments du dossier
-const { gql, mergeTypeDefs } = require('apollo-server');
+const { gql } = require('apollo-server');
+const { mergeTypeDefs } = require('@graphql-tools/merge');
 const commonTypeDefs = require('./common');
 const { dimensionTypeDefs } = require('./dimension');
 const { factTypeDefs } = require('./fact');
