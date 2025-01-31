@@ -1,6 +1,6 @@
 // Importation des modules
 const Redis = require('ioredis');
-import { redisConfig } from '../../config/redis';
+const redisConfig = require('./../../config/redis');
 
 // Fonction de création du cache
 const createRedisClient = () => {
