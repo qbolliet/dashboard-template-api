@@ -32,6 +32,8 @@
     "graphql": "^16.9.0",
     "ioredis": "^5.4.1",
     "js-yaml": "^4.1.0",
-    "winston": "^3.17.0"
+    "sqlstring": "^2.3.3",
+    "winston": "^3.17.0",
+    "yaml": "^2.7.0"
   }
 }
