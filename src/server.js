@@ -8,6 +8,7 @@ const { createLoaders } = require('./loaders');
 const { logger } = require('./utils/logger');
 const { closeConnections } = require('./db');
 const { redis } = require('./cache');
+const { SecurityManager } = require('./security');
 
 // Liste des requêtes permises
 const ALLOWED_OPERATIONS = new Set([
