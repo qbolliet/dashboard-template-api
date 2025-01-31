@@ -26,4 +26,4 @@ const selectOptionsResolvers = {
     }
 };
 
-module.exports = selectOptionsResolvers;
+module.exports = { selectOptionsResolvers };

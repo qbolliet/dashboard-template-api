@@ -216,4 +216,4 @@ class SecurityManager {
     }    
 }
 
-module.exports = SecurityManager;
+module.exports = { SecurityManager };

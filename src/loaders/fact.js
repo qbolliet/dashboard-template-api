@@ -2,7 +2,7 @@
 const DataLoader = require('dataloader');
 const { dbPool } = require('../db');
 const { withCache } = require('../utils/cache');
-import { buildWhereClause } from '../utils/utils';
+const { buildWhereClause } = require('../utils/utils');
 
 // Fonction d'importation des données
 const createFactLoader = () => new DataLoader(async (keys) => {
