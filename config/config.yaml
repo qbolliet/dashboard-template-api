@@ -1,2 +1,4 @@
 PATH : "./../dashboard-template-database/outputs/database.db"
-PORT : 4000
+DB_MAX_CONNECTIONS: 5
+DB_ACQUIRE_TIMEOUT: 60000
+PORT: 4000
