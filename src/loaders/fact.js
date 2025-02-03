@@ -8,15 +8,18 @@ const { buildWhereClause } = require('../utils/utils');
 const createFactLoader = () => new DataLoader(async (keys) => {
     const db = await dbPool.acquire();
     try {
-        return await Promise.all(keys.map(async ({ indicator, filters, structuredFilters, limit, offset, sort }) => {
-            const cacheKey = `facts:${JSON.stringify({ indicator, filters, structuredFilters, limit, offset, sort })}`;
+        return await Promise.all(keys.map(async ({ indicators, filters, structuredFilters, limit, offset, sort }) => {
+            const cacheKey = `facts:${JSON.stringify({ indicators, filters, structuredFilters, limit, offset, sort })}`;
             return await withCache(cacheKey, async () => {
+                const selectClause = indicators.length > 0
+                    ? indicators.join(', ')
+                    : '*';
                 const whereClause = buildWhereClause(filters, structuredFilters);
                 const sortClause = sort.length > 0 
                     ? `ORDER BY ${sort.map(s => `${s.field} ${s.order}`).join(', ')}` 
                     : '';
                 const query = `
-                    SELECT * FROM fact_table
+                    SELECT ${selectClause} FROM fact_table
                     ${whereClause} 
                     ${sortClause}
                     LIMIT ${limit} OFFSET ${offset}

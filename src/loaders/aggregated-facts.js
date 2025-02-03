@@ -15,7 +15,9 @@ const createAggregatedFactsLoader = () => new DataLoader(async (keys) => {
             structuredFilters, 
             groupBy, 
             aggregation,
-            sort = [] 
+            limit,
+            offset,
+            sort = [],
         }) => {
             const cacheKey = `aggregated-facts:${JSON.stringify({ 
                 indicator, 
@@ -23,6 +25,8 @@ const createAggregatedFactsLoader = () => new DataLoader(async (keys) => {
                 structuredFilters, 
                 groupBy, 
                 aggregation,
+                limit,
+                offset,
                 sort 
             })}`;
 
@@ -58,6 +62,7 @@ const createAggregatedFactsLoader = () => new DataLoader(async (keys) => {
                     ${whereClause}
                     GROUP BY ${groupBy}
                     ${sortClause}
+                    LIMIT ${limit} OFFSET ${offset}
                 `;
 
                 const results = await db.all(query);
