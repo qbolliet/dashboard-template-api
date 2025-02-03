@@ -4,3 +4,6 @@ node_modules/
 # Logs
 logs/
 !logs/.gitkeep
+
+# Environment files
+*.env
