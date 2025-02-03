@@ -1,12 +1,13 @@
 // Importation des modules
-const typeDefs = require('./typedefs');
+const { makeExecutableSchema } = require('@graphql-tools/schema');
+const { typeDefs } = require('./typedefs');
 const { resolvers } = require('./resolvers');
 
 // Construction du schéma
-const schema = {
+const schema = makeExecutableSchema({
   typeDefs,
   resolvers
-};
+});
 
 // Ré-exportation des éléments d'intérêt
 module.exports = {

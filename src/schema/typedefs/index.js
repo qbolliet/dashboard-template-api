@@ -25,4 +25,4 @@ const typeDefs = mergeTypeDefs([
 ]);
 
 // Réexportation des éléments d'intérêt
-module.exports = typeDefs;
+module.exports = { typeDefs };
