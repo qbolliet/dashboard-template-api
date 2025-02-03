@@ -49,10 +49,52 @@ async function startServer() {
             if (body.operationName === 'IntrospectionQuery') {
                 return;
             }
+    
             // Vérifie que la taille de la requête est inférieure à la taille maximale fixée en paramètre
             if (buf.length > parseInt(config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'])) {
                 throw new Error('Request entity too large');
             }
+    
+            // Comptage du nombre de champs
+            const countFields = (obj) => {
+                let count = 0;
+                const queue = [obj];
+                
+                while (queue.length > 0) {
+                    const current = queue.shift();
+                    if (typeof current === 'object' && current !== null) {
+                        Object.values(current).forEach(value => {
+                            if (typeof value === 'object' && value !== null) {
+                                queue.push(value);
+                            }
+                            count++;
+                        });
+                    }
+                }
+                return count;
+            };
+    
+            // Vérification du nombre de champs
+            const fields = countFields(body);
+            if (fields > config['REQUEST_LIMITS']['MAX_FIELDS']) {
+                throw new Error('Too many fields in request');
+            }
+    
+            // Estimation de la taille de chaque champ
+            const checkFieldSize = (obj) => {
+                if (typeof obj === 'object' && obj !== null) {
+                    Object.entries(obj).forEach(([key, value]) => {
+                        if (typeof value === 'string' && value.length > config['REQUEST_LIMITS']['MAX_FIELD_SIZE']) {
+                            throw new Error(`Field ${key} exceeds maximum allowed size`);
+                        }
+                        if (typeof value === 'object' && value !== null) {
+                            checkFieldSize(value);
+                        }
+                    });
+                }
+            };
+            // Vérification de la taille des champs
+            checkFieldSize(body);
         }
     }));
 
