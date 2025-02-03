@@ -22,7 +22,7 @@ const factTypeDefs = gql`
 
     type Query {
         getFactTable(
-            indicator: String
+            indicators: String
             filters: String
             structuredFilters: [Filter]
             limit: Int!
@@ -30,7 +30,7 @@ const factTypeDefs = gql`
             sort: [SortInput!]
         ): PaginatedFacts
         getAggregatedFacts(
-            indicator: String!
+            indicators: String!
             filters: String
             structuredFilters: [Filter]
             groupBy: String!

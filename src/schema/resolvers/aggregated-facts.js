@@ -11,9 +11,11 @@ const aggregatedFactsResolvers = {
             structuredFilters,
             groupBy,
             aggregation = 'SUM',
+            limit = 100,
+            offset = 0,
             sort = []
         }, { loaders }) => {
-            // Validate inputs
+            // Validation des opérations d'agrégation
             const validAggregations = ['SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'];
             if (!validAggregations.includes(aggregation)) {
                 throw new ValidationError(
@@ -21,11 +23,22 @@ const aggregatedFactsResolvers = {
                 );
             }
 
+            // Groupby est un élément obligatoire
             if (!groupBy) {
                 throw new ValidationError('groupBy field is required');
             }
+            
+            // Définition d'un offset valide
+            if (offset > 1000) {
+                throw new ValidationError('Offset cannot exceed 1000');
+            }
 
-            // Validate sort fields
+            // Définition d'une limite valide
+            if (limit > 1000) {
+                throw new ValidationError('Limit cannot exceed 1000');
+            }
+
+            // Validation des champs sur lesquels trier et des opérations de tri
             sort.forEach(({ field, order }) => {
                 if (field !== 'key' && field !== 'aggregatedValue') {
                     throw new ValidationError(
@@ -45,6 +58,8 @@ const aggregatedFactsResolvers = {
                         structuredFilters,
                         groupBy,
                         aggregation,
+                        limit,
+                        offset,
                         sort
                     }),
                     10000,
