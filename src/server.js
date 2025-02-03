@@ -9,30 +9,14 @@ const { logger } = require('./utils/logger');
 const { closeConnections } = require('./db');
 const { redis } = require('./cache');
 const { SecurityManager } = require('./security');
+const path = require('path');
+const fs = require('fs');
+const yaml = require('yaml');
 
-// Liste des requêtes permises
-const ALLOWED_OPERATIONS = new Set([
-    'getMetaData',
-    'getDimensionTable',
-    'getFactTable',
-    'getAggregatedFacts',
-    'getSelectOptions',
-    'getGroupedSelectOptions'
-]);
+// Chargement du fichier de configuration
+const configPath = path.resolve(__dirname, '../config/config.yaml');
+const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
 
-// Configuration de la taille maximale des requêtes
-const REQUEST_LIMITS = {
-    maxRequestSize: '100kb',
-    maxFieldSize: 1000,
-    maxFields: 50
-};
-
-// Configuration du cache
-const CACHE_CONFIG = {
-    defaultMaxAge: 300, // 5 minutes
-    publicPaths: ['/graphql'],
-    varyByHeaders: ['accept-encoding', 'accept']
-};
 
 // Fonction de lancement du serveur
 async function startServer() {
@@ -41,19 +25,32 @@ async function startServer() {
     // Headers de sécurité
     app.use((req, res, next) => {
         res.set({
+            'Access-Control-Allow-Origin': process.env.NODE_ENV === 'production' ? config['DOMAIN'] : 'https://studio.apollographql.com',
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
             'X-Content-Type-Options': 'nosniff',
             'X-Frame-Options': 'DENY',
             'X-XSS-Protection': '1; mode=block',
             'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
         });
+        if (req.method === 'OPTIONS') {
+            return res.sendStatus(204);
+        }
         next();
     });
 
     // Gestion de la taille limite des requêtes
     app.use(express.json({
-        limit: REQUEST_LIMITS.maxRequestSize,
+        limit: config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'],
         verify: (req, res, buf) => {
-            if (buf.length > parseInt(REQUEST_LIMITS.maxRequestSize)) {
+            // Ne vérifie pas la taille des requêtes pour les requêtes d'introspection
+            const body = JSON.parse(buf.toString());
+            if (body.operationName === 'IntrospectionQuery') {
+                return;
+            }
+            // Vérifie que la taille de la requête est inférieure à la taille maximale fixée en paramètre
+            if (buf.length > parseInt(config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'])) {
                 throw new Error('Request entity too large');
             }
         }
@@ -72,9 +69,9 @@ async function startServer() {
 
     // Contrôle du cache
     app.use((req, res, next) => {
-        if (CACHE_CONFIG.publicPaths.some(path => req.path.startsWith(path))) {
-            res.set('Cache-Control', `public, max-age=${CACHE_CONFIG.defaultMaxAge}`);
-            res.set('Vary', CACHE_CONFIG.varyByHeaders.join(', '));
+        if (config['CACHE']['PUBLIC_PATHS'].some(path => req.path.startsWith(path))) {
+            res.set('Cache-Control', `public, max-age=${config['CACHE']['DEFAULT_MAX_AGE']}`);
+            res.set('Vary', config['CACHE']['VARY_BY_HEADERS'].join(', '));
         } else {
             res.set('Cache-Control', 'no-store');
         }
@@ -92,6 +89,8 @@ async function startServer() {
             req,
             res
         }),
+        // Autorise l'introspection en developpement
+        introspection: process.env.NODE_ENV !== 'production',
         // Formattage des erreurs
         formatError: (err) => {
             // Création d'un identifiant associé à l'erreur
@@ -114,8 +113,15 @@ async function startServer() {
             // Liste blanche des opérations valides
             (context) => ({
                 OperationDefinition(node) {
+                    // Extraction du nom de l'opération
                     const operationName = node.name?.value;
-                    if (!ALLOWED_OPERATIONS.has(operationName)) {
+
+                    // Ne valide pas les requêtes d'introspection en environnement de développement
+                    if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
+                        return;
+                    }
+                    // Vérification que l'opération fait bien partie des opérations autorisées
+                    if (!config['ALLOWED_OPERATIONS'].has(operationName)) {
                         throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
                     }
                 }
@@ -133,8 +139,13 @@ async function startServer() {
                             // Extraction du nom de l'opération
                             const operationName = operation?.name?.value;
                             try {
+                                // Ne vérifie pas le taux des requêtes d'introspection en environnement de développement
+                                if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
+                                    return;
+                                }
+
                                 // 1. Vérification si l'opération est permise
-                                if (!ALLOWED_OPERATIONS.has(operationName)) {
+                                if (!config['ALLOWED_OPERATIONS'].has(operationName)) {
                                     throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
                                 }
             
