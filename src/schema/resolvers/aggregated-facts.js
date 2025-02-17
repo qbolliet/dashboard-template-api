@@ -6,7 +6,7 @@ const { ValidationError } = require('apollo-server');
 const aggregatedFactsResolvers = {
     Query: {
         getAggregatedFacts: async (_, {
-            indicator,
+            fields,
             filters,
             structuredFilters,
             groupBy,
@@ -53,7 +53,7 @@ const aggregatedFactsResolvers = {
             try {
                 return await withTimeout(
                     loaders.aggregatedFacts.load({
-                        indicator,
+                        fields,
                         filters,
                         structuredFilters,
                         groupBy,
