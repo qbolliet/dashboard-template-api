@@ -8,11 +8,11 @@ const { buildWhereClause } = require('../utils/utils');
 const createFactLoader = () => new DataLoader(async (keys) => {
     const db = await dbPool.acquire();
     try {
-        return await Promise.all(keys.map(async ({ indicators, filters, structuredFilters, limit, offset, sort }) => {
-            const cacheKey = `facts:${JSON.stringify({ indicators, filters, structuredFilters, limit, offset, sort })}`;
+        return await Promise.all(keys.map(async ({ fields, filters, structuredFilters, limit, offset, sort }) => {
+            const cacheKey = `facts:${JSON.stringify({ fields, filters, structuredFilters, limit, offset, sort })}`;
             return await withCache(cacheKey, async () => {
-                const selectClause = indicators.length > 0
-                    ? indicators.join(', ')
+                const selectClause = fields.length > 0
+                    ? fields.join(', ')
                     : '*';
                 const whereClause = buildWhereClause(filters, structuredFilters);
                 const sortClause = sort.length > 0 

@@ -42,17 +42,13 @@ async function startServer() {
 
     // Gestion de la taille limite des requêtes
     app.use(express.json({
+        // Vérifie que la taille de la requête est inférieure à la taille maximale fixée en paramètre
         limit: config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'],
         verify: (req, res, buf) => {
             // Ne vérifie pas la taille des requêtes pour les requêtes d'introspection
             const body = JSON.parse(buf.toString());
             if (body.operationName === 'IntrospectionQuery') {
                 return;
-            }
-    
-            // Vérifie que la taille de la requête est inférieure à la taille maximale fixée en paramètre
-            if (buf.length > parseInt(config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'])) {
-                throw new Error('Request entity too large');
             }
     
             // Comptage du nombre de champs
@@ -163,7 +159,7 @@ async function startServer() {
                         return;
                     }
                     // Vérification que l'opération fait bien partie des opérations autorisées
-                    if (!config['ALLOWED_OPERATIONS'].has(operationName)) {
+                    if (!config['ALLOWED_OPERATIONS'].includes(operationName)) {
                         throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
                     }
                 }
@@ -187,7 +183,7 @@ async function startServer() {
                                 }
 
                                 // 1. Vérification si l'opération est permise
-                                if (!config['ALLOWED_OPERATIONS'].has(operationName)) {
+                                if (!config['ALLOWED_OPERATIONS'].includes(operationName)) {
                                     throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
                                 }
             

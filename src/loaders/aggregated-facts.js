@@ -10,7 +10,7 @@ const createAggregatedFactsLoader = () => new DataLoader(async (keys) => {
     const db = await dbPool.acquire();
     try {
         return await Promise.all(keys.map(async ({ 
-            indicator, 
+            fields, 
             filters, 
             structuredFilters, 
             groupBy, 
@@ -20,7 +20,7 @@ const createAggregatedFactsLoader = () => new DataLoader(async (keys) => {
             sort = [],
         }) => {
             const cacheKey = `aggregated-facts:${JSON.stringify({ 
-                indicator, 
+                fields, 
                 filters, 
                 structuredFilters, 
                 groupBy, 
