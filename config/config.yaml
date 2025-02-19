@@ -1,4 +1,4 @@
-PATH : "./../../dashboard-template-database/outputs/database.db"
+DB_PATH : "../dashboard-template-database/outputs/database.db"
 DOMAIN : 'https://your-production-domain.com'
 ALLOWED_OPERATIONS : ['getMetaData', 'getDimensionTable', 'getFactTable', 'getAggregatedFacts', 'getSelectOptions', 'getGroupedSelectOptions']
 REQUEST_LIMITS :
