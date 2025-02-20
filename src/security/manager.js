@@ -12,6 +12,7 @@ const crypto = require('crypto');
 class SecurityManager {
     // Initialisation du registre des requêtes
     static requestStore = new Map();
+
     // Initialisation du coût par défaut des différentes opérations
     static complexityScores = {
         query: 1,
@@ -28,6 +29,9 @@ class SecurityManager {
 
     // Rate Limiting Middleware
     static createRateLimiter(options = {}) {
+        // Extraction du requestStore
+        const store = SecurityManager.requestStore;
+
         // Options par défaut
         const {
             maxRequests = 100,
@@ -50,7 +54,7 @@ class SecurityManager {
             // Initialisation de la date
             const now = Date.now();
             // Extraction des données de requêtes
-            const requestData = this.requestStore.get(identifier) || {
+            const requestData = store.get(identifier) || {
                 requests: [],
                 burstCount: 0,
                 lastBurstReset: now
@@ -82,7 +86,7 @@ class SecurityManager {
             // Mise à jour du compteur de requêtes
             requestData.requests.push(now);
             requestData.burstCount++;
-            this.requestStore.set(identifier, requestData);
+            store.set(identifier, requestData);
 
             return next();
         };
@@ -91,7 +95,7 @@ class SecurityManager {
     // Analyse de la complexité des requêtes
     static calculateQueryComplexity(info) {
         // Calcul de la complexité
-        const complexity = this._recursiveComplexityCalculation(info.fieldNodes[0]);
+        const complexity = SecurityManager._recursiveComplexityCalculation(info.fieldNodes[0]);
         
         // Lance une erreur si la requête est excessivement complexe
         if (complexity > 100) { // Seuil arbitraire
@@ -106,7 +110,7 @@ class SecurityManager {
     // Calcul récursif de la complexité des opérations de la requête
     static _recursiveComplexityCalculation(node, depth = 0) {
         // Initialisation de la complexité
-        let complexity = this.complexityScores[node.kind] || 1;
+        let complexity = SecurityManager.complexityScores[node.kind] || 1;
         
         // Ajout du coût associé à chaque argument
         if (node.arguments) {
