@@ -24,18 +24,32 @@ class DuckDBPool {
         const connection = this.pool.find(conn => !conn.inUse);
         if (connection) {
             connection.inUse = true;
-            return resolve(connection.db);
+            return resolve(connection);
         }
 
         // Créer une nouvelle connexion si l'ensemnle n'est pas plein
         if (this.pool.length < this.maxConnections) {
             try {
-            const db = new duckdb.Database(this.config.path);
-            const newConnection = { db, inUse: true };
-            this.pool.push(newConnection);
-            resolve(db);
+                // Connexion
+                const db = new duckdb.Database(this.config.path);
+                // Promet la méthode de connexion
+                const connect = promisify(db.connect.bind(db));
+                const conn = await connect();
+                // Création de la connexion
+                const newConnection = { 
+                    db,
+                    conn,
+                    inUse: true,
+                    // Promet les autres méthodes nécessaires
+                    all: promisify(conn.all.bind(conn)),
+                    exec: promisify(conn.exec.bind(conn)),
+                    prepare: promisify(conn.prepare.bind(conn))
+                };
+                
+                this.pool.push(newConnection);
+                resolve(newConnection);
             } catch (error) {
-            reject(error);
+                reject(error);
             }
         } else {
             // Attente d'une connexion disponible
@@ -44,7 +58,7 @@ class DuckDBPool {
             if (availableConnection) {
                 clearInterval(checkInterval);
                 availableConnection.inUse = true;
-                resolve(availableConnection.db);
+                resolve(availableConnection);
             }
             }, 100);
         }
@@ -63,7 +77,13 @@ class DuckDBPool {
 
     // Arrêt de la connexion
     async close() {
-        await Promise.all(this.pool.map(conn => promisify(conn.db.close.bind(conn.db))()));
+        await Promise.all(this.pool.map(async (conn) => {
+            try {
+                await promisify(conn.db.close.bind(conn.db))();
+            } catch (error) {
+                console.error('Error closing connection:', error);
+            }
+        }));
         this.pool = [];
     }
 }

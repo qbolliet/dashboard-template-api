@@ -20,5 +20,8 @@ const dbPool = new DuckDBPool({
   acquireTimeout: config.DB_ACQUIRE_TIMEOUT || 60
 });
 
-exports.dbPool = dbPool;
-exports.closeConnections = () => dbPool.close();
+// Exportation
+module.exports = {
+  dbPool,
+  closeConnections: () => dbPool.close()
+};
