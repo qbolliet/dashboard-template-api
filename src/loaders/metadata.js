@@ -15,8 +15,7 @@ const createMetadataLoader = () => new DataLoader(async (names) => {
             connection = await dbPool.acquire();
             
             // Création de la commande de sélection du nom
-            const placeholders = names.map((_, i) => `$${i + 1}`).join(',');
-            const query = `SELECT * FROM metadata WHERE name IN (${placeholders})`;
+            const query = "SELECT * FROM metadata";
             
             try {
                 // Exécution de la requête
