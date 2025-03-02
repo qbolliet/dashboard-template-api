@@ -13,6 +13,13 @@ const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
 // Construction du chemin vers la base de données
 const dbPath = path.resolve(__dirname, '../../', config.DB_PATH);
 
+// Vérification que le chemin vers la base de données existe
+if (!fs.existsSync(dbPath)) {
+  console.error(`WARNING: Database file not found at: ${dbPath}`);
+} else {
+  console.log(`Database file exists at: ${dbPath}, size: ${fs.statSync(dbPath).size} bytes`);
+}
+
 // Initialisation de la connection
 const dbPool = new DuckDBPool({
   path: dbPath,
@@ -20,7 +27,7 @@ const dbPool = new DuckDBPool({
   acquireTimeout: config.DB_ACQUIRE_TIMEOUT || 60
 });
 
-// Exportation
+// Exportation du pool et de la fonction de clôture
 module.exports = {
   dbPool,
   closeConnections: () => dbPool.close()
