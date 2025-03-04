@@ -272,6 +272,29 @@ async function startServer() {
             process.exit(1);
         }
     });
+    
+    // Fermeture de la session dans les environnements de développement
+    process.on('SIGINT', async () => {
+        // Logging
+        logger.info('Received SIGINT signal. Starting graceful shutdown...');
+        // Fermeture de l'ensemble des connexions
+        try {
+            await Promise.all([
+                redis.quit(),
+                closeConnections(),
+                new Promise((resolve) => server.stop().then(resolve))
+            ]);
+            // Logging
+            logger.info('Graceful shutdown completed');
+            // Fin
+            process.exit(0);
+        } catch (error) {
+            // Logging
+            logger.error('Error during graceful shutdown:', error);
+            // Fin
+            process.exit(1);
+        }
+    });
 
     // Lancement du serveur
     await server.start();
