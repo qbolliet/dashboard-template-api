@@ -1,22 +1,60 @@
 // Importation des modules
 const DataLoader = require('dataloader');
+const { dbPool } = require('../db');
+const { withCache } = require('../utils/cache');
 
-// Fonction de chargement des méta-données
+// Fonction de requête des données des tables de dimentions
+/**
+ * Creates a DataLoader for dimensions
+ * @returns {DataLoader} DataLoader instance for dimensions
+ */
 const createDimensionLoader = () => new DataLoader(async (names) => {
-    const db = await dbPool.acquire();
+    let connection;
+
     try {
+        // Acquisition de la connexion à la base de données
+        connection = await dbPool.acquire();
+        //console.log('Successfully acquired database connection for dimensions');
+
+        // Imlémentation de chaque critère de sélection
         return await Promise.all(names.map(async (name) => {
-            const cacheKey = `dimension:${name}`;
-            return await withCache(cacheKey, async () => {
-                const query = `SELECT * FROM dim_${name}`;
-                return await db.all(query);
-            });
+            try {
+                // Création de la clé d'accès au cache
+                const cacheKey = `dimension:${name}`;
+                
+                // Utilisation du cache s'il existe
+                return await withCache(cacheKey, async () => {
+                    //console.log(`Executing query for dimension: ${name}`);
+                    
+                    // Construction de la requête de la table de dimensions
+                    const query = `SELECT * FROM dim_${name}`;
+                    // Exécution de la requête de dimensions
+                    const results = await connection.all(query);
+                    
+                    //console.log(`Query returned ${results ? results.length : 0} rows`);
+                    return results;
+                });
+            } catch (queryError) {
+                // Retourne un array vide en cas d'erreur
+                console.error(`Error executing dimension query for ${name}:`, queryError);
+                return [];
+            }
         }));
+    } catch (error) {
+        // Retourne un array vide en cas d'erreur
+        console.error('Error in dimension loader:', error);
+        return names.map(() => []);
     } finally {
-        dbPool.release(db);
+        // Retourne une connexion par défaut
+        if (connection) {
+            console.log('Releasing database connection');
+            dbPool.release(connection);
+        }
     }
 }, {
-    maxBatchSize: 50
+    maxBatchSize: 10,
+    cache: true
 });
 
+// Export
 exports.createDimensionLoader = createDimensionLoader;
