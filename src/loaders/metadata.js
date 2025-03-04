@@ -4,36 +4,42 @@ const { dbPool } = require('../db');
 const { withCache } = require('../utils/cache');
 
 // Fonction de chargement des méta-données
+/**
+ * Creates a DataLoader for metadata
+ * @returns {DataLoader} DataLoader instance for metadata
+ */
 const createMetadataLoader = () => new DataLoader(async (names) => {
     // Initialisation de la connexion
     let connection;
     try {
-        // Création de la clé de caching
-        const cacheKey = `metadata:${names.join(',')}`;
-        return await withCache(cacheKey, async () => {
-            // Acquisition de la connexion
-            connection = await dbPool.acquire();
+        // Acquisition de la connexion à la base de données
+        connection = await dbPool.acquire();
+        console.log('Successfully acquired database connection for metadata');
+        
+        // Utilisation de la méthode "all" pour processer plusieurs noms en parallèle
+        return await Promise.all(names.map(async (name) => {
+        try {
+            // Création d'une clé de caching
+            const cacheKey = `metadata:${name}`;
             
-            // Création de la commande de sélection du nom
-            const query = "SELECT * FROM metadata";
-            
-            try {
-                // Exécution de la requête
-                const results = await connection.all(query, names);
+            // Utilisation du cache s'il existe
+            return await withCache(cacheKey, async () => {
+                console.log(`Executing query for metadata name: ${name}`);
                 
-                // Conversion de la réponse en Array
-                const resultsArray = Array.isArray(results) ? results : [];
+                // Paramétrisation de la requête
+                const query = "SELECT * FROM metadata WHERE name = ?";
+                const results = await connection.all(query, [name]);
                 
-                // Renvoi du résultat
-                return names.map(name => {
-                    const result = resultsArray.find(r => r && r.name === name);
-                    return result || null;
-                });
-            } catch (queryError) {
-                console.error('Error executing metadata query:', queryError);
-                throw queryError;
-            }
-        });
+                console.log(`Query result for ${name}:`, results);
+                
+                // Retourne le premier résultat s'il existe, et null sinon
+                return results && results.length > 0 ? results[0] : null;
+            });
+        } catch (queryError) {
+            console.error(`Error executing metadata query for ${name}:`, queryError);
+            return null;
+        }
+        }));
     } catch (error) {
         console.error('Error in metadata loader:', error);
         return names.map(() => null);
@@ -43,7 +49,7 @@ const createMetadataLoader = () => new DataLoader(async (names) => {
         }
     }
 }, {
-    maxBatchSize: 100,
+    maxBatchSize: 10,
     cache: true
 });
 
