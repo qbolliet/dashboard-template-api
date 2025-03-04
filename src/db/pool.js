@@ -18,7 +18,7 @@ class DuckDBPool {
         // Instances DuckDB
         this.instances = [];
         // Log des caractéristiques du pool
-        console.log(`Initializing DuckDB Neo pool with database path: ${config.path}`);
+        console.log(`Initializing DuckDB pool with database path: ${config.path}`);
         console.log(`Max connections: ${this.maxConnections}, timeout: ${this.acquireTimeout}ms`);
     }
     
@@ -28,7 +28,7 @@ class DuckDBPool {
     * @returns {Promise<Object>} A connection object with promise-based methods
     */
     async acquire() {
-        //console.log('Attempting to acquire DB connection...');
+        console.log('Attempting to acquire DB connection...');
         // Initialisation du timout
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => {
@@ -43,14 +43,14 @@ class DuckDBPool {
                 const connection = this.pool.find(conn => !conn.inUse);
                 // SI oui, la connexion existante est réutilisée
                 if (connection) {
-                    //console.log('Reusing existing connection from pool');
+                    console.log('Reusing existing connection from pool');
                     connection.inUse = true;
                     return resolve(connection);
                 }
 
                 // Sinon, une nouvelle connexion est crée si le pool n'est pas plein
                 if (this.pool.length < this.maxConnections) {
-                    //console.log(`Creating new connection to: ${this.config.path}`);
+                    console.log(`Creating new connection to: ${this.config.path}`);
                     
                     // Création d'une nouvelle instance DuckDB
                     const instance = await DuckDBInstance.create(this.config.path);
@@ -58,7 +58,7 @@ class DuckDBPool {
                     
                     // Connexion à l'instance
                     const duckdbConnection = await instance.connect();
-                    // console.log('Successfully connected to DuckDB');
+                    console.log('Successfully connected to DuckDB');
                     
                     // Création d'un wrapper avec toute l'information sur la connexion
                     const newConnection = { 
@@ -68,7 +68,7 @@ class DuckDBPool {
                         
                         // Wrapping dans une méthode qui exécute toute l'acquisition des données
                         all: async (query, params = []) => {
-                            //console.log(`Executing query: ${query}`);
+                            console.log(`Executing query: ${query}`);
                             
                             if (params && params.length > 0) {
                                 // Préparation pour les requêtes paramétrées
@@ -137,16 +137,15 @@ class DuckDBPool {
                         
                         // Méthode d'exécution d'une requête
                         exec: async (query) => {
-                            //console.log(`Executing query (exec): ${query}`);
+                            console.log(`Executing query (exec): ${query}`);
                             await duckdbConnection.run(query);
                             return;
                         },
                         
                         // Méthode de fermeture d'une connexion
                         close: async () => {
-                            // console.log('Closing DuckDB connection');
+                            console.log('Closing DuckDB connection');
                             await duckdbConnection.close();
-                            // Note: This doesn't close the instance, just this connection
                         }
                     };
                     
@@ -156,7 +155,7 @@ class DuckDBPool {
                     resolve(newConnection);
                 } else {
                     // Sinon attend qu'une connexion soit disponible
-                    //console.log('Pool full, waiting for a connection to become available');
+                    console.log('Pool full, waiting for a connection to become available');
                     const checkInterval = setInterval(() => {
                         // Recherche une connexion disponible et non utilisée
                         const availableConnection = this.pool.find(conn => !conn.inUse);
@@ -169,7 +168,7 @@ class DuckDBPool {
                     }, 500);
                 }
             } catch (error) {
-                //console.error('Error acquiring DuckDB connection:', error);
+                console.error('Error acquiring DuckDB connection:', error);
                 reject(error);
             }
         });
@@ -187,7 +186,7 @@ class DuckDBPool {
         const connIndex = this.pool.findIndex(conn => conn.conn === connection.conn);
         if (connIndex >= 0) {
             // Si la connexion n'est pas la denrière utilisée, elle est renvoyée dans le pool
-            //console.log('Releasing connection back to pool');
+            console.log('Releasing connection back to pool');
             this.pool[connIndex].inUse = false;
         }
     }
@@ -198,7 +197,7 @@ class DuckDBPool {
     * @returns {Promise<void>}
     */
     async close() {
-        //console.log('Closing all connections in pool');
+        console.log('Closing all connections in pool');
 
         // Clôture de l'ensemble des connexions
         await Promise.all(this.pool.map(async (conn) => {
