@@ -2,6 +2,7 @@
 const DataLoader = require('dataloader');
 const { dbPool } = require('../db');
 const { withCache } = require('../utils/cache');
+const { convertArrayToObject } = require('../utils/converter');
 
 // Fonction de chargement des méta-données
 /**
@@ -28,12 +29,26 @@ const createMetadataLoader = () => new DataLoader(async (names) => {
                 
                 // Paramétrisation de la requête
                 const query = "SELECT * FROM metadata WHERE name = ?";
+                // Exécution de la requête
                 const results = await connection.all(query, [name]);
+
+                // S'il n'y a pas de résultat, retourne null
+                if (!results || results.length === 0) {
+                    return null;
+                }
                 
-                console.log(`Query result for ${name}:`, results);
+                // Définition des noms de colonnes attendus pour les méta-données
+                const columnNames = ['name', 'label', 'python_type', 'sql_type', 'is_categorical'];
+                
+                // Convertion des array en objets
+                const convertedResults = convertArrayToObject(results, columnNames);
+                console.log(`Converted result for ${name}:`, convertedResults[0]);
+                
+                // Retourne le premier résultat
+                return convertedResults[0];
                 
                 // Retourne le premier résultat s'il existe, et null sinon
-                return results && results.length > 0 ? results[0] : null;
+                //return results && results.length > 0 ? results[0] : null;
             });
         } catch (queryError) {
             console.error(`Error executing metadata query for ${name}:`, queryError);
