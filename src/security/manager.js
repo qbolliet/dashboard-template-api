@@ -149,10 +149,20 @@ class SecurityManager {
     // Gestion de la performance et de la sécurité
     static createPerformanceMonitor() {
         return async (resolve, root, args, context, info) => {
+            // Initialisation du début de l'exécution
             const start = performance.now();
-            const queryComplexity = this.calculateQueryComplexity(info);
 
             try {
+
+                // Ignore le calcul de complexité si info n'a pas d'argument fieldNodes
+                if (!info || !info.fieldNodes) {
+                    // Exécution du resolver seul
+                    const result = await resolve(root, args, context, info);
+                    return result;
+                }
+                
+                // Calcul de la complexité
+                const queryComplexity = this.calculateQueryComplexity(info);
                 // Validation de la requête
                 await this.validateRequest(context, info);
 
@@ -162,13 +172,17 @@ class SecurityManager {
                 // Résolution de la requête
                 const result = await resolve(root, sanitizedArgs, context, info);
 
-                // Monitorig de la performance
+                // Monitoring de la performance
                 const executionTime = performance.now() - start;
                 this._logPerformanceMetrics(info, executionTime, queryComplexity);
 
                 return result;
             } catch (error) {
-                this._handleError(error, info);
+                if (info && info.fieldName) {
+                    this._handleError(error, info);
+                } else {
+                    console.error('GraphQL Error:', error.message);
+                }
                 throw error;
             }
         };
