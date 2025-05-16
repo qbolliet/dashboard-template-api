@@ -1,9 +1,10 @@
 // Importation des modules
-const { DuckDBInstance } = require('@duckdb/node-api');
+import { DuckDBInstance } from '@duckdb/node-api';
 
-// Ensemble de connections
+// Classe de définition d'un ensemble de connexions
 /**
  * Connection pool for DuckDB Neo API
+ * Manages database connections and provides optimized data access methods
  */
 class DuckDBPool {
     constructor(config) {
@@ -22,11 +23,10 @@ class DuckDBPool {
         console.log(`Max connections: ${this.maxConnections}, timeout: ${this.acquireTimeout}ms`);
     }
     
-    // Acquisition de la connexion
     /**
-    * Acquire a connection from the pool or create a new one
-    * @returns {Promise<Object>} A connection object with promise-based methods
-    */
+     * Acquire a connection from the pool or create a new one
+     * @returns {Promise<Object>} A connection object with promise-based methods
+     */
     async acquire() {
         console.log('Attempting to acquire DB connection...');
         // Initialisation du timout
@@ -66,7 +66,13 @@ class DuckDBPool {
                         conn: duckdbConnection,
                         inUse: true,
                         
-                        // Wrapping dans une méthode qui exécute toute l'acquisition des données
+                        /**
+                         * Execute a query and return results as objects with column names as keys
+                         * Uses native DuckDB methods for optimal performance
+                         * @param {string} query - SQL query to execute
+                         * @param {Array} params - Parameters for prepared statement
+                         * @returns {Promise<Array>} - Query results as array of objects
+                         */
                         all: async (query, params = []) => {
                             console.log(`Executing query: ${query}`);
                             
@@ -86,63 +92,161 @@ class DuckDBPool {
                                     } else if (typeof param === 'string') {
                                         prepared.bindVarchar(paramIndex, param);
                                     } else if (typeof param === 'number') {
-                                    if (Number.isInteger(param)) {
-                                        prepared.bindInteger(paramIndex, param);
-                                    } else {
-                                        prepared.bindDouble(paramIndex, param);
-                                    }
+                                        if (Number.isInteger(param)) {
+                                            prepared.bindInteger(paramIndex, param);
+                                        } else {
+                                            prepared.bindDouble(paramIndex, param);
+                                        }
                                     } else if (typeof param === 'boolean') {
                                         prepared.bindBoolean(paramIndex, param);
                                     } else {
-                                    // Pour les types complexes, renvoie un string par défaut
+                                        // Pour les types complexes, renvoie un string par défaut
                                         prepared.bindVarchar(paramIndex, String(param));
                                     }
                                 }
                                 
                                 // Exécution 
                                 const result = await prepared.run();
-                                // Récupération des résultats
-                                const chunks = await result.fetchAllChunks();
                                 
-                                // Renvoie un array vide si aucune donnée n'a été récupérée
-                                if (chunks.length === 0) {
-                                    return [];
-                                }
-                                
-                                // Convertion en ligne
-                                return chunks[0].getRows();
+                                // Utilisation de getRowsObject pour obtenir directement un tableau d'objets
+                                // Cette méthode est plus efficace que la conversion manuelle
+                                return await result.getRowsObject();
                             } else {
                                 // Pour les requêtes non paramétrées
                                 // Exécution de la requête
                                 const result = await duckdbConnection.run(query);
-                                // Récupération du résultat
-                                const chunks = await result.fetchAllChunks();
                                 
-                                // Renvoie un array vide si aucune donnée n'a été récupérée
-                                if (chunks.length === 0) {
-                                    return [];
-                                }
-                                
-                                // Conversion en ligne
-                                return chunks[0].getRows().map(row => {
-                                    // Conversion en objets avec le nom des colonnes en clé
-                                    const columnNames = result.columnNames();
-                                    return columnNames.reduce((obj, colName, index) => {
-                                        obj[colName] = row[index];
-                                        return obj;
-                                    }, {});
-                                });
+                                // Utilisation de getRowsObject pour obtenir directement un tableau d'objets
+                                return await result.getRowsObject();
                             }
                         },
                         
-                        // Méthode d'exécution d'une requête
+                        /**
+                         * Execute a query and return results as JSON array
+                         * Optimized for frontend consumption, especially for D3 visualization
+                         * @param {string} query - SQL query to execute
+                         * @param {Array} params - Parameters for prepared statement
+                         * @returns {Promise<Array>} - Query results as JSON array
+                         */
+                        getAsJsonArray: async (query, params = []) => {
+                            console.log(`Executing query for JSON array: ${query}`);
+                            
+                            let result;
+                            if (params && params.length > 0) {
+                                // Préparation pour les requêtes paramétrées
+                                const prepared = await duckdbConnection.prepare(query);
+                                
+                                // Association des paramètres suivant leur type
+                                for (let i = 0; i < params.length; i++) {
+                                    const param = params[i];
+                                    const paramIndex = i + 1;
+                                    if (param === null) {
+                                        prepared.bindNull(paramIndex);
+                                    } else if (typeof param === 'string') {
+                                        prepared.bindVarchar(paramIndex, param);
+                                    } else if (typeof param === 'number') {
+                                        if (Number.isInteger(param)) {
+                                            prepared.bindInteger(paramIndex, param);
+                                        } else {
+                                            prepared.bindDouble(paramIndex, param);
+                                        }
+                                    } else if (typeof param === 'boolean') {
+                                        prepared.bindBoolean(paramIndex, param);
+                                    } else {
+                                        prepared.bindVarchar(paramIndex, String(param));
+                                    }
+                                }
+                                
+                                result = await prepared.run();
+                            } else {
+                                result = await duckdbConnection.run(query);
+                            }
+                            
+                            // Obtenons les données au format JSON directement
+                            // Plus efficace pour les grands ensembles de données
+                            return await result.getRowsJSON();
+                        },
+                        
+                        /**
+                         * Execute a query and return results in a format optimized for D3 visualization
+                         * @param {string} query - SQL query to execute
+                         * @param {Array} params - Parameters for prepared statement
+                         * @returns {Promise<Object>} - Data formatted for D3
+                         */
+                        getWithMetadata: async (query, params = []) => {
+                            console.log(`Executing query for D3 format: ${query}`);
+                            
+                            let result;
+                            if (params && params.length > 0) {
+                                const prepared = await duckdbConnection.prepare(query);
+                                
+                                for (let i = 0; i < params.length; i++) {
+                                    const param = params[i];
+                                    const paramIndex = i + 1;
+                                    if (param === null) {
+                                        prepared.bindNull(paramIndex);
+                                    } else if (typeof param === 'string') {
+                                        prepared.bindVarchar(paramIndex, param);
+                                    } else if (typeof param === 'number') {
+                                        if (Number.isInteger(param)) {
+                                            prepared.bindInteger(paramIndex, param);
+                                        } else {
+                                            prepared.bindDouble(paramIndex, param);
+                                        }
+                                    } else if (typeof param === 'boolean') {
+                                        prepared.bindBoolean(paramIndex, param);
+                                    } else {
+                                        prepared.bindVarchar(paramIndex, String(param));
+                                    }
+                                }
+                                
+                                result = await prepared.run();
+                            } else {
+                                result = await duckdbConnection.run(query);
+                            }
+                            
+                            // Récupération des noms de colonnes
+                            const columnNames = result.columnNames();
+                            
+                            // Récupération des données
+                            const rows = await result.getRowsObject();
+                            
+                            // Format optimisé pour D3
+                            // Structure qui facilite le filtrage, le tri et l'affichage
+                            return {
+                                columns: columnNames,
+                                data: rows,
+                                // Métadonnées additionnelles utiles pour D3
+                                metadata: {
+                                    count: rows.length,
+                                    // Ajout de l'extent (min/max) pour les colonnes numériques
+                                    // Très utile pour les échelles D3
+                                    extents: columnNames.reduce((acc, col) => {
+                                        const values = rows.map(r => r[col]).filter(v => v !== null);
+                                        if (values.length > 0 && typeof values[0] === 'number') {
+                                            acc[col] = [Math.min(...values), Math.max(...values)];
+                                        }
+                                        return acc;
+                                    }, {})
+                                }
+                            };
+                        },
+                        
+                        /**
+                         * Execute a SQL query without returning results
+                         * @param {string} query - SQL query to execute
+                         * @returns {Promise<void>}
+                         */
                         exec: async (query) => {
                             console.log(`Executing query (exec): ${query}`);
                             await duckdbConnection.run(query);
                             return;
                         },
                         
-                        // Méthode de fermeture d'une connexion
+                        /**
+                         * Close the database connection
+                         * @returns {Promise<void>}
+                         */
                         close: async () => {
                             console.log('Closing DuckDB connection');
                             await duckdbConnection.close();
@@ -176,11 +280,10 @@ class DuckDBPool {
         return Promise.race([acquirePromise, timeoutPromise]);
     }
 
-    // Publication de la connexion
     /**
-    * Release a connection back to the pool
-    * @param {Object} connection The connection to release
-    */
+     * Release a connection back to the pool
+     * @param {Object} connection The connection to release
+     */
     release(connection) {
         // Recherche de la connexion
         const connIndex = this.pool.findIndex(conn => conn.conn === connection.conn);
@@ -191,11 +294,10 @@ class DuckDBPool {
         }
     }
 
-    // Arrêt de la connexion
     /**
-    * Close all connections in the pool
-    * @returns {Promise<void>}
-    */
+     * Close all connections in the pool
+     * @returns {Promise<void>}
+     */
     async close() {
         console.log('Closing all connections in pool');
 
@@ -214,4 +316,4 @@ class DuckDBPool {
     }
 }
 
-exports.DuckDBPool = DuckDBPool;
+export { DuckDBPool };

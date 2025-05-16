@@ -1,12 +1,12 @@
-// loaders/metadata.js
-const DataLoader = require('dataloader');
-const { dbPool } = require('../db');
-const { withCache } = require('../utils/cache');
-const { convertArrayToObject } = require('../utils/converter');
+// Importation des modules
+import DataLoader from 'dataloader';
+import { dbPool } from '../db/index.js';
+import { withCache } from '../utils/cache.js';
 
 // Fonction de chargement des méta-données
 /**
  * Creates a DataLoader for metadata
+ * Retrieves metadata information from the database using efficient native methods
  * @returns {DataLoader} DataLoader instance for metadata
  */
 const createMetadataLoader = () => new DataLoader(async (names) => {
@@ -19,47 +19,48 @@ const createMetadataLoader = () => new DataLoader(async (names) => {
         
         // Utilisation de la méthode "all" pour processer plusieurs noms en parallèle
         return await Promise.all(names.map(async (name) => {
-        try {
-            // Création d'une clé de caching
-            const cacheKey = `metadata:${name}`;
-            
-            // Utilisation du cache s'il existe
-            return await withCache(cacheKey, async () => {
-                console.log(`Executing query for metadata name: ${name}`);
+            try {
+                // Création d'une clé de caching
+                const cacheKey = `metadata:${name}`;
                 
-                // Paramétrisation de la requête
-                const query = "SELECT * FROM metadata WHERE name = ?";
-                // Exécution de la requête
-                const results = await connection.all(query, [name]);
-
-                // S'il n'y a pas de résultat, retourne null
-                if (!results || results.length === 0) {
-                    return null;
-                }
-                
-                // Définition des noms de colonnes attendus pour les méta-données
-                const columnNames = ['name', 'label', 'python_type', 'sql_type', 'is_categorical'];
-                
-                // Convertion des array en objets
-                const convertedResults = convertArrayToObject(results, columnNames);
-                console.log(`Converted result for ${name}:`, convertedResults[0]);
-                
-                // Retourne le premier résultat
-                return convertedResults[0];
-                
-                // Retourne le premier résultat s'il existe, et null sinon
-                //return results && results.length > 0 ? results[0] : null;
-            });
-        } catch (queryError) {
-            console.error(`Error executing metadata query for ${name}:`, queryError);
-            return null;
-        }
+                // Utilisation du cache s'il existe
+                return await withCache(cacheKey, async () => {
+                    console.log(`Executing query for metadata name: ${name}`);
+                    
+                    // Paramétrisation de la requête
+                    const query = "SELECT * FROM metadata WHERE name = ?";
+                    
+                    // Exécution de la requête en utilisant getRowsObject pour obtenir directement un format JSON
+                    const result = await connection.all(query, [name]);
+                    
+                    // S'il n'y a pas de résultat, retourne null
+                    if (!result || result.length === 0) {
+                        return null;
+                    }
+                    
+                    // Conversion des valeurs booléennes
+                    // Le champ is_categorical doit être un booléen JavaScript
+                    const metadata = result[0];
+                    if (metadata && 'is_categorical' in metadata) {
+                        metadata.is_categorical = Boolean(metadata.is_categorical);
+                    }
+                    
+                    console.log(`Converted result for ${name}:`, metadata);
+                    
+                    // Retourne le premier résultat
+                    return metadata;
+                });
+            } catch (queryError) {
+                console.error(`Error executing metadata query for ${name}:`, queryError);
+                return null;
+            }
         }));
     } catch (error) {
         console.error('Error in metadata loader:', error);
         return names.map(() => null);
     } finally {
         if (connection) {
+            console.log('Releasing connection back to pool');
             dbPool.release(connection);
         }
     }
@@ -68,4 +69,4 @@ const createMetadataLoader = () => new DataLoader(async (names) => {
     cache: true
 });
 
-exports.createMetadataLoader = createMetadataLoader;
+export { createMetadataLoader };

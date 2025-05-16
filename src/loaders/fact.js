@@ -1,15 +1,15 @@
 // Importation des modules
-const DataLoader = require('dataloader');
-const { dbPool } = require('../db');
-const { withCache } = require('../utils/cache');
-const { buildWhereClause } = require('../utils/utils');
-const { redis } = require('../cache');
+import DataLoader from 'dataloader';
+import { dbPool } from '../db/index.js';
+import { withCache } from '../utils/cache.js';
+import { buildWhereClause } from '../utils/utils.js';
+import { redis } from '../cache/index.js';
 
 // Fonction de requête de la table des faits
 /**
-* Creates a DataLoader for facts
-* @returns {DataLoader} DataLoader instance for facts
-*/
+ * Creates a DataLoader for facts with optimized data formats for frontend visualization
+ * @returns {DataLoader} DataLoader instance for facts
+ */
 const createFactLoader = () => new DataLoader(async (keys) => {
     // Initialisation de la connexion
     let connection;
@@ -19,25 +19,25 @@ const createFactLoader = () => new DataLoader(async (keys) => {
         connection = await dbPool.acquire();
         // console.log('Successfully acquired database connection for facts');
 
-        // Implémentation de chaque paramètre dnas la requête
-        return await Promise.all(keys.map(async ({ fields, filters, structuredFilters, limit, offset, sort }) => {
+        // Implémentation de chaque paramètre dans la requête
+        return await Promise.all(keys.map(async ({ fields, filters, structuredFilters, limit, offset, sort, format = 'default' }) => {
             try {
                 // Création d'une clé de caching
-                const cacheKey = `facts:${JSON.stringify({ fields, filters, structuredFilters, limit, offset, sort })}`;
+                const cacheKey = `facts:${JSON.stringify({ fields, filters, structuredFilters, limit, offset, sort, format })}`;
                 
                 // Utilisation du cache s'il existe
                 return await withCache(cacheKey, async () => {
                     // Construction de la requête SQL
                     // Construction des colonnes à sélectionner
-                    const selectClause = fields.length > 0
-                    ? fields.join(', ')
-                    : '*';
+                    const selectClause = fields && fields.length > 0
+                        ? fields.join(', ')
+                        : '*';
                     // Construction des filtres sur les lignes
                     const whereClause = buildWhereClause(filters, structuredFilters);
                     // Construction des critères de tri
-                    const sortClause = sort.length > 0 
-                    ? `ORDER BY ${sort.map(s => `${s.field} ${s.order}`).join(', ')}` 
-                    : '';
+                    const sortClause = sort && sort.length > 0 
+                        ? `ORDER BY ${sort.map(s => `${s.field} ${s.order}`).join(', ')}` 
+                        : '';
                     // Construction de la requête SQL
                     const query = `
                     SELECT ${selectClause} FROM fact_table
@@ -46,19 +46,25 @@ const createFactLoader = () => new DataLoader(async (keys) => {
                     LIMIT ${limit} OFFSET ${offset}
                     `;
                     
-                    //console.log('Executing fact query:', query);
+                    console.log('Executing fact query:', query);
                     
-                    // Exécution de la requête
-                    const results = await connection.all(query);
-                    //console.log(`Query returned ${results ? results.length : 0} rows`);
-                    
-                    return results;
+                    // Sélection du format de sortie selon les besoins du frontend
+                    if (format === 'metadata') {
+                        // Format optimisé pour D3 avec métadonnées utiles pour visualisation
+                        return await connection.getWithMetadata(query);
+                    } else if (format === 'json') {
+                        // Format JSON simple pour consommation générale
+                        return await connection.getAsJsonArray(query);
+                    } else {
+                        // Format par défaut - tableau d'objets
+                        return await connection.all(query);
+                    }
                 });
             } catch (queryError) {
                 console.error('Error executing fact query:', queryError);
                 throw queryError;
             }
-    }));
+        }));
     } catch (error) {
         // Retourne une erreur s'il n'arrive pas à requêter les données
         console.error('Error in fact loader:', error);
@@ -75,17 +81,23 @@ const createFactLoader = () => new DataLoader(async (keys) => {
     cacheKeyFn: key => JSON.stringify(key)
 });
 
-
-// Fonction additionnelle pour compter le nombre de données dans la table des faits
+// Fonction de requête de la table des faits avec pagination
 /**
-* Fact resolver with additional count query
-*/
+ * Fact resolver with additional count query and pagination support
+ * Optimized for frontend data display and visualization
+ * @param {Object} args - Query arguments including filters and pagination
+ * @returns {Promise<Object>} - Results with data, total count and pagination info
+ */
 const getFactTableWithCount = async (args) => {
     // Extraction du jeu de données
     const data = await createFactLoader().load(args);
 
     // Extraction du compte à partir du cache
-    const countKey = `count:${JSON.stringify(args)}`;
+    const countKey = `count:${JSON.stringify({
+        filters: args.filters,
+        structuredFilters: args.structuredFilters
+    })}`;
+    
     let total = await redis.get(countKey);
 
     // Si le compte n'est pas en cache, le calcule à partir de la base de données
@@ -113,7 +125,8 @@ const getFactTableWithCount = async (args) => {
         } catch (error) {
             console.error('Error executing count query:', error);
             // Retourne la longueur du jeu de données par défaut
-            total = data.length; 
+            total = Array.isArray(data) ? data.length : 
+                    (data && data.data ? data.data.length : 0);
         } finally {
             if (countConnection) {
                 dbPool.release(countConnection);
@@ -121,13 +134,29 @@ const getFactTableWithCount = async (args) => {
         }
     }
 
-    return {
-        data,
-        total: parseInt(total),
-        hasNextPage: args.offset + args.limit < parseInt(total)
-    };
+    // Construction du résultat selon le format des données
+    if (args.format === 'metadata') {
+        // Pour le format D3, incluons les informations de pagination dans les métadonnées
+        return {
+            ...data,
+            metadata: {
+                ...data.metadata,
+                total: parseInt(total),
+                hasNextPage: args.offset + args.limit < parseInt(total),
+                currentPage: Math.floor(args.offset / args.limit) + 1,
+                totalPages: Math.ceil(parseInt(total) / args.limit)
+            }
+        };
+    } else {
+        // Format standard avec informations de pagination
+        return {
+            data: Array.isArray(data) ? data : (data && data.data ? data.data : []),
+            total: parseInt(total),
+            hasNextPage: args.offset + args.limit < parseInt(total),
+            currentPage: Math.floor(args.offset / args.limit) + 1,
+            totalPages: Math.ceil(parseInt(total) / args.limit)
+        };
+    }
 };
 
-// Export des loaders
-exports.createFactLoader = createFactLoader;
-exports.getFactTableWithCount = getFactTableWithCount;
+export { createFactLoader, getFactTableWithCount };
