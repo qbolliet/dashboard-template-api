@@ -1,8 +1,12 @@
 // Importation des modules
-require('dotenv').config();
-const { startServer } = require('./server');
+import 'dotenv/config';
+import { startServer } from './server.js';
 
-// Lancement du serveur
+// Fonction principale de lancement du server
+/**
+ * Main entry point for the GraphQL API server
+ * Starts the server and handles uncaught exceptions
+ */
 async function main() {
   try {
     await startServer();
@@ -12,4 +16,16 @@ async function main() {
   }
 }
 
+// Gestion globale des erreurs non capturées
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+  // Fermeture propre du serveur
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled rejection at:', promise, 'reason:', reason);
+});
+
+// Lancement du serveur
 main();
