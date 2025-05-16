@@ -1,40 +1,33 @@
 // Importation des modules
-const { withTimeout } = require('../../utils/timeout');
-const { buildWhereClause } = require('../../utils/utils');
+import { withTimeout } from '../../utils/timeout.js';
+import { getFactTableWithCount } from '../../loaders/fact.js';
 
-// Construction d'un resolver pour la table des données
+// Construction de resolvers pour la table des données
+/**
+ * Resolvers for fact table queries
+ * Handles the retrieval and formatting of fact data from the database
+ */
 const factResolvers = {
     Query: {
         getFactTable: async (_, args, { loaders }) => {
-            const data = await withTimeout(
-                loaders.fact.load(args),
+            return withTimeout(
+                getFactTableWithCount(args),
                 10000,
                 'Fact table fetch timeout'
             );
-
-            const countKey = `count:${JSON.stringify(args)}`;
-            let total = await redis.get(countKey);
-
-            if (!total) {
-                const db = await dbPool.acquire();
-                try {
-                    const whereClause = buildWhereClause(args.filters, args.structuredFilters);
-                    const countQuery = `SELECT COUNT(*) as total FROM fact_table ${whereClause}`;
-                    const result = await db.all(countQuery);
-                    total = result[0].total;
-                    await redis.set(countKey, total, 'EX', 300);
-                } finally {
-                    dbPool.release(db);
-                }
-            }
-
-            return {
-                data,
-                total: parseInt(total),
-                hasNextPage: args.offset + args.limit < parseInt(total)
-            };
+        },
+        
+        getFactTableWithMetadata: async (_, args, { loaders }) => {
+            // Format spécifique pour D3 avec métadonnées optimisées pour visualisation
+            const metadataArgs = { ...args, format: 'metadata' };
+            
+            return withTimeout(
+                getFactTableWithCount(metadataArgs),
+                10000,
+                'Metadata fact table fetch timeout'
+            );
         }
     }
 };
 
-exports.factResolvers = factResolvers
+export { factResolvers };
