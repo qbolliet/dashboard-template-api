@@ -1,24 +1,34 @@
 // Importation des modules
-const { ApolloServer } = require('apollo-server-express');
-const express = require('express');
-const compression = require('compression');
-const { v4: uuidv4 } = require('uuid');
-const { schema } = require('./schema');
-const { createLoaders } = require('./loaders');
-const { logger } = require('./utils/logger');
-const { closeConnections } = require('./db');
-const { redis } = require('./cache');
-const { SecurityManager } = require('./security');
-const path = require('path');
-const fs = require('fs');
-const yaml = require('yaml');
+import { ApolloServer } from 'apollo-server-express';
+import express from 'express';
+import compression from 'compression';
+import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs';
+import path from 'path';
+import yaml from 'yaml';
+import { fileURLToPath } from 'url';
+
+// Importation des modules locaux
+import { schema } from './schema/index.js';
+import { createLoaders } from './loaders/index.js';
+import { logger } from './utils/logger.js';
+import { closeConnections } from './db/index.js';
+import { redis } from './cache/index.js';
+import { SecurityManager } from './security/index.js';
+
+// Configuration des chemins avec ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Chargement du fichier de configuration
 const configPath = path.resolve(__dirname, '../config/config.yaml');
 const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
 
-
-// Fonction de lancement du serveur
+// Fonction de lancement du server
+/**
+ * Starts the GraphQL API server with security and performance configurations
+ * @returns {Promise<void>}
+ */
 async function startServer() {
     const app = express();
 
@@ -46,51 +56,57 @@ async function startServer() {
         limit: config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'],
         verify: (req, res, buf) => {
             // Ne vérifie pas la taille des requêtes pour les requêtes d'introspection
-            const body = JSON.parse(buf.toString());
-            if (body.operationName === 'IntrospectionQuery') {
-                return;
-            }
-    
-            // Comptage du nombre de champs
-            const countFields = (obj) => {
-                let count = 0;
-                const queue = [obj];
-                
-                while (queue.length > 0) {
-                    const current = queue.shift();
-                    if (typeof current === 'object' && current !== null) {
-                        Object.values(current).forEach(value => {
-                            if (typeof value === 'object' && value !== null) {
-                                queue.push(value);
+            try {
+                const body = JSON.parse(buf.toString());
+                if (body.operationName === 'IntrospectionQuery') {
+                    return;
+                }
+        
+                // Comptage du nombre de champs
+                const countFields = (obj) => {
+                    let count = 0;
+                    const queue = [obj];
+                    
+                    while (queue.length > 0) {
+                        const current = queue.shift();
+                        if (typeof current === 'object' && current !== null) {
+                            Object.values(current).forEach(value => {
+                                if (typeof value === 'object' && value !== null) {
+                                    queue.push(value);
+                                }
+                                count++;
+                            });
+                        }
+                    }
+                    return count;
+                };
+        
+                // Vérification du nombre de champs
+                const fields = countFields(body);
+                if (fields > config['REQUEST_LIMITS']['MAX_FIELDS']) {
+                    throw new Error('Too many fields in request');
+                }
+        
+                // Estimation de la taille de chaque champ
+                const checkFieldSize = (obj) => {
+                    if (typeof obj === 'object' && obj !== null) {
+                        Object.entries(obj).forEach(([key, value]) => {
+                            if (typeof value === 'string' && value.length > config['REQUEST_LIMITS']['MAX_FIELD_SIZE']) {
+                                throw new Error(`Field ${key} exceeds maximum allowed size`);
                             }
-                            count++;
+                            if (typeof value === 'object' && value !== null) {
+                                checkFieldSize(value);
+                            }
                         });
                     }
+                };
+                // Vérification de la taille des champs
+                checkFieldSize(body);
+            } catch (error) {
+                if (error.message !== 'Unexpected end of JSON input') {
+                    throw error;
                 }
-                return count;
-            };
-    
-            // Vérification du nombre de champs
-            const fields = countFields(body);
-            if (fields > config['REQUEST_LIMITS']['MAX_FIELDS']) {
-                throw new Error('Too many fields in request');
             }
-    
-            // Estimation de la taille de chaque champ
-            const checkFieldSize = (obj) => {
-                if (typeof obj === 'object' && obj !== null) {
-                    Object.entries(obj).forEach(([key, value]) => {
-                        if (typeof value === 'string' && value.length > config['REQUEST_LIMITS']['MAX_FIELD_SIZE']) {
-                            throw new Error(`Field ${key} exceeds maximum allowed size`);
-                        }
-                        if (typeof value === 'object' && value !== null) {
-                            checkFieldSize(value);
-                        }
-                    });
-                }
-            };
-            // Vérification de la taille des champs
-            checkFieldSize(body);
         }
     }));
 
@@ -307,4 +323,4 @@ async function startServer() {
     });
 }
 
-exports.startServer = startServer;
+export { startServer };
