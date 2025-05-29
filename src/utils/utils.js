@@ -13,4 +13,4 @@ const buildWhereClause = (filters, structuredFilters) => {
     return whereClause ? `WHERE ${whereClause}` : '';
 };
   
-exports.buildWhereClause = buildWhereClause;  
+export { buildWhereClause };  

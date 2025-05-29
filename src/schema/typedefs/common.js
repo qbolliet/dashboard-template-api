@@ -1,5 +1,5 @@
 // Importation des modules
-const { gql } = require('apollo-server');
+import { gql } from 'apollo-server';
 
 // Définition des types communs à plusieurs resolvers
 const commonTypeDefs = gql`
@@ -47,4 +47,4 @@ const commonTypeDefs = gql`
 #   }
 `;
 
-module.exports = commonTypeDefs;
+export { commonTypeDefs };

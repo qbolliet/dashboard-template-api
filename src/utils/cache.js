@@ -1,5 +1,5 @@
 // Importation des modules
-const { redis } = require('../cache');
+import { redis } from '../cache/index.js';
 
 // Création d'une fonction de cache
 const withCache = async (key, loader) => {
@@ -26,4 +26,4 @@ const withCache = async (key, loader) => {
   }
 };
 
-exports.withCache = withCache;
+export { withCache };

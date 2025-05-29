@@ -1,6 +1,7 @@
 // Importation des modules
-const Redis = require('ioredis');
-const redisConfig = require('./../../config/redis');
+import Redis from 'ioredis';
+import { redisConfig } from './../../config/redis.js';
+
 
 // Fonction de création du cache
 const createRedisClient = () => {
@@ -20,4 +21,4 @@ const createRedisClient = () => {
     return redis;
 };
 
-module.exports = { createRedisClient };
+export { createRedisClient };

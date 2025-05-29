@@ -1,5 +1,5 @@
 // Importation des modules
-const { withTimeout } = require('../../utils/timeout');
+import { withTimeout } from '../../utils/timeout.js';
 
 // Construction d'un resolver pour les dimensions
 const dimensionResolvers = {
@@ -14,4 +14,4 @@ const dimensionResolvers = {
     }
 };
 
-exports.dimensionResolvers = dimensionResolvers;
+export { dimensionResolvers };

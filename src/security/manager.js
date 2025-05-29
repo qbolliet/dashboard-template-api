@@ -1,11 +1,11 @@
 // Importation des modules
-const { GraphQLError } = require('graphql');
-const sqlstring = require('sqlstring');
-const xss = require('xss');
-const { validateInput } = require('./validation');
-const { logger } = require('../utils/logger');
-const { performance } = require('perf_hooks');
-const crypto = require('crypto');
+import { GraphQLError } from 'graphql';
+import sqlstring from 'sqlstring';
+import xss from 'xss';
+import { validateInput } from './validation.js';
+import { logger } from '../utils/logger.js';
+import { performance } from 'perf_hooks';
+import crypto from 'crypto';
 
 // Gestionnaire de la sécurité
 // /!\ Le rate limiter n'est actuellement pas inclu dans le performance Monitor
@@ -234,4 +234,4 @@ class SecurityManager {
     }    
 }
 
-module.exports = { SecurityManager };
+export { SecurityManager };

@@ -17,4 +17,4 @@ const redisConfig = {
   // ] : null
 };
 
-module.exports = { redisConfig };
+export { redisConfig };

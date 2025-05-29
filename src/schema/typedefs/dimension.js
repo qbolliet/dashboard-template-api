@@ -1,5 +1,5 @@
 // Importation des modules
-const { gql } = require('apollo-server');
+import { gql } from 'apollo-server';
 
 
 // Définition des types associés aux requêtes des dimensions
@@ -14,4 +14,4 @@ const dimensionTypeDefs = gql`
     }
 `;
 
-exports.dimensionTypeDefs = dimensionTypeDefs
+export { dimensionTypeDefs };

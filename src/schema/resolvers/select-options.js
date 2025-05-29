@@ -1,5 +1,5 @@
 // Importation des modules
-const { withTimeout } = require('../../utils/timeout');
+import { withTimeout } from '../../utils/timeout.js';
 
 // Resolver pour la sélection des options
 const selectOptionsResolvers = {
@@ -26,4 +26,4 @@ const selectOptionsResolvers = {
     }
 };
 
-module.exports = { selectOptionsResolvers };
+export { selectOptionsResolvers };

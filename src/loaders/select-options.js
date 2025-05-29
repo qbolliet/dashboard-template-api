@@ -1,7 +1,7 @@
-// src/loaders/select-options.js
-const DataLoader = require('dataloader');
-const { dbPool } = require('../db');
-const { withCache } = require('../utils/cache');
+// Importation des modules
+import DataLoader from 'dataloader';
+import { dbPool } from '../db/index.js';
+import { withCache } from '../utils/cache.js';
 
 // Fonction de requête des options de sélection
 /**
@@ -115,4 +115,4 @@ const createSelectOptionsLoader = () => new DataLoader(async (keys) => {
 });
 
 // Export
-exports.createSelectOptionsLoader = createSelectOptionsLoader;
+export { createSelectOptionsLoader };

@@ -1,5 +1,5 @@
 // Importation des modules
-const { GraphQLError } = require('graphql');
+import { GraphQLError } from 'graphql';
 
 // Règles de validation
 const ValidationRules = {
@@ -160,7 +160,4 @@ function validateShape(object, shape, index) {
     }
 }
 
-module.exports = {
-    ValidationRules,
-    validateInput
-};
+export { ValidationRules, validateInput };
