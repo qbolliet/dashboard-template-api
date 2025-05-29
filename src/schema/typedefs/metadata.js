@@ -1,5 +1,5 @@
 // Importation des modules
-const { gql } = require('apollo-server');
+import { gql } from 'apollo-server';
 
 // Définition du type des méta-données
 const metadataTypeDefs = gql`

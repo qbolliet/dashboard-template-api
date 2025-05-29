@@ -1,17 +1,22 @@
 // Importation des modules
 import { DuckDBPool } from './pool.js';
-import path from 'path';
+import { dirname, resolve } from 'path';
 import fs from 'fs';
 import yaml from 'yaml';
+import { fileURLToPath } from 'url';
+
+// Emplcament du fichier et du dossier
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Chargement du fichier de configuration
-const configPath = path.resolve(__dirname, '../../config/config.yaml');
+const configPath = resolve(__dirname, '../../config/config.yaml');
 const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
 // Chargement du fichier de configuration
 // const config = yaml.load(fs.readFileSync('./config/config.yaml', 'utf8'));
 
 // Construction du chemin vers la base de données
-const dbPath = path.resolve(__dirname, '../../', config.DB_PATH);
+const dbPath = resolve(__dirname, '../../', config.DB_PATH);
 
 // Vérification que le chemin vers la base de données existe
 if (!fs.existsSync(dbPath)) {
