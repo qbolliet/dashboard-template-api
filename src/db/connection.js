@@ -1,8 +1,8 @@
 // Importation des modules
-const { DuckDBPool } = require('./pool');
-const path = require('path');
-const fs = require('fs');
-const yaml = require('yaml');
+import { DuckDBPool } from './pool.js';
+import path from 'path';
+import fs from 'fs';
+import yaml from 'yaml';
 
 // Chargement du fichier de configuration
 const configPath = path.resolve(__dirname, '../../config/config.yaml');
@@ -26,9 +26,8 @@ const dbPool = new DuckDBPool({
   maxConnections: config.DB_MAX_CONNECTIONS || 5,
   acquireTimeout: config.DB_ACQUIRE_TIMEOUT || 60
 });
+// Fonction de fermeture des connexions
+const closeConnections = () => dbPool.close()
 
 // Exportation du pool et de la fonction de clôture
-module.exports = {
-  dbPool,
-  closeConnections: () => dbPool.close()
-};
+export { dbPool, closeConnections };

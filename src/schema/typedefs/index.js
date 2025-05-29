@@ -1,11 +1,12 @@
 // Importation des éléments du dossier
-const { gql } = require('apollo-server');
-const { mergeTypeDefs } = require('@graphql-tools/merge');
-const commonTypeDefs = require('./common');
-const { dimensionTypeDefs } = require('./dimension');
-const { factTypeDefs } = require('./fact');
-const { metadataTypeDefs } = require('./metadata');
-const selectTypeDefs = require('./select');
+import { gql } from 'apollo-server';
+import { mergeTypeDefs } from '@graphql-tools/merge';
+import { commonTypeDefs } from './common.js';
+import { dimensionTypeDefs } from './dimension.js';
+import { factTypeDefs } from './fact.js';
+import { metadataTypeDefs } from './metadata.js';
+import { selectTypeDefs } from './select.js';
+
 
 // Initialisation de la requête
 const baseTypeDefs = gql`
@@ -25,4 +26,4 @@ const typeDefs = mergeTypeDefs([
 ]);
 
 // Réexportation des éléments d'intérêt
-module.exports = { typeDefs };
+export { typeDefs };

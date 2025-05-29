@@ -1,6 +1,6 @@
 // Importation des modules
-const { withTimeout } = require('../../utils/timeout');
-const { ValidationError } = require('apollo-server');
+import { withTimeout } from '../../utils/timeout.js';
+import { ValidationError } from 'apollo-server';
 
 // Resolver pour les données agrégées
 const aggregatedFactsResolvers = {
@@ -75,4 +75,4 @@ const aggregatedFactsResolvers = {
     }
 };
 
-module.exports = { aggregatedFactsResolvers };
+export { aggregatedFactsResolvers };

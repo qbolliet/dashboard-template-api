@@ -1,7 +1,7 @@
 // Importation des modules
-const { makeExecutableSchema } = require('@graphql-tools/schema');
-const { typeDefs } = require('./typedefs');
-const { resolvers } = require('./resolvers');
+import { makeExecutableSchema } from '@graphql-tools/schema';
+import { typeDefs } from './typedefs/index.js';
+import { resolvers } from './resolvers/index.js';
 
 // Construction du schéma
 const schema = makeExecutableSchema({
@@ -10,6 +10,4 @@ const schema = makeExecutableSchema({
 });
 
 // Ré-exportation des éléments d'intérêt
-module.exports = {
-  schema
-};
+export { schema };

@@ -1,7 +1,7 @@
 // Importation des modules
-const DataLoader = require('dataloader');
-const { dbPool } = require('../db');
-const { withCache } = require('../utils/cache');
+import DataLoader from 'dataloader';
+import { dbPool } from '../db/index.js';
+import { withCache } from '../utils/cache.js';
 
 // Fonction de requête des données des tables de dimentions
 /**
@@ -57,4 +57,4 @@ const createDimensionLoader = () => new DataLoader(async (names) => {
 });
 
 // Export
-exports.createDimensionLoader = createDimensionLoader;
+export { createDimensionLoader };

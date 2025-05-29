@@ -1,9 +1,9 @@
 // Importation des modules
-const { createMetadataLoader } = require('./metadata');
-const { createDimensionLoader } = require('./dimension');
-const { createFactLoader } = require('./fact');
-const { createSelectOptionsLoader } = require('./select-options');
-const { createAggregatedFactsLoader } = require('./aggregated-facts');
+import { createMetadataLoader } from './metadata.js';
+import { createDimensionLoader } from './dimension.js';
+import { createFactLoader } from './fact.js';
+import { createSelectOptionsLoader } from './select-options.js';
+import { createAggregatedFactsLoader } from './aggregated-facts.js';
 
 /**
  * Creates and initializes all data loaders
@@ -73,7 +73,4 @@ const createLoadersForRequest = () => {
     return createLoaders();
 };
 
-module.exports = {
-    createLoaders,
-    createLoadersForRequest
-};
+export { createLoaders, createLoadersForRequest };

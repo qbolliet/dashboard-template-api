@@ -1,5 +1,5 @@
 // Importation des modules
-const { gql } = require('apollo-server');
+import { gql } from 'apollo-server';
 
 const selectTypeDefs = gql`
   extend type Query {
@@ -22,4 +22,4 @@ const selectTypeDefs = gql`
   }
 `;
 
-module.exports = selectTypeDefs;
+export { selectTypeDefs };

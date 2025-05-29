@@ -1,5 +1,5 @@
 // Importation des modules
-const winston = require('winston');
+import winston from 'winston';
 
 
 // Initialisation du logger
@@ -25,4 +25,4 @@ const logger = winston.createLogger({
   ]
 });
 
-module.exports = { logger };
+export { logger };

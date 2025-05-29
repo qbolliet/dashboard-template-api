@@ -1,10 +1,6 @@
 // Importation des modules du dossier
-const { ValidationRules, validateInput } = require('./validation');
-const { SecurityManager } = require('./manager');
+import { ValidationRules, validateInput } from './validation.js';
+import { SecurityManager } from './manager.js';
 
 // Ré-exportation des modules d'intérêt
-module.exports = {
-    ValidationRules,
-    validateInput,
-    SecurityManager,
-  };
+export { ValidationRules, validateInput, SecurityManager };

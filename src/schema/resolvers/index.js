@@ -1,9 +1,9 @@
 // Importation des modules d'intérêt
-const { metadataResolvers } = require('./metadata');
-const { dimensionResolvers } = require('./dimension');
-const { factResolvers } = require('./fact');
-const { aggregatedFactsResolvers } = require('./aggregated-facts');
-const { selectOptionsResolvers } = require('./select-options');
+import { metadataResolvers } from './metadata.js';
+import { dimensionResolvers } from './dimension.js';
+import { factResolvers } from './fact.js';
+import { aggregatedFactsResolvers } from './aggregated-facts.js';
+import { selectOptionsResolvers } from './select-options.js';
 
 // Combinaison des différents resolvers
 const resolvers = {
@@ -17,6 +17,4 @@ const resolvers = {
 };
 
 // Ré-exportation de la combinaison
-module.exports = {
-    resolvers
-};
+export { resolvers };

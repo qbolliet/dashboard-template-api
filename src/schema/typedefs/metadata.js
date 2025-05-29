@@ -16,4 +16,4 @@ const metadataTypeDefs = gql`
   }
 `;
 
-exports.metadataTypeDefs = metadataTypeDefs;
+export { metadataTypeDefs };

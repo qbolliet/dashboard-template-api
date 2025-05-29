@@ -8,4 +8,4 @@ const withTimeout = (promise, ms, message) => {
     ]);
   };
   
-  exports.withTimeout = withTimeout;
+export { withTimeout };

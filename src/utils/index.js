@@ -1,13 +1,8 @@
 // Importation des éléments du dossier
-const { withCache } = require('./cache');
-const { logger } = require('./logger');
-const { withTimeout } = require('./timeout');
-const { buildWhereClause } = require('./utils');
+import { withCache } from './cache.js';
+import { logger } from './logger.js';
+import { withTimeout } from './timeout.js';
+import { buildWhereClause } from './utils.js';
 
 // Ré-exportation des éléments d'intérêt
-module.exports = {
-    withCache,
-    logger,
-    withTimeout,
-    buildWhereClause
-};
+export { withCache, logger, withTimeout, buildWhereClause };

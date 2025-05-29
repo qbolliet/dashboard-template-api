@@ -1,10 +1,6 @@
 // Importation des éléments du dossier
-const { dbPool, closeConnections } = require('./connection');
-const { DuckDBPool } = require('./pool');
+import { dbPool, closeConnections } from './connection.js';
+import { DuckDBPool } from './pool.js';
 
 // Ré-exportation des fonctions d'intérêt
-module.exports = {
-  dbPool,
-  closeConnections,
-  DuckDBPool,
-};
+export { dbPool, closeConnections, DuckDBPool };
