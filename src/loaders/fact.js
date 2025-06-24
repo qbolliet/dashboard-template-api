@@ -1,98 +1,101 @@
 // Importation des modules
-import DataLoader from 'dataloader';
-import { dbPool } from '../db/index.js';
-import { withCache } from '../utils/cache.js';
+import { FactQueryLoader } from './base-loader.js';
 import { buildWhereClause } from '../utils/utils.js';
 import { redis } from '../cache/index.js';
 
-// Fonction de requête de la table des faits
+// Classe de chargement de la table des faits
 /**
- * Creates a DataLoader for facts with optimized data formats for frontend visualization
- * @returns {DataLoader} DataLoader instance for facts
+ * Loader for fact table queries
+ * Extends FactQueryLoader for common SQL building functionality
  */
-const createFactLoader = () => new DataLoader(async (keys) => {
-    // Initialisation de la connexion
-    let connection;
+class FactLoader extends FactQueryLoader {
+    // Initialisation
+    constructor() {
+        super({
+            batchSize: 5,
+            cachePrefix: 'facts',
+            cache: true,
+            cacheTimeout: 300 // 5 minutes pour les faits
+        });
+    }
 
-    try {
-        // Acquisition de la connexion à la base de données
-        connection = await dbPool.acquire();
-        // console.log('Successfully acquired database connection for facts');
-
-        // Implémentation de chaque paramètre dans la requête
-        return await Promise.all(keys.map(async ({ fields, filters, structuredFilters, limit, offset, sort, format = 'default' }) => {
-            try {
-                // Création d'une clé de caching
-                const cacheKey = `facts:${JSON.stringify({ fields, filters, structuredFilters, limit, offset, sort, format })}`;
-                
-                // Utilisation du cache s'il existe
-                return await withCache(cacheKey, async () => {
-                    // Construction de la requête SQL
-                    // Construction des colonnes à sélectionner
-                    const selectClause = fields && fields.length > 0
-                        ? fields.join(', ')
-                        : '*';
-                    // Construction des filtres sur les lignes
-                    const whereClause = buildWhereClause(filters, structuredFilters);
-                    // Construction des critères de tri
-                    const sortClause = sort && sort.length > 0 
-                        ? `ORDER BY ${sort.map(s => `${s.field} ${s.order}`).join(', ')}` 
-                        : '';
-                    // Construction de la requête SQL
-                    const query = `
-                    SELECT ${selectClause} FROM fact_table
-                    ${whereClause} 
-                    ${sortClause}
-                    LIMIT ${limit} OFFSET ${offset}
-                    `;
-                    
-                    console.log('Executing fact query:', query);
-                    
-                    // Sélection du format de sortie selon les besoins du frontend
-                    if (format === 'metadata') {
-                        // Format optimisé pour D3 avec métadonnées utiles pour visualisation
-                        return await connection.getWithMetadata(query);
-                    } else if (format === 'json') {
-                        // Format JSON simple pour consommation générale
-                        return await connection.getAsJsonArray(query);
-                    } else {
-                        // Format par défaut - tableau d'objets
-                        return await connection.all(query);
-                    }
-                });
-            } catch (queryError) {
-                console.error('Error executing fact query:', queryError);
-                throw queryError;
-            }
-        }));
-    } catch (error) {
-        // Retourne une erreur s'il n'arrive pas à requêter les données
-        console.error('Error in fact loader:', error);
-        throw error;
-    } finally {
-        // Par défaut, retourne la connexion
-        if (connection) {
-            //console.log('Releasing database connection');
-            dbPool.release(connection);
+    // Méthode de chargement basée sur les paramètres de requête
+    /**
+     * Loads fact data based on query parameters
+     * @param {Object} connection - Database connection
+     * @param {Object} params - Query parameters
+     * @returns {Promise<Array|Object>} Query results in requested format
+     */
+    async loadFacts(connection, params) {
+        const { fields, filters, structuredFilters, limit, offset, sort, format = 'default' } = params;
+        
+        // Validation des paramètres de pagination
+        this.validatePagination(limit, offset);
+        
+        // Construction de la requête SQL
+        const selectClause = this.buildSelectClause(fields);
+        const whereClause = buildWhereClause(filters, structuredFilters);
+        const sortClause = this.buildSortClause(sort);
+        
+        const query = `
+            SELECT ${selectClause} FROM fact_table
+            ${whereClause} 
+            ${sortClause}
+            LIMIT ${limit} OFFSET ${offset}
+        `;
+        
+        console.log('Executing fact query:', query);
+        
+        // Sélection du format de sortie selon les besoins du frontend
+        if (format === 'metadata') {
+            // Format optimisé pour D3 avec métadonnées
+            return await connection.getWithMetadata(query);
+        } else if (format === 'json') {
+            // Format JSON simple
+            return await connection.getAsJsonArray(query);
+        } else {
+            // Format par défaut - tableau d'objets
+            return await connection.all(query);
         }
     }
-}, {
-    maxBatchSize: 5,
-    cacheKeyFn: key => JSON.stringify(key)
-});
 
-// Fonction de requête de la table des faits avec pagination
+    // Méthode de comptage du nombre d'observations requêtées
+    /**
+     * Gets total count for a fact query
+     * @param {Object} connection - Database connection
+     * @param {Object} filters - Filter parameters
+     * @returns {Promise<number>} Total count
+     */
+    async getCount(connection, { filters, structuredFilters }) {
+        const whereClause = buildWhereClause(filters, structuredFilters);
+        const countQuery = `SELECT COUNT(*) as total FROM fact_table ${whereClause}`;
+        const result = await connection.all(countQuery);
+        return result[0].total;
+    }
+}
+
+// Fonction de création d'un loader pour la table des faits
+/**
+ * Creates a DataLoader for facts
+ * @returns {DataLoader} DataLoader instance for facts
+ */
+const createFactLoader = () => {
+    const loader = new FactLoader();
+    return loader.createLoader((connection, params) => loader.loadFacts(connection, params));
+};
+
+// Fonction additionnelle avec comptage des observations et support pour la pagination
 /**
  * Fact resolver with additional count query and pagination support
- * Optimized for frontend data display and visualization
- * @param {Object} args - Query arguments including filters and pagination
- * @returns {Promise<Object>} - Results with data, total count and pagination info
+ * @param {Object} args - Query arguments
+ * @returns {Promise<Object>} Results with data, total count and pagination info
  */
 const getFactTableWithCount = async (args) => {
-    // Extraction du jeu de données
-    const data = await createFactLoader().load(args);
+    // Utilisation du loader
+    const factLoader = createFactLoader();
+    const data = await factLoader.load(args);
 
-    // Extraction du compte à partir du cache
+    // Gestion du compte avec cache
     const countKey = `count:${JSON.stringify({
         filters: args.filters,
         structuredFilters: args.structuredFilters
@@ -100,43 +103,26 @@ const getFactTableWithCount = async (args) => {
     
     let total = await redis.get(countKey);
 
-    // Si le compte n'est pas en cache, le calcule à partir de la base de données
     if (!total) {
-        // Initialisation de la connexion
-        let countConnection;
+        // Si pas en cache, calculer
+        const loader = new FactLoader();
+        total = await loader.executeWithConnection(async (connection) => {
+            return loader.getCount(connection, args);
+        });
+        
+        // Mise en cache du résultat
         try {
-            // Acquisition de la connexion
-            countConnection = await dbPool.acquire();
-            // Construction de la condition de filtre sur les lignes
-            const whereClause = buildWhereClause(args.filters, args.structuredFilters);
-            // Exécution de la requête de comptage
-            const countQuery = `SELECT COUNT(*) as total FROM fact_table ${whereClause}`;
-            // Exécution de la requête de comptage
-            const result = await countConnection.all(countQuery);
-            // Extraction de la longueur du jeu de données
-            total = result[0].total;
-            
-            // Caching du compte
-            try {
-                await redis.set(countKey, total, 'EX', 300);
-            } catch (cacheError) {
-                console.warn('Failed to cache count:', cacheError);
-            }
-        } catch (error) {
-            console.error('Error executing count query:', error);
-            // Retourne la longueur du jeu de données par défaut
-            total = Array.isArray(data) ? data.length : 
-                    (data && data.data ? data.data.length : 0);
-        } finally {
-            if (countConnection) {
-                dbPool.release(countConnection);
-            }
+            await redis.set(countKey, total, 'EX', 300);
+        } catch (cacheError) {
+            console.warn('Failed to cache count:', cacheError);
         }
+    } else {
+        total = parseInt(total);
     }
 
-    // Construction du résultat selon le format des données
+    // Construction du résultat selon le format
     if (args.format === 'metadata') {
-        // Pour le format D3, incluons les informations de pagination dans les métadonnées
+        // Pour le format D3, inclure les infos de pagination dans les métadonnées
         return {
             ...data,
             metadata: {

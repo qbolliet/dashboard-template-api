@@ -1,56 +1,65 @@
 // Importation des modules
 import { createMetadataLoader } from './metadata.js';
-import { createDimensionLoader } from './dimension.js';
+import { createDimensionLoader, createDimensionValueLoader } from './dimension.js';
 import { createFactLoader } from './fact.js';
 import { createSelectOptionsLoader } from './select-options.js';
 import { createAggregatedFactsLoader } from './aggregated-facts.js';
 
+// Fonction de création des différents loaders
 /**
  * Creates and initializes all data loaders
  * @returns {Object} Object containing all initialized loaders
  */
 const createLoaders = () => {
-    // Initialize all loaders
+    // Initialisation de tous les loaders
     const metadataLoader = createMetadataLoader();
     const dimensionLoader = createDimensionLoader();
+    const dimensionValueLoader = createDimensionValueLoader();
     const factLoader = createFactLoader();
     const aggregatedFactsLoader = createAggregatedFactsLoader();
     const selectOptionsLoader = createSelectOptionsLoader();
 
-    // Return an object with all loaders
+    // Retourne un objet avec l'ensemble des loaders
     return {
         metadata: metadataLoader,
         dimension: dimensionLoader,
+        dimensionValue: dimensionValueLoader,
         fact: factLoader,
         aggregatedFacts: aggregatedFactsLoader,
         selectOptions: selectOptionsLoader,
 
-        // Helper method to clear all loader caches
+        // Méthode pour nettoyer le cache de l'ensemble des loaders
         clearAll: () => {
             metadataLoader.clearAll();
             dimensionLoader.clearAll();
+            dimensionValueLoader.clearAll();
             factLoader.clearAll();
             aggregatedFactsLoader.clearAll();
             selectOptionsLoader.clearAll();
         },
 
-        // Helper method to prime all loaders with initial data
+        // méthode d'amorçage de tous les loaders avec leurs données initiales
         prime: async (initialData = {}) => {
             const {
                 metadata = [],
                 dimensions = [],
+                dimensionValues = [],
                 facts = [],
                 aggregatedFacts = [],
                 selectOptions = []
             } = initialData;
 
-            // Prime each loader with its respective initial data
+            // Amorçage de chaque loader avec ses données initiales
             metadata.forEach(({ key, value }) => {
                 metadataLoader.prime(key, value);
             });
 
             dimensions.forEach(({ key, value }) => {
                 dimensionLoader.prime(key, value);
+            });
+
+            dimensionValues.forEach(({ key, value }) => {
+                dimensionValueLoader.prime(key, value);
             });
 
             facts.forEach(({ key, value }) => {
@@ -68,7 +77,7 @@ const createLoaders = () => {
     };
 };
 
-// Factory function to create new loaders for each request
+// Fonction pour créer de nouveaux loaders pour chaque demande
 const createLoadersForRequest = () => {
     return createLoaders();
 };
