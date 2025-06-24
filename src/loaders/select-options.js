@@ -1,118 +1,120 @@
 // Importation des modules
-import DataLoader from 'dataloader';
-import { dbPool } from '../db/index.js';
-import { withCache } from '../utils/cache.js';
+import { BaseQueryLoader } from './base-loader.js';
 
-// Fonction de requête des options de sélection
+// Classe de chargement des options de sélection
+/**
+ * Loader for select options (dropdown values)
+ * Extends BaseQueryLoader for common functionality
+ */
+class SelectOptionsLoader extends BaseQueryLoader {
+    // Initialisation
+    constructor() {
+        super({
+            batchSize: 5,
+            cachePrefix: 'select-options',
+            cache: true,
+            cacheTimeout: 600 // 10 minutes pour les options qui changent peu
+        });
+    }
+
+    // Méthode de chargement des options de sélections
+    /**
+     * Loads select options for a field
+     * @param {Object} connection - Database connection
+     * @param {Object} params - Query parameters
+     * @returns {Promise<Array>} Array of select options
+     */
+    async loadSelectOptions(connection, { fieldName, limit, searchTerm }) {
+        try {
+            console.log(`Loading select options for field: ${fieldName}`);
+            
+            // Vérification si le champ est catégoriel
+            const metadataQuery = 'SELECT is_categorical FROM metadata WHERE name = ?';
+            const metadataResults = await connection.all(metadataQuery, [fieldName]);
+            const isCategorical = metadataResults.length > 0 && metadataResults[0].is_categorical;
+            
+            if (isCategorical) {
+                // Chargement depuis la table de dimension
+                return await this.loadFromDimension(connection, fieldName, limit, searchTerm);
+            } else {
+                // Chargement des valeurs distinctes depuis la table de faits
+                return await this.loadFromFacts(connection, fieldName, limit, searchTerm);
+            }
+        } catch (error) {
+            console.error(`Error loading select options for ${fieldName}:`, error);
+            return [];
+        }
+    }
+
+    // Méthode de chargement depuis la table des dimensions
+    /**
+     * Loads options from dimension table
+     * @private
+     */
+    async loadFromDimension(connection, fieldName, limit, searchTerm) {
+        // Construction de la requête
+        let query = `SELECT value, label FROM dim_${fieldName}`;
+        const params = [];
+        
+        // Ajout du terme de recherche si présent
+        if (searchTerm) {
+            query += ' WHERE LOWER(label) LIKE LOWER(?)';
+            params.push(`%${searchTerm}%`);
+        }
+        
+        // Ajout de la limite
+        query += ' LIMIT ?';
+        params.push(limit);
+        
+        // Exécution de la requête
+        const results = await connection.all(query, params);
+        
+        // Mise en forme du résultat
+        return results.map(row => ({
+            value: String(row.value),
+            label: row.label
+        }));
+    }
+
+    // Méthode de chargement depuis la table des faits
+    /**
+     * Loads options from fact table
+     * @private
+     */
+    async loadFromFacts(connection, fieldName, limit, searchTerm) {
+        // Construction de la requête
+        let query = `SELECT DISTINCT ${fieldName} as value FROM fact_table`;
+        const params = [];
+        
+        // Ajout du terme de recherche si présent
+        if (searchTerm) {
+            query += ' WHERE CAST(${fieldName} AS VARCHAR) LIKE ?';
+            params.push(`%${searchTerm}%`);
+        }
+        
+        // Ajout de la limite
+        query += ' LIMIT ?';
+        params.push(limit);
+        
+        // Exécution de la requête
+        const results = await connection.all(query, params);
+        
+        // Mise en forme du résultat
+        return results.map(row => ({
+            value: String(row.value),
+            label: String(row.value)
+        }));
+    }
+}
+
+// Fonction de création d'un loader pour les sélections d'options
 /**
  * Creates a DataLoader for select options
  * @returns {DataLoader} DataLoader instance for select options
  */
-const createSelectOptionsLoader = () => new DataLoader(async (keys) => {
-    let connection;
+const createSelectOptionsLoader = () => {
+    const loader = new SelectOptionsLoader();
+    return loader.createLoader((connection, params) => loader.loadSelectOptions(connection, params));
+};
 
-    try {
-        // Acquisition de la connexion à la base de données
-        connection = await dbPool.acquire();
-        //console.log('Successfully acquired database connection for select options');
-
-        // Implémentation de chaque paramètre de la requête
-        return await Promise.all(keys.map(async ({ fieldName, limit, searchTerm }) => {
-            try {
-            // Création d'une clé de cache
-            const cacheKey = `select-options:${JSON.stringify({ fieldName, limit, searchTerm })}`;
-            
-            // Utilisation du cache s'il existe
-            return await withCache(cacheKey, async () => {
-                //console.log(`Loading select options for field: ${fieldName}`);
-                
-                // Recherche si le champ est catégoriel en requêtant les méta-données
-                const metadataQuery = 'SELECT is_categorical FROM metadata WHERE name = ?';
-                const metadataResults = await connection.all(metadataQuery, [fieldName]);
-                // Définition du booléen renseignant si la variable est catégorielle
-                const isCategorical = metadataResults.length > 0 && metadataResults[0].is_categorical;
-                
-                // Si la variable est catégorielle, alors on recherche ses valeurs dans la table des dimensions
-                if (isCategorical) {
-                    // Initialisation de la requête de la table de dimensions
-                    let query = `SELECT value, label FROM dim_${fieldName}`;
-                    
-                    // Initialisation de la liste des paramètres de la requête
-                    const params = [];
-                    
-                    // Ajout du terme de recherche si ce-dernnier est renseigné
-                    if (searchTerm) {
-                        // Ajout de la condition sur le terme de recherche à la requête
-                        query += ' WHERE LOWER(label) LIKE LOWER(?)';
-                        // Ajout du terme de recherche à la liste des paramètres
-                        params.push(`%${searchTerm}%`);
-                    }
-                    
-                    // Ajout d'une limite du nombre de résultats
-                    query += ' LIMIT ?';
-                    // Ajout de la limite à la liste des paramètres
-                    params.push(limit);
-                    
-                    // Exécution de la requête
-                    const results = await connection.all(query, params);
-                    
-                    // Mise en forme de l'élément retourné
-                    return results.map(row => ({
-                        value: String(row.value),
-                        label: row.label
-                    }));
-                } else {
-                    // Si la variable n'est pas catégroeille, on extrait ses valeurs distinctes de la table des faits
-                    // Initialisation de la requête de la table des faits
-                    let query = `SELECT DISTINCT ${fieldName} as value FROM fact_table`;
-
-                    // Initialisation de la liste des paramètres
-                    const params = [];
-                    
-                    // Ajout du terme de recherche si ce-dernnier est renseigné
-                    if (searchTerm) {
-                        // Ajout de la condition sur le terme de recherche à la requête
-                        query += ' WHERE CAST(value AS VARCHAR) LIKE ?';
-                        // Ajout du terme de recherche à la liste des paramètres
-                        params.push(`%${searchTerm}%`);
-                    }
-                    
-                    // Ajout d'une limite du nombre de résultats
-                    query += ' LIMIT ?';
-                    // Ajout de la limite à la liste des paramètres
-                    params.push(limit);
-                    
-                    // Exécution de la requête
-                    const results = await connection.all(query, params);
-                    
-                    // Mise en forme de l'élément retourné
-                    return results.map(row => ({
-                        value: String(row.value),
-                        label: String(row.value)
-                    }));
-                }
-            });
-            } catch (queryError) {
-                // Retourne un array vide en cas d'erreur
-                //console.error(`Error executing select options query for ${fieldName}:`, queryError);
-                return [];
-            }
-        }));
-    } catch (error) {
-        // Retourne un array vide par défaut
-        console.error('Error in select options loader:', error);
-        return keys.map(() => []);
-    } finally {
-        // Retourne une connexion par défaut
-        if (connection) {
-            // console.log('Releasing database connection');
-            dbPool.release(connection);
-        }
-    }
-}, {
-    maxBatchSize: 5,
-    cacheKeyFn: key => JSON.stringify(key)
-});
-
-// Export
 export { createSelectOptionsLoader };
