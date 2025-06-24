@@ -22,8 +22,8 @@ const commonTypeDefs = gql`
       key: String!
       aggregatedValue: Float!
       count: Int!
+      keyLabel: String
   }
-
 
   input Filter {
     key: String!
@@ -40,11 +40,6 @@ const commonTypeDefs = gql`
     value: String!
     label: String!
   }
-
-#   type PaginatedResponse {
-#     total: Int!
-#     hasNextPage: Boolean!
-#   }
 `;
 
 export { commonTypeDefs };
