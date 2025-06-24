@@ -2,10 +2,10 @@
 import { redis } from '../cache/index.js';
 
 // Création d'une fonction de cache
-const withCache = async (key, loader) => {
+const withCache = async (key, loader, timeout = 300) => {
   // Tentative de connexion au cache
   try {
-    // Vérifie si Redis est dispnible et connecté
+    // Vérifie si Redis est disponible et connecté
     if (!redis || typeof redis.get !== 'function') {
         console.log(`Redis not available, using direct loader for key: ${key}`);
         return await loader();
@@ -17,7 +17,7 @@ const withCache = async (key, loader) => {
     }
     // Sinon chargement des données
     const result = await loader();
-    await redis.set(key, JSON.stringify(result), 'EX', 300);
+    await redis.set(key, JSON.stringify(result), 'EX', timeout);
     return result;
   } catch (error) {
       console.error('Cache operation failed:', error);
