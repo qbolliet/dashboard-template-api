@@ -4,6 +4,7 @@ import { dimensionResolvers } from './dimension.js';
 import { factResolvers } from './fact.js';
 import { aggregatedFactsResolvers } from './aggregated-facts.js';
 import { selectOptionsResolvers } from './select-options.js';
+import { fieldResolvers } from './field-resolvers.js';
 
 // Combinaison des différents resolvers
 const resolvers = {
@@ -13,7 +14,9 @@ const resolvers = {
         ...factResolvers.Query,
         ...aggregatedFactsResolvers.Query,
         ...selectOptionsResolvers.Query
-    }
+    },
+    // Ajout des field resolvers pour la résolution des labels
+    ...fieldResolvers
 };
 
 // Ré-exportation de la combinaison
