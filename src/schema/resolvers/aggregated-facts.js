@@ -1,6 +1,7 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { ValidationError } from 'apollo-server';
+import { enrichAggregatedFacts } from './field-resolvers.js';
 
 // Resolver pour les données agrégées
 const aggregatedFactsResolvers = {
@@ -51,7 +52,7 @@ const aggregatedFactsResolvers = {
             });
 
             try {
-                return await withTimeout(
+                const results = await withTimeout(
                     loaders.aggregatedFacts.load({
                         fields,
                         filters,
@@ -65,6 +66,10 @@ const aggregatedFactsResolvers = {
                     10000,
                     'Aggregated facts fetch timeout'
                 );
+                
+                // Enrichissement des résultats avec le champ de regroupement
+                // pour permettre la résolution des labels
+                return enrichAggregatedFacts(results, groupBy);
             } catch (error) {
                 if (error.message === 'Aggregated facts fetch timeout') {
                     throw error;

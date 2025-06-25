@@ -21,6 +21,20 @@ class SecurityManager {
         filter: 0.5
     };
 
+    // Patterns dangereux à bloquer
+    static DANGEROUS_PATTERNS = [
+        /mutation/i,        // Pas de mutations
+        /__schema/i,        // Limiter l'introspection sauf en dev
+        /__type/i,          // Limiter l'introspection sauf en dev
+        /system/i,          // Pas d'accès aux tables système
+        /drop\s+table/i,    // Pas de DROP TABLE
+        /delete\s+from/i,   // Pas de DELETE
+        /update\s+set/i,    // Pas de UPDATE
+        /insert\s+into/i,   // Pas de INSERT
+        /create\s+table/i,  // Pas de CREATE TABLE
+        /alter\s+table/i    // Pas de ALTER TABLE
+    ];
+
     static async validateRequest(context, info) {
         // Add request validation logic here
         // E.g. user authentification

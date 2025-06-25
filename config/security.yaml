@@ -1,0 +1,30 @@
+# Exemple de mise à jour de la configuration pour la sécurité
+# Ajouter ces sections à votre config/config.yaml existant
+
+# Configuration de sécurité
+SECURITY:
+  # Profondeur maximale des requêtes GraphQL
+  MAX_QUERY_DEPTH: 5
+  
+  # Rate limiting
+  RATE_LIMIT:
+    # Nombre maximum de requêtes par fenêtre
+    MAX_REQUESTS: 100
+    # Durée de la fenêtre en millisecondes (15 minutes)
+    WINDOW_MS: 900000
+    # Nombre maximum de requêtes en rafale
+    MAX_BURST_REQUESTS: 20
+    # Durée de la fenêtre de rafale (1 minute)
+    BURST_WINDOW_MS: 60000
+
+# Configuration des timeouts basés sur la complexité
+TIMEOUTS:
+  # Timeout de base en millisecondes
+  BASE_TIMEOUT: 5000
+  # Timeout additionnel par point de complexité
+  TIMEOUT_PER_COMPLEXITY: 100
+  # Timeout maximum en millisecondes
+  MAX_TIMEOUT: 30000
+
+# Note: ALLOWED_OPERATIONS a été supprimé
+# Les patterns dangereux sont maintenant gérés dans SecurityManager.DANGEROUS_PATTERNS
