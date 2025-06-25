@@ -1,0 +1,42 @@
+SECURITY_PATTERNS:
+  common:
+    blocked:
+      - pattern: "mutation"
+        message: "Mutations are not allowed in this read-only API"
+        flags: "i"
+      - pattern: "drop\\s+table"
+        message: "DDL operations are forbidden"
+        flags: "i"
+      - pattern: "delete\\s+from"
+        message: "DELETE operations are not allowed"
+        flags: "i"
+      - pattern: "update\\s+set"
+        message: "UPDATE operations are not allowed"
+        flags: "i"
+      - pattern: "insert\\s+into"
+        message: "INSERT operations are not allowed"
+        flags: "i"
+      - pattern: "create\\s+table"
+        message: "CREATE operations are not allowed"
+        flags: "i"
+      - pattern: "alter\\s+table"
+        message: "ALTER operations are not allowed"
+        flags: "i"
+      - pattern: "system"
+        message: "System table access is forbidden"
+        flags: "i"
+  
+  development:
+    allowed:
+      - "__schema"
+      - "__type"
+      - "IntrospectionQuery"
+  
+  production:
+    blocked:
+      - pattern: "__schema"
+        message: "Schema introspection is disabled in production"
+        flags: "i"
+      - pattern: "__type"
+        message: "Type introspection is disabled in production"
+        flags: "i"
