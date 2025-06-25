@@ -74,6 +74,29 @@ const factTypeDefs = gql`
         "Metadata about the dataset"
         metadata: DatasetMetadata!
     }
+
+    "Statistics for aggregated data"
+    type AggregationStatistics {
+        mean: Float
+        median: Float
+        stdDev: Float
+        quartiles: [Float]
+    }
+    
+    "Metadata for aggregated facts optimized for D3"
+    type AggregatedFactsMetadata {
+        count: Int!
+        keyExtent: JSON  # [min, max] pour clés numériques ou [first, last] pour strings
+        valueExtent: [Float!]!
+        statistics: AggregationStatistics
+        groupByFieldInfo: Metadata
+    }
+    
+    "Aggregated facts with D3-optimized metadata"
+    type AggregatedFactsWithMetadata {
+        data: [AggregatedFact!]!
+        metadata: AggregatedFactsMetadata!
+    }
     
     "Custom scalar type for JSON objects"
     scalar JSON
@@ -110,6 +133,18 @@ const factTypeDefs = gql`
             offset: Int! = 0
             sort: [SortInput!]
         ): [AggregatedFact]
+
+        "Get aggregated facts with D3 metadata"
+        getAggregatedFactsWithMetadata(
+            fields: [String!]
+            filters: String
+            structuredFilters: [Filter]
+            groupBy: String!
+            aggregation: Aggregation! = SUM
+            limit: Int! = 100
+            offset: Int! = 0
+            sort: [SortInput!]
+        ): AggregatedFactsWithMetadata
     }
 `;
 

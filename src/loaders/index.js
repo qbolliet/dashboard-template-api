@@ -3,7 +3,8 @@ import { createMetadataLoader } from './metadata.js';
 import { createDimensionLoader, createDimensionValueLoader } from './dimension.js';
 import { createFactLoader } from './fact.js';
 import { createSelectOptionsLoader } from './select-options.js';
-import { createAggregatedFactsLoader } from './aggregated-facts.js';
+import { createAggregatedFactsLoader, createAggregatedFactsWithMetadataLoader } from './aggregated-facts.js';
+
 
 // Fonction de création des différents loaders
 /**
@@ -17,6 +18,7 @@ const createLoaders = () => {
     const dimensionValueLoader = createDimensionValueLoader();
     const factLoader = createFactLoader();
     const aggregatedFactsLoader = createAggregatedFactsLoader();
+    const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader();
     const selectOptionsLoader = createSelectOptionsLoader();
 
     // Retourne un objet avec l'ensemble des loaders
@@ -26,6 +28,7 @@ const createLoaders = () => {
         dimensionValue: dimensionValueLoader,
         fact: factLoader,
         aggregatedFacts: aggregatedFactsLoader,
+        aggregatedFactsWithMetadata: aggregatedFactsWithMetadataLoader,
         selectOptions: selectOptionsLoader,
 
         // Méthode pour nettoyer le cache de l'ensemble des loaders
@@ -35,10 +38,11 @@ const createLoaders = () => {
             dimensionValueLoader.clearAll();
             factLoader.clearAll();
             aggregatedFactsLoader.clearAll();
+            aggregatedFactsWithMetadataLoader.clearAll();
             selectOptionsLoader.clearAll();
         },
 
-        // méthode d'amorçage de tous les loaders avec leurs données initiales
+        // Méthode d'amorçage de tous les loaders avec leurs données initiales
         prime: async (initialData = {}) => {
             const {
                 metadata = [],
@@ -46,6 +50,7 @@ const createLoaders = () => {
                 dimensionValues = [],
                 facts = [],
                 aggregatedFacts = [],
+                aggregatedFactsWithMetadata = [],
                 selectOptions = []
             } = initialData;
 
@@ -69,6 +74,11 @@ const createLoaders = () => {
             aggregatedFacts.forEach(({ key, value }) => {
                 aggregatedFactsLoader.prime(key, value);
             });
+            
+            aggregatedFactsWithMetadata.forEach(({ key, value }) => {
+                aggregatedFactsWithMetadataLoader.prime(key, value);
+            });
+            
 
             selectOptions.forEach(({ key, value }) => {
                 selectOptionsLoader.prime(key, value);
