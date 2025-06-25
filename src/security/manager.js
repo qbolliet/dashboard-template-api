@@ -6,9 +6,11 @@ import { validateInput } from './validation.js';
 import { logger } from '../utils/logger.js';
 import { performance } from 'perf_hooks';
 import crypto from 'crypto';
+import { patternValidator } from './pattern-validator.js';
+
 
 // Gestionnaire de la sécurité
-// /!\ Le rate limiter n'est actuellement pas inclu dans le performance Monitor
+// /!\ Le rate limiter n'est actuellement pas inclus dans le performance Monitor
 class SecurityManager {
     // Initialisation du registre des requêtes
     static requestStore = new Map();
@@ -21,21 +23,12 @@ class SecurityManager {
         filter: 0.5
     };
 
-    // Patterns dangereux à bloquer
-    static DANGEROUS_PATTERNS = [
-        /mutation/i,        // Pas de mutations
-        /__schema/i,        // Limiter l'introspection sauf en dev
-        /__type/i,          // Limiter l'introspection sauf en dev
-        /system/i,          // Pas d'accès aux tables système
-        /drop\s+table/i,    // Pas de DROP TABLE
-        /delete\s+from/i,   // Pas de DELETE
-        /update\s+set/i,    // Pas de UPDATE
-        /insert\s+into/i,   // Pas de INSERT
-        /create\s+table/i,  // Pas de CREATE TABLE
-        /alter\s+table/i    // Pas de ALTER TABLE
-    ];
 
-    static async validateRequest(context, info) {
+    static async validateRequest(context, info, query) {
+        // Validation des patterns
+        if (query) {
+            patternValidator.validateQuery(query);
+        }
         // Add request validation logic here
         // E.g. user authentification
         return true;
@@ -134,7 +127,7 @@ class SecurityManager {
             });
         }
         
-        // Multipllication par un facteur de profondeur
+        // Multiplication par un facteur de profondeur
         complexity *= (1 + depth * 0.1);
         
         return complexity;

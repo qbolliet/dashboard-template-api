@@ -165,6 +165,8 @@ async function startServer() {
         },
         // Règles de validation de la requête
         validationRules: [
+            // Vérification de la règle de profondeur
+            createDepthLimitRule(config.SECURITY?.MAX_QUERY_DEPTH || 5),
             // Liste blanche des opérations valides
             (context) => ({
                 OperationDefinition(node) {
@@ -194,14 +196,9 @@ async function startServer() {
                             // Extraction du nom de l'opération
                             const operationName = operation?.name?.value;
                             try {
-                                // Ne vérifie pas le taux des requêtes d'introspection en environnement de développement
-                                if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
-                                    return;
-                                }
-
-                                // 1. Vérification si l'opération est permise
-                                if (!config['ALLOWED_OPERATIONS'].includes(operationName)) {
-                                    throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
+                                // 1. Validation des patterns sur la requête
+                                if (request.query) {
+                                    patternValidator.validateQuery(request.query);
                                 }
             
                                 // 2. Application de la limite de taux
