@@ -21,8 +21,6 @@ const factTypeDefs = gql`
     type Fact {
         "Numeric value of the fact"
         value: Float
-        "Dimension values as strings"
-        dimensions: [String]
         "Detailed dimension information including labels"
         dimensionDetails: [DimensionDetail]
     }

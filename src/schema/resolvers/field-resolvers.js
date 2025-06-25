@@ -18,28 +18,38 @@ const fieldResolvers = {
          * @returns {Promise<Array>} Array of dimension details
          */
         dimensionDetails: async (parent, args, { loaders }) => {
-            // Si le parent n'a pas de dimensions, retourner un tableau vide
-            if (!parent.dimensions || parent.dimensions.length === 0) {
+            // Si le parent n'a pas de champs, retourner un tableau vide
+            if (!parent || typeof parent !== 'object') {
                 return [];
             }
 
-            // Récupération des noms de champs depuis le parent
-            // Supposons que parent contient _fieldNames ou qu'on peut les déduire
-            const fieldNames = parent._fieldNames || parent.dimensions.map((_, index) => `dim_${index + 1}`);
+            // Extraction de tous les champs qui pourraient être des dimensions
+            // On exclut les champs spéciaux comme 'value'
+            const excludedFields = ['value', '_groupByField'];
+            const dimensionFields = Object.keys(parent).filter(
+                key => !excludedFields.includes(key) && parent[key] !== null
+            );
+
+            if (dimensionFields.length === 0) {
+                return [];
+            }
 
             // Récupération des métadonnées pour identifier les dimensions catégorielles
-            const metadataPromises = fieldNames.map(fieldName => loaders.metadata.load(fieldName));
+            const metadataPromises = dimensionFields.map(fieldName => 
+                loaders.metadata.load(fieldName)
+            );
+
             const metadataResults = await Promise.all(metadataPromises);
 
             // Pour chaque dimension, charger les détails si elle est catégorielle
-            const detailPromises = parent.dimensions.map(async (value, index) => {
-                const fieldName = fieldNames[index];
+            const detailPromises = dimensionFields.map(async (fieldName, index) => {
+                const value = parent[fieldName];
                 const metadata = metadataResults[index];
 
                 // Si la dimension est catégorielle, charger le label depuis la table de dimension
                 if (metadata && metadata.is_categorical) {
                     return loaders.dimensionValue.load({
-                        dimensionName: fieldName,
+                        dimensionName: fieldName, // Utilise directement le nom du champ
                         value: value
                     });
                 } else {

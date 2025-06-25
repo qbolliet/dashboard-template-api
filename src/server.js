@@ -15,6 +15,7 @@ import { logger } from './utils/logger.js';
 import { closeConnections } from './db/index.js';
 import { redis } from './cache/index.js';
 import { SecurityManager } from './security/index.js';
+import { createDepthLimitRule } from './security/depth-limit.js';
 
 // Configuration des chemins avec ES modules
 const __filename = fileURLToPath(import.meta.url);
