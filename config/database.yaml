@@ -1,0 +1,7 @@
+DATABASE:
+  PATH: ${DB_PATH:-"../dashboard-template-database/outputs/database.db"}
+  POOL:
+    MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-5}
+    ACQUIRE_TIMEOUT: ${DB_ACQUIRE_TIMEOUT:-60000}
+    CONNECTION_RETRY_DELAY: 1000
+    CONNECTION_RETRY_MAX: 3

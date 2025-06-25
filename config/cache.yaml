@@ -1,0 +1,26 @@
+CACHE:
+  REDIS:
+    HOST: ${REDIS_HOST:-localhost}
+    PORT: ${REDIS_PORT:-6379}
+    PASSWORD: ${REDIS_PASSWORD}
+    DB: ${REDIS_DB:-0}
+    KEY_PREFIX: ${REDIS_KEY_PREFIX:-'graphql-api:'}
+    CONNECTION:
+      RETRY_STRATEGY:
+        MAX_RETRY_TIME: 120000  # 2 minutes
+        MAX_ATTEMPTS: 10
+      ENABLE_READY_CHECK: true
+      CONNECT_TIMEOUT: 10000
+  
+  TTL:  # En secondes
+    DEFAULT: 300
+    METADATA: 600      
+    DIMENSIONS: 600    
+    FACTS: 300        
+    AGGREGATED_FACTS: 300   
+    SELECT_OPTIONS: 600
+    COUNT_QUERIES: 300
+  
+  HTTP_CACHE:
+    PUBLIC_PATHS: ['/graphql']
+    VARY_BY_HEADERS: ['accept-encoding', 'accept']
