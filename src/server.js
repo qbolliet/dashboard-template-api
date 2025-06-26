@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 // Importation des modules locaux
 import { schema } from './schema/index.js';
 import { createLoaders } from './loaders/index.js';
-import { logger } from './utils/logger.js';
+import { logger, createContextLogger } from './utils/logger.js';
 import { closeConnections } from './db/index.js';
 import { redis } from './cache/index.js';
 import { SecurityManager } from './security/index.js';
@@ -189,37 +189,39 @@ async function startServer() {
                 // Plugin du cycle de vie de la requête
                 requestDidStart({request, context}) {
                     const requestStart = Date.now();
+
+                    const contextLogger = createContextLogger({
+                        requestId: context.requestId,
+                        operationName: request.operationName
+                    });
                     
                     return {
                         // Validation de la requête avant son analyse
                         async didResolveOperation({operation}) {
-                            // Extraction du nom de l'opération
-                            const operationName = operation?.name?.value;
-                            try {
-                                // 1. Validation des patterns sur la requête
-                                if (request.query) {
-                                    patternValidator.validateQuery(request.query);
-                                }
-            
-                                // 2. Application de la limite de taux
-                                await SecurityManager.createRateLimiter()(context, () => true);
-                            } catch (error) {
-                                // Gestion unifiée de l'erreur
-                                logger.warn('Request validation failed', {
-                                    operationName,
-                                    errorMessage: error.message
-                                });
-                                throw error;
-                            }
+                            contextLogger.operation('GraphQL operation started', {
+                                operationType: operation.operation,
+                                complexity: SecurityManager.calculateQueryComplexity({ fieldNodes: [operation] })
+                            });
                         },
                         
                         // Logging de la complétion de la requête
                         willSendResponse({response}) {
-                            const requestDuration = Date.now() - requestStart;
-                            logger.info('Request completed', {
-                                duration: requestDuration,
-                                operationName: request.operationName,
-                                requestId: context.requestId
+                            const duration = Date.now() - requestStart;
+                            const metrics = {
+                                duration,
+                                errors: response.errors?.length || 0
+                            };
+                            
+                            contextLogger.performance('Request completed', metrics);
+                        },
+                        
+                        // Logging de rencontre d'erreurs éventuelles
+                        didEncounterErrors({errors}) {
+                            errors.forEach(error => {
+                                contextLogger.error('GraphQL error', error, {
+                                    path: error.path,
+                                    locations: error.locations
+                                });
                             });
                         }
                     };
