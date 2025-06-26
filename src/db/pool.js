@@ -8,6 +8,7 @@ import { createContextLogger } from '../utils/logger.js';
  * Manages database connections and provides optimized data access methods
  */
 class DuckDBPool {
+    // Initialisation
     constructor(config) {
         // Initialisation de la config
         this.config = config;
