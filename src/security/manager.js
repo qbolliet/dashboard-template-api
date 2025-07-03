@@ -1,244 +1,251 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
-import sqlstring from 'sqlstring';
-import xss from 'xss';
-import { validateInput } from './validation.js';
-import { logger } from '../utils/logger.js';
-import { performance } from 'perf_hooks';
-import crypto from 'crypto';
-import { patternValidator } from './pattern-validator.js';
+import { createContextLogger } from '../utils/logger.js';
+import { RateLimiter } from './rate-limiter.js';
+import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
+import { InputSanitizer } from './input-sanitizer.js';
+import { PatternValidator } from './pattern-validator.js';
+import { config } from '../utils/config-loader.js';
 
 
 // Gestionnaire de la sécurité
-// /!\ Le rate limiter n'est actuellement pas inclus dans le performance Monitor
+/**
+ * Gestionnaire de sécurité principal
+ * Coordonne tous les modules de sécurité
+ */
 class SecurityManager {
-    // Initialisation du registre des requêtes
-    static requestStore = new Map();
-
-    // Initialisation du coût par défaut des différentes opérations
-    static complexityScores = {
-        query: 1,
-        aggregation: 2,
-        sort: 0.5,
-        filter: 0.5
-    };
-
-
-    static async validateRequest(context, info, query) {
-        // Validation des patterns
-        if (query) {
-            patternValidator.validateQuery(query);
-        }
-        // Add request validation logic here
-        // E.g. user authentification
-        return true;
+    // Initialisation
+    constructor(securityConfig = config.SECURITY) {
+        this.config = securityConfig;
+        this.logger = createContextLogger({ component: 'security' });
+        
+        // Initialisation des modules
+        this.rateLimiter = new RateLimiter(securityConfig.RATE_LIMIT);
+        this.complexityAnalyzer = new QueryComplexityAnalyzer(securityConfig.COMPLEXITY);
+        this.inputSanitizer = new InputSanitizer(securityConfig.SANITIZATION);
+        this.patternValidator = new PatternValidator();
+        
+        // Logging
+        this.logger.security('SecurityManager initialized', {
+            modules: ['rateLimiter', 'complexityAnalyzer', 'inputSanitizer', 'patternValidator']
+        });
     }
 
-    // Rate Limiting Middleware
-    static createRateLimiter(options = {}) {
-        // Extraction du requestStore
-        const store = SecurityManager.requestStore;
-
-        // Options par défaut
-        const {
-            maxRequests = 100,
-            windowMs = 15 * 60 * 1000, // 15 minutes
-            maxBurstRequests = 20, // Nombre de requête maximal par période
-            burstWindowMs = 60 * 1000, // Durée de la période (1 minute)
-        } = options;
-
-        return (context, next) => {
-            // Extraction de l'agent et de l'IP
-            const clientIp = context.req.ip || context.req.headers['x-forwarded-for'];
-            const userAgent = context.req.headers['user-agent'] || 'unknown';
-
-            // Création d'un identifiant unique à partir de ces éléments
-            const identifier = crypto
-                .createHash('sha256')
-                .update(`${clientIp}:${userAgent}`)
-                .digest('hex');
-            
-            // Initialisation de la date
-            const now = Date.now();
-            // Extraction des données de requêtes
-            const requestData = store.get(identifier) || {
-                requests: [],
-                burstCount: 0,
-                lastBurstReset: now
+    // Méthode de gestion de la sécurité
+    /**
+     * Middleware de sécurité pour les resolvers GraphQL
+     * @returns {Function} Middleware function
+     */
+    createSecurityMiddleware() {
+        return async (resolve, root, args, context, info) => {
+            // Initialisation de l'instant
+            const startTime = performance.now();
+            const securityContext = {
+                requestId: context.requestId,
+                operationName: info?.fieldName || 'unknown'
             };
 
-            // Suppression des anciennes requêtes
-            requestData.requests = requestData.requests.filter(time => now - time < windowMs);
-
-            // Réinitialisation du compteur si la période a expiré
-            if (now - requestData.lastBurstReset > burstWindowMs) {
-                requestData.burstCount = 0;
-                requestData.lastBurstReset = now;
-            }
-
-            // Vérification du respect de la fréquence limite
-            if (
-                requestData.requests.length >= maxRequests ||
-                requestData.burstCount >= maxBurstRequests
-            ) {
-                logger.warn(`Rate limit exceeded for ${identifier}`);
-                throw new GraphQLError('Rate limit exceeded', {
-                    extensions: {
-                        code: 'RATE_LIMIT_EXCEEDED',
-                        retryAfter: Math.ceil((windowMs - (now - requestData.requests[0])) / 1000)
-                    }
-                });
-            }
-
-            // Mise à jour du compteur de requêtes
-            requestData.requests.push(now);
-            requestData.burstCount++;
-            store.set(identifier, requestData);
-
-            return next();
-        };
-    }
-
-    // Analyse de la complexité des requêtes
-    static calculateQueryComplexity(info) {
-        // Calcul de la complexité
-        const complexity = SecurityManager._recursiveComplexityCalculation(info.fieldNodes[0]);
-        
-        // Lance une erreur si la requête est excessivement complexe
-        if (complexity > 100) { // Seuil arbitraire
-            throw new GraphQLError('Query too complex', {
-                extensions: { code: 'QUERY_COMPLEXITY_EXCEEDED' }
-            });
-        }
-        
-        return complexity;
-    }
-
-    // Calcul récursif de la complexité des opérations de la requête
-    static _recursiveComplexityCalculation(node, depth = 0) {
-        // Initialisation de la complexité
-        let complexity = SecurityManager.complexityScores[node.kind] || 1;
-        
-        // Ajout du coût associé à chaque argument
-        if (node.arguments) {
-            node.arguments.forEach(arg => {
-                if (arg.name.value === 'filter') complexity += this.complexityScores.filter;
-                if (arg.name.value === 'sort') complexity += this.complexityScores.sort;
-            });
-        }
-        
-        // Multiplication par un facteur de profondeur
-        complexity *= (1 + depth * 0.1);
-        
-        return complexity;
-    }
-
-    // Gestion des injections SQL
-    static preventSQLInjection(input) {
-        if (typeof input !== 'string') return input;
-
-        // Suppression des commentaires
-        input = input.replace(/\/\*[\s\S]*?\*\/|--.*$/gm, '');
-        
-        // Gestion des attaques UNION
-        if (/\bunion\b/i.test(input)) {
-            throw new GraphQLError('Invalid SQL query', {
-                extensions: { code: 'SQL_INJECTION_PREVENTED' }
-            });
-        }
-        
-        // Utilisation des requêtes paramétrées pour éviter les caractères spéciaux
-        return sqlstring.escape(input);
-    }
-
-    
-
-    // Gestion de la performance et de la sécurité
-    static createPerformanceMonitor() {
-        return async (resolve, root, args, context, info) => {
-            // Initialisation du début de l'exécution
-            const start = performance.now();
-
             try {
-
-                // Ignore le calcul de complexité si info n'a pas d'argument fieldNodes
-                if (!info || !info.fieldNodes) {
-                    // Exécution du resolver seul
-                    const result = await resolve(root, args, context, info);
-                    return result;
+                // 1. Vérification du rate limit (seulement si req est disponible)
+                if (context.req && !this.shouldSkipRateLimit(info)) {
+                    const rateLimitInfo = await this.rateLimiter.checkLimit(context.req);
+                    context.rateLimitInfo = rateLimitInfo;
                 }
-                
-                // Calcul de la complexité
-                const queryComplexity = this.calculateQueryComplexity(info);
-                // Validation de la requête
-                await this.validateRequest(context, info);
 
-                // Vérification des arguments
-                const sanitizedArgs = this._sanitizeInputs(args);
+                // 2. Analyse de la complexité de la requête
+                let complexity = 0;
+                if (info && info.fieldNodes) {
+                    complexity = this.complexityAnalyzer.calculate(info);
+                    
+                    // Vérifier si la complexité dépasse la limite
+                    if (complexity > this.config.COMPLEXITY.MAX_ALLOWED) {
+                        throw new GraphQLError('Query too complex', {
+                            extensions: { 
+                                code: 'QUERY_COMPLEXITY_EXCEEDED',
+                                complexity,
+                                maxAllowed: this.config.COMPLEXITY.MAX_ALLOWED
+                            }
+                        });
+                    }
+                }
 
-                // Résolution de la requête
+                // 3. Sanitization des arguments
+                const sanitizedArgs = this.inputSanitizer.sanitizeAll(args);
+
+                // 4. Log de début d'exécution avec contexte de sécurité
+                this.logger.security('Executing resolver with security checks', {
+                    ...securityContext,
+                    complexity,
+                    hasRateLimit: !!context.rateLimitInfo
+                });
+
+                // 5. Exécution du resolver
                 const result = await resolve(root, sanitizedArgs, context, info);
 
-                // Monitoring de la performance
-                const executionTime = performance.now() - start;
-                this._logPerformanceMetrics(info, executionTime, queryComplexity);
+                // 6. Logging des métriques de sécurité
+                const executionTime = performance.now() - startTime;
+                this.logSecurityMetrics(info, {
+                    executionTime,
+                    complexity,
+                    rateLimitRemaining: context.rateLimitInfo?.remaining,
+                    success: true
+                });
 
                 return result;
+
             } catch (error) {
-                if (info && info.fieldName) {
-                    this._handleError(error, info);
-                } else {
-                    console.error('GraphQL Error:', error.message);
-                }
+                // Log de l'erreur avec contexte de sécurité
+                this.handleSecurityError(error, info, securityContext);
                 throw error;
             }
         };
     }
 
-    // Méthodes auxiliaires
-    static _sanitizeInputs(args) {
-        return Object.entries(args).reduce((acc, [key, value]) => {
-            acc[key] = this.sanitizeXSS(
-                    this.preventSQLInjection(
-                        validateInput(value)
-                    )
-                );
-
-            return acc;
-        }, {});
-    }
-
-    // Protection XSS 
-    static sanitizeXSS(input) {
-        if (typeof input !== 'string') return input;
+    // Méthode d evalidation de la requête
+    /**
+     * Validation au niveau de la requête GraphQL
+     * Utilisé dans le plugin Apollo Server
+     */
+    async validateRequest(operation, request, context) {
+        const validations = [];
         
-        return xss(input, {
-            whiteList: {}, // Suppression des tous les tags HTML
-            stripIgnoreTag: true,
-            stripIgnoreTagBody: ['script']
-        });
+        // 1. Validation des patterns dangereux
+        if (request.query) {
+            validations.push(
+                this.patternValidator.validateQuery(request.query)
+                    .catch(err => {
+                        this.logger.security('Pattern validation failed', {
+                            error: err.message,
+                            requestId: context.requestId
+                        });
+                        throw err;
+                    })
+            );
+        }
+
+        // 2. Validation du nom de l'opération
+        const operationName = operation?.name?.value;
+        if (operationName && !this.isOperationAllowed(operationName)) {
+            throw new GraphQLError(`Operation ${operationName} is not allowed`, {
+                extensions: { code: 'OPERATION_NOT_ALLOWED' }
+            });
+        }
+
+        // 3. Validation du type d'opération
+        if (operation?.operation && operation.operation !== 'query') {
+            throw new GraphQLError(`Only queries are allowed, got ${operation.operation}`, {
+                extensions: { code: 'OPERATION_TYPE_NOT_ALLOWED' }
+            });
+        }
+
+        await Promise.all(validations);
     }
 
-    // Log des performances
-    static _logPerformanceMetrics(info, executionTime, complexity) {
-        // Warning si le temps d'exécution excède un certain seuil
-        if (executionTime > 1000) { // Seuil arbitraire de 1000 ms
-            logger.warn('Slow query detected', {
-                field: info.fieldName,
-                executionTime,
-                complexity
+    // Méthode de vérification que l'opération est autorisée
+    /**
+     * Vérifie si une opération est autorisée
+     */
+    isOperationAllowed(operationName) {
+        const allowedOperations = config.ALLOWED_OPERATIONS || [];
+        
+        // En développement, autoriser l'introspection
+        if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
+            return true;
+        }
+        
+        return allowedOperations.includes(operationName);
+    }
+
+    // Méthode déterminant si le rate limiting doit être ignoré
+    /**
+     * Détermine si le rate limiting doit être ignoré
+     */
+    shouldSkipRateLimit(info) {
+        // Ignorer le rate limiting pour l'introspection en développement
+        if (process.env.NODE_ENV !== 'production' && 
+            info?.fieldName === '__schema' || info?.fieldName === '__type') {
+            return true;
+        }
+        
+        return false;
+    }
+
+    // Méthode de logging des métriques de sécurité
+    /**
+     * Log des métriques de sécurité
+     */
+    logSecurityMetrics(info, metrics) {
+        if (metrics.executionTime > this.config.MONITORING?.SLOW_QUERY_THRESHOLD || 1000) {
+            this.logger.performance('Slow query detected', {
+                field: info?.fieldName,
+                ...metrics,
+                tags: ['slow-query', 'security']
+            });
+        }
+
+        // Log des métriques générales seulement en mode debug
+        if (this.config.MONITORING?.LOG_ALL_METRICS) {
+            this.logger.security('Security metrics', {
+                field: info?.fieldName,
+                ...metrics
             });
         }
     }
 
-    // Gestion des erreurs
-    static _handleError(error, info) {
-        logger.error('GraphQL Error', {
-            error: error.message,
-            stack: error.stack,
-            field: info.fieldName
-        });
-    }    
+    // Méthode de gestion centralisée des erreurs de sécurité
+    /**
+     * Gestion centralisée des erreurs de sécurité
+     */
+    handleSecurityError(error, info, context) {
+        const errorContext = {
+            field: info?.fieldName,
+            errorCode: error.extensions?.code,
+            ...context
+        };
+
+        // Log différent selon le type d'erreur
+        if (error.extensions?.code?.startsWith('SECURITY_')) {
+            this.logger.security('Security violation', errorContext);
+        } else {
+            this.logger.error('Security middleware error', error, errorContext);
+        }
+    }
+
+    // Méthode de nettoyage
+    /**
+     * Méthode pour nettoyer les ressources
+     */
+    async cleanup() {
+        this.logger.security('Cleaning up SecurityManager resources');
+        await this.rateLimiter.cleanup();
+    }
 }
 
-export { SecurityManager };
+// Singleton pour l'instance globale
+let securityManagerInstance = null;
+
+// Fonction d'initialisation du gestionnaire de la sécurité avec la configuration
+/**
+ * Initialise le SecurityManager avec la configuration
+ */
+const initializeSecurityManager = (securityConfig) => {
+    if (securityManagerInstance) {
+        throw new Error('SecurityManager already initialized');
+    }
+    securityManagerInstance = new SecurityManager(securityConfig);
+    return securityManagerInstance;
+}
+
+// Fonction créant une instance du gestionnaire de sécurité
+/**
+ * Récupère l'instance du SecurityManager
+ */
+const getSecurityManager = () => {
+    if (!securityManagerInstance) {
+        // Initialisation avec la configuration par défaut si non initialisé
+        securityManagerInstance = new SecurityManager();
+    }
+    return securityManagerInstance;
+}
+
+export { SecurityManager , initializeSecurityManager, getSecurityManager};

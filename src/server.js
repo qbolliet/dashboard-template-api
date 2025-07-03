@@ -14,8 +14,9 @@ import { createLoaders } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeConnections } from './db/index.js';
 import { redis } from './cache/index.js';
-import { SecurityManager } from './security/index.js';
+import { initializeSecurityManager, getSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+
 
 // Configuration des chemins avec ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -133,6 +134,9 @@ async function startServer() {
         next();
     });
 
+    // Création du SecurityManager
+    const securityManager = initializeSecurityManager(config.SECURITY);
+
     // Création du Server Apollo
     const server = new ApolloServer({
         // Schéma de l'API
@@ -184,6 +188,9 @@ async function startServer() {
                 }
             })
         ],
+        // Monitoring de la performance pour les resolvers
+        fieldResolver: securityManager.createSecurityMiddleware(),
+        // Plug-ins
         plugins: [
             {
                 // Plugin du cycle de vie de la requête
@@ -198,10 +205,12 @@ async function startServer() {
                     return {
                         // Validation de la requête avant son analyse
                         async didResolveOperation({operation}) {
-                            contextLogger.operation('GraphQL operation started', {
-                                operationType: operation.operation,
-                                complexity: SecurityManager.calculateQueryComplexity({ fieldNodes: [operation] })
-                            });
+                            // Validation de la requête à l'aide du SecurityManager
+                             try {
+                                await securityManager.validateRequest(operation, request, context);
+                            } catch (error) {
+                                throw error;
+                            }
                         },
                         
                         // Logging de la complétion de la requête
@@ -228,8 +237,7 @@ async function startServer() {
                 }
             }
         ],
-        // Monitoring de la performance pour les resolvers
-        fieldResolver: SecurityManager.createPerformanceMonitor(),
+        
         // Formattage de l'erreur en production
         formatResponse: (response, { context }) => {
             if (response.errors) {
@@ -275,6 +283,7 @@ async function startServer() {
             await Promise.all([
                 redis.quit(),
                 closeConnections(),
+                securityManager.cleanup(),
                 new Promise((resolve) => server.stop().then(resolve))
             ]);
             // Logging
