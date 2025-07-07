@@ -4,7 +4,6 @@ import { RateLimiter } from './rate-limiter.js';
 import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
 import { InputSanitizer } from './input-sanitizer.js';
 import { PatternValidator } from './pattern-validator.js';
-import { ValidationRules, validateInput } from './validation.js';
 import { createDepthLimitRule, createSimpleDepthLimitRule } from './depth-limit.js';
 
 // Ré-exportation des modules d'intérêt
@@ -16,8 +15,6 @@ export {
     QueryComplexityAnalyzer,
     InputSanitizer,
     PatternValidator,
-    ValidationRules, 
-    validateInput,
     createDepthLimitRule,
     createSimpleDepthLimitRule
 };
