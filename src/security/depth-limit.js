@@ -1,110 +1,132 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
 
-// Création d'une fonction qui limite la profondeur de la requête
+// Fonction calculant la profondeur d'un noeud
 /**
- * Creates a GraphQL validation rule that limits query depth
- * @param {number} maxDepth - Maximum allowed query depth
- * @returns {Function} Validation rule function
+ * Calcule la profondeur d'un nœud GraphQL de manière récursive
+ * @param {Object} node - Nœud GraphQL à analyser
+ * @param {Object} context - Contexte GraphQL
+ * @param {number} currentDepth - Profondeur actuelle
+ * @returns {number} Profondeur maximale trouvée
  */
-export function createDepthLimitRule(maxDepth = 5) {
-    return function depthLimitRule(context) {
-        return {
-            // Validation au niveau du document
-            Document(node) {
-                const depths = new Map();
-                
-                // Fonction récursive pour calculer la profondeur
-                function calculateDepth(node, currentDepth = 0) {
-                    if (!node || !node.selectionSet) {
-                        return currentDepth;
-                    }
+const calculateNodeDepth = (node, context, currentDepth = 0) => {
+    // Si pas de sélection, retourne la profondeur actuelle
+    if (!node?.selectionSet) {
+        return currentDepth;
+    }
 
-                    let maxChildDepth = currentDepth;
+    // Calcul de la profondeur maximale parmi toutes les sélections
+    const depths = node.selectionSet.selections.map(selection => {
+        switch (selection.kind) {
+            case 'Field':
+                // Pour un champ, augmente la profondeur
+                return calculateNodeDepth(selection, context, currentDepth + 1);
+            
+            case 'InlineFragment':
+                // Pour un fragment inline, garde la même profondeur
+                return calculateNodeDepth(selection, context, currentDepth);
+            
+            case 'FragmentSpread':
+                // Pour un fragment spread, récupére et analyse le fragment
+                const fragment = context.getFragment(selection.name.value);
+                return fragment 
+                    ? calculateNodeDepth(fragment, context, currentDepth)
+                    : currentDepth;
+            
+            default:
+                return currentDepth;
+        }
+    });
 
-                    node.selectionSet.selections.forEach(selection => {
-                        let childDepth = currentDepth;
+    return Math.max(...depths, currentDepth);
+};
 
-                        if (selection.kind === 'Field') {
-                            childDepth = calculateDepth(selection, currentDepth + 1);
-                        } else if (selection.kind === 'InlineFragment') {
-                            childDepth = calculateDepth(selection, currentDepth);
-                        } else if (selection.kind === 'FragmentSpread') {
-                            const fragment = context.getFragment(selection.name.value);
-                            if (fragment) {
-                                childDepth = calculateDepth(fragment, currentDepth);
-                            }
-                        }
 
-                        maxChildDepth = Math.max(maxChildDepth, childDepth);
-                    });
+// Fonction de validation limitant la profondeur des requêtes
+/**
+ * Crée une règle de validation GraphQL qui limite la profondeur des requêtes
+ * @param {number} maxDepth - Profondeur maximale autorisée
+ * @returns {Function} Fonction de règle de validation
+ */
+const createDepthLimitRule = (maxDepth = 5) => {
+    // Validation du paramètre
+    if (maxDepth < 1 || !Number.isInteger(maxDepth)) {
+        throw new Error('maxDepth must be a positive integer');
+    }
 
-                    return maxChildDepth;
-                }
-
-                // Vérifier chaque opération dans le document
-                node.definitions.forEach(definition => {
-                    if (definition.kind === 'OperationDefinition') {
-                        const depth = calculateDepth(definition);
-                        
-                        if (depth > maxDepth) {
-                            context.reportError(
-                                new GraphQLError(
-                                    `Query depth of ${depth} exceeds maximum allowed depth of ${maxDepth}`,
-                                    {
-                                        nodes: [definition],
-                                        extensions: {
-                                            code: 'DEPTH_LIMIT_EXCEEDED',
-                                            maxDepth,
-                                            actualDepth: depth
-                                        }
+    return (context) => ({
+        Document: (node) => {
+            // Analyse de chaque définition d'opération
+            node.definitions
+                .filter(def => def.kind === 'OperationDefinition')
+                .forEach(operation => {
+                    // Calcul de la profondeur du noeud pour chaque
+                    const depth = calculateNodeDepth(operation, context);
+                    
+                    if (depth > maxDepth) {
+                        context.reportError(
+                            new GraphQLError(
+                                `Query depth of ${depth} exceeds maximum allowed depth of ${maxDepth}`,
+                                {
+                                    nodes: [operation],
+                                    extensions: {
+                                        code: 'DEPTH_LIMIT_EXCEEDED',
+                                        maxDepth,
+                                        actualDepth: depth
                                     }
-                                )
-                            );
-                        }
+                                }
+                            )
+                        );
                     }
                 });
-            }
-        };
-    };
-}
+        }
+    });
+};
 
-// Création d'une fonction de vérification plus simple qui ne compte que la profondeur du champ
+// Fonction de validation simple basée sur le nombre de champs
 /**
- * Creates a simpler depth limit rule that counts field depth
- * Alternative implementation that's easier to understand
- * @param {number} maxDepth - Maximum allowed query depth
- * @returns {Function} Validation rule function
+ * Crée une règle de validation simple basée sur le comptage des champs
+ * Alternative plus simple mais moins précise
+ * @param {number} maxDepth - Profondeur maximale autorisée
+ * @returns {Function} Fonction de règle de validation
  */
-export function createSimpleDepthLimitRule(maxDepth = 5) {
-    return function simpleDepthLimitRule(context) {
-        const depths = [];
+const createSimpleDepthLimitRule = (maxDepth = 5) => {
+    // Validation du paramètre
+    if (maxDepth < 1 || !Number.isInteger(maxDepth)) {
+        throw new Error('maxDepth must be a positive integer');
+    }
+
+    return (context) => {
+        // Stack pour suivre la profondeur actuelle
+        const depthStack = [];
         
         return {
             Field: {
-                enter(node) {
-                    depths.push(node);
+                enter: (node) => {
+                    depthStack.push(node);
                     
-                    if (depths.length > maxDepth) {
+                    if (depthStack.length > maxDepth) {
                         context.reportError(
                             new GraphQLError(
-                                `Query depth of ${depths.length} exceeds maximum allowed depth of ${maxDepth}`,
+                                `Query depth of ${depthStack.length} exceeds maximum allowed depth of ${maxDepth}`,
                                 {
                                     nodes: [node],
                                     extensions: {
                                         code: 'DEPTH_LIMIT_EXCEEDED',
                                         maxDepth,
-                                        actualDepth: depths.length
+                                        actualDepth: depthStack.length
                                     }
                                 }
                             )
                         );
                     }
                 },
-                leave() {
-                    depths.pop();
+                leave: () => {
+                    depthStack.pop();
                 }
             }
         };
     };
-}
+};
+
+export { createDepthLimitRule, createDepthLimitRule };
