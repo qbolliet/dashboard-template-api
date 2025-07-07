@@ -5,7 +5,7 @@ import { buildWhereClause } from '../utils/utils.js';
 // Classe de chargement des faits agrégés
 /**
  * Loader for aggregated fact queries
- * Extends FactQueryLoader for common SQL building functionality
+ * Supports multiple formats: default, with-metadata, with-count
  */
 class AggregatedFactsLoader extends FactQueryLoader {
     // Initialisation
@@ -37,7 +37,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
      * Loads aggregated fact data
      * @param {Object} connection - Database connection
      * @param {Object} params - Query parameters
-     * @returns {Promise<Array>} Aggregated results
+     * @returns {Promise<Array|Object>} Aggregated results
      */
     async loadAggregatedFacts(connection, params) {
         const { 
@@ -48,7 +48,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
             aggregation,
             limit,
             offset,
-            sort = []
+            sort = [],
+            format = 'default',
+            includeCount = false,
+            includeMetadata = false
         } = params;
 
         // Validation des paramètres
@@ -67,7 +70,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
             ).join(', ')}` 
             : '';
 
-        // Construction de la requête
+        // Construction de la requête principale
         const query = `
             SELECT 
                 ${groupBy} as key, 
@@ -87,33 +90,85 @@ class AggregatedFactsLoader extends FactQueryLoader {
         console.log(`Query returned ${results ? results.length : 0} rows`);
         
         // Mise en forme du jeu de données
-        return results.map(row => ({
+        let data = results.map(row => ({
             ...row,
             key: String(row.key),
             aggregatedValue: Number(row.aggregatedValue),
-            count: Number(row.count)
+            count: Number(row.count),
+            _groupByField: groupBy // Pour la résolution des labels
         }));
+
+        // Gestion des différents formats
+        if (includeMetadata || format === 'with-metadata') {
+            const metadata = await this.calculateMetadata(connection, data, params);
+            data = {
+                data,
+                metadata
+            };
+        }
+
+        // Si includeCount est demandé, ajouter le comptage total des groupes
+        if (includeCount || format === 'with-count') {
+            const totalGroups = await this.getTotalGroups(connection, params);
+            
+            if (typeof data === 'object' && data.metadata) {
+                // Si on a déjà des métadonnées, les enrichir
+                data.metadata = {
+                    ...data.metadata,
+                    totalGroups,
+                    hasNextPage: offset + limit < totalGroups,
+                    currentPage: Math.floor(offset / limit) + 1,
+                    totalPages: Math.ceil(totalGroups / limit)
+                };
+            } else {
+                // Sinon, wrapper dans un objet
+                const wrappedData = Array.isArray(data) ? data : data.data;
+                data = {
+                    data: wrappedData,
+                    totalGroups,
+                    hasNextPage: offset + limit < totalGroups,
+                    currentPage: Math.floor(offset / limit) + 1,
+                    totalPages: Math.ceil(totalGroups / limit)
+                };
+            }
+        }
+
+        return data;
     }
 
-    // Fonction de chargement des faits aggrégés avec des méta-données
-    async loadAggregatedFactsWithMetadata(connection, params) {
-        // Charger les données de base
-        const data = await this.loadAggregatedFacts(connection, params);
+    // Méthode pour obtenir le nombre total de groupes
+    /**
+     * Gets total number of groups for pagination
+     * @param {Object} connection - Database connection
+     * @param {Object} params - Query parameters
+     * @returns {Promise<number>} Total number of groups
+     */
+    async getTotalGroups(connection, params) {
+        const { filters, structuredFilters, groupBy } = params;
+        const whereClause = buildWhereClause(filters, structuredFilters);
         
-        // Calculer les métadonnées
-        const metadata = await this.calculateMetadata(connection, data, params);
+        const countQuery = `
+            SELECT COUNT(DISTINCT ${groupBy}) as totalGroups 
+            FROM fact_table 
+            ${whereClause}
+        `;
         
-        return {
-            data,
-            metadata
-        };
+        const result = await connection.all(countQuery);
+        return result[0].totalGroups;
     }
 
     // Fonction de calcul des méta-données
+    /**
+     * Calculate metadata for aggregated results
+     * @param {Object} connection - Database connection
+     * @param {Array} data - Aggregated data
+     * @param {Object} params - Query parameters
+     * @returns {Promise<Object>} Metadata object
+     */
     async calculateMetadata(connection, data, params) {
         const { groupBy } = params;
         
-        // Récupération les infos sur le champ de regroupement
+        // Récupération des infos sur le champ de regroupement
         const fieldMetaQuery = 'SELECT * FROM metadata WHERE name = ?';
         const fieldMeta = await connection.all(fieldMetaQuery, [groupBy]);
         
@@ -130,7 +185,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
             keyExtent: numericKeys 
                 ? [Math.min(...keys.map(Number)), Math.max(...keys.map(Number))]
                 : [keys[0], keys[keys.length - 1]], // Première et dernière pour les strings
-            valueExtent: [Math.min(...values), Math.max(...values)],
+            valueExtent: values.length > 0 
+                ? [Math.min(...values), Math.max(...values)]
+                : [0, 0],
             groupByFieldInfo: fieldMeta[0] || null
         };
         
@@ -143,6 +200,11 @@ class AggregatedFactsLoader extends FactQueryLoader {
     }
 
     // Fonction de calcul des statistiques
+    /**
+     * Calculate statistics for aggregated values
+     * @param {Array<number>} values - Array of numeric values
+     * @returns {Object} Statistics object
+     */
     calculateStatistics(values) {
         const sorted = [...values].sort((a, b) => a - b);
         const n = sorted.length;
@@ -179,15 +241,38 @@ class AggregatedFactsLoader extends FactQueryLoader {
  */
 const createAggregatedFactsLoader = () => {
     const loader = new AggregatedFactsLoader();
-    return loader.createLoader((connection, params) => loader.loadAggregatedFacts(connection, params));
-};
-
-// Fonction de création d'un loader pour la table des faits agrégée avec des méta-données
-const createAggregatedFactsWithMetadataLoader = () => {
-    const loader = new AggregatedFactsLoader();
-    return loader.createLoader(
-        (connection, params) => loader.loadAggregatedFactsWithMetadata(connection, params)
+    return loader.createLoader((connection, params) => 
+        loader.loadAggregatedFacts(connection, params)
     );
 };
 
-export { createAggregatedFactsLoader, createAggregatedFactsWithMetadataLoader };
+// Fonction de création d'un loader pour la table des faits agrégée avec des méta-données
+/**
+ * Creates a DataLoader for aggregated facts with metadata
+ * @returns {DataLoader} DataLoader instance
+ */
+const createAggregatedFactsWithMetadataLoader = () => {
+    const loader = new AggregatedFactsLoader();
+    return loader.createLoader((connection, params) => 
+        loader.loadAggregatedFacts(connection, { ...params, includeMetadata: true })
+    );
+};
+
+// Fonction de création d'un loader pour la table des faits agrégée avec comptage
+/**
+ * Creates a DataLoader for aggregated facts with count
+ * @returns {DataLoader} DataLoader instance
+ */
+const createAggregatedFactsWithCountLoader = () => {
+    const loader = new AggregatedFactsLoader();
+    return loader.createLoader((connection, params) => 
+        loader.loadAggregatedFacts(connection, { ...params, includeCount: true })
+    );
+};
+
+export { 
+    createAggregatedFactsLoader, 
+    createAggregatedFactsWithMetadataLoader,
+    createAggregatedFactsWithCountLoader,
+    AggregatedFactsLoader
+};
