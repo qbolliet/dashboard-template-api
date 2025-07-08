@@ -1,6 +1,5 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
-import { getFactTableWithCount } from '../../loaders/fact.js';
 
 // Construction de resolvers pour la table des données
 /**
@@ -9,20 +8,19 @@ import { getFactTableWithCount } from '../../loaders/fact.js';
  */
 const factResolvers = {
     Query: {
+        // Requête standard des faits avec pagination et comptage
         getFactTable: async (_, args, { loaders }) => {
             return withTimeout(
-                getFactTableWithCount(args),
+                loaders.factWithCount.load(args),
                 10000,
                 'Fact table fetch timeout'
             );
         },
         
+        // Requête des faits avec métadonnées optimisées pour D3
         getFactTableWithMetadata: async (_, args, { loaders }) => {
-            // Format spécifique pour D3 avec métadonnées optimisées pour visualisation
-            const metadataArgs = { ...args, format: 'metadata' };
-            
             return withTimeout(
-                getFactTableWithCount(metadataArgs),
+                loaders.factWithMetadata.load(args),
                 10000,
                 'Metadata fact table fetch timeout'
             );

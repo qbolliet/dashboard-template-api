@@ -5,7 +5,7 @@ import { buildWhereClause } from '../utils/utils.js';
 // Classe de chargement de la table des faits
 /**
  * Loader for fact table queries
- * Extends FactQueryLoader for common SQL building functionality
+ * Supports multiple formats: default, metadata, json, with-count
  */
 class FactLoader extends FactQueryLoader {
     // Initialisation
@@ -26,7 +26,16 @@ class FactLoader extends FactQueryLoader {
      * @returns {Promise<Array|Object>} Query results in requested format
      */
     async loadFacts(connection, params) {
-        const { fields, filters, structuredFilters, limit, offset, sort, format = 'default' } = params;
+        const { 
+            fields, 
+            filters, 
+            structuredFilters, 
+            limit, 
+            offset, 
+            sort, 
+            format = 'default',
+            includeCount = false 
+        } = params;
         
         // Validation des paramètres de pagination
         this.validatePagination(limit, offset);
@@ -45,20 +54,51 @@ class FactLoader extends FactQueryLoader {
         
         console.log('Executing fact query:', query);
         
-        // Sélection du format de sortie selon les besoins du frontend
-        if (format === 'metadata') {
-            // Format optimisé pour D3 avec métadonnées
-            return await connection.getWithMetadata(query);
-        } else if (format === 'json') {
-            // Format JSON simple
-            return await connection.getAsJsonArray(query);
-        } else {
-            // Format par défaut - tableau d'objets
-            return await connection.all(query);
+        // Récupération des données selon le format
+        let data;
+        switch (format) {
+            case 'metadata':
+                // Format optimisé pour D3 avec métadonnées
+                data = await connection.getWithMetadata(query);
+                break;
+            case 'json':
+                // Format JSON simple
+                data = await connection.getAsJsonArray(query);
+                break;
+            default:
+                // Format par défaut - tableau d'objets
+                data = await connection.all(query);
         }
+        
+        // Si includeCount est demandé, ajouter le comptage total
+        if (includeCount || format === 'with-count') {
+            const total = await this.getCount(connection, { filters, structuredFilters });
+            
+            // Pour le format metadata, enrichir les métadonnées existantes
+            if (format === 'metadata' && data.metadata) {
+                data.metadata = {
+                    ...data.metadata,
+                    total,
+                    hasNextPage: offset + limit < total,
+                    currentPage: Math.floor(offset / limit) + 1,
+                    totalPages: Math.ceil(total / limit)
+                };
+            } else {
+                // Pour les autres formats, wrapper dans un objet
+                data = {
+                    data: Array.isArray(data) ? data : (data?.data || []),
+                    total,
+                    hasNextPage: offset + limit < total,
+                    currentPage: Math.floor(offset / limit) + 1,
+                    totalPages: Math.ceil(total / limit)
+                };
+            }
+        }
+        
+        return data;
     }
 
-    // Méthode de comptage du nombre d'observations requêtées
+    // Méthode de comptage du nombre d'observations
     /**
      * Gets total count for a fact query
      * @param {Object} connection - Database connection
@@ -83,6 +123,28 @@ const createFactLoader = () => {
     return loader.createLoader((connection, params) => loader.loadFacts(connection, params));
 };
 
+// Fonction de création d'un loader pour la table des faits avec comptage
+/**
+ * Creates a DataLoader for facts with count
+ * @returns {DataLoader} DataLoader instance for facts with count
+ */
+const createFactWithCountLoader = () => {
+    const loader = new FactLoader();
+    return loader.createLoader((connection, params) => 
+        loader.loadFacts(connection, { ...params, includeCount: true })
+    );
+};
 
+// Fonction de création d'un loader pour la table des faits avec métadonnées
+/**
+ * Creates a DataLoader for facts with D3 metadata
+ * @returns {DataLoader} DataLoader instance for facts with metadata
+ */
+const createFactWithMetadataLoader = () => {
+    const loader = new FactLoader();
+    return loader.createLoader((connection, params) => 
+        loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true })
+    );
+};
 
-export { createFactLoader };
+export { createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader, FactLoader };

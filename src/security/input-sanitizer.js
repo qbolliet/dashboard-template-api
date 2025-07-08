@@ -2,7 +2,6 @@
 import xss from 'xss';
 import sqlstring from 'sqlstring';
 import { GraphQLError } from 'graphql';
-import { ValidationRules, validateInput } from './validation.js';
 import { createContextLogger } from '../utils/logger.js';
 
 // Classe de nettoyage des entrées de l'utilisateur
@@ -21,7 +20,8 @@ class InputSanitizer {
             allowedTags: config.ALLOWED_TAGS || [],
             customSanitizers: config.CUSTOM_SANITIZERS || {}
         };
-        // Initialisation
+        
+        // Initialisation du logger
         this.logger = createContextLogger({ component: 'security', module: 'sanitizer' });
         
         // Configuration XSS
@@ -38,11 +38,14 @@ class InputSanitizer {
     // Méthode de vérification des entrées d'un objet
     /**
      * Sanitize toutes les entrées d'un objet
+     * @param {any} input - Valeur à nettoyer
+     * @returns {any} Valeur nettoyée
      */
     sanitizeAll(input) {
         if (input === null || input === undefined) {
             return input;
         }
+        
         // Vérification de chaque élément d'un array
         if (Array.isArray(input)) {
             return input.map(item => this.sanitizeAll(item));
@@ -54,8 +57,8 @@ class InputSanitizer {
                 // Application d'un sanitizer personnalisé si disponible
                 if (this.config.customSanitizers[key]) {
                     sanitized[key] = this.config.customSanitizers[key](value);
-                // Vérification de chaque valeur sinon
                 } else {
+                    // Vérification de chaque valeur sinon
                     sanitized[key] = this.sanitizeValue(value, key);
                 }
             }
@@ -68,6 +71,9 @@ class InputSanitizer {
     // Méthode de sanitization d'une valeur
     /**
      * Sanitize une valeur individuelle
+     * @param {any} value - Valeur à nettoyer
+     * @param {string} fieldName - Nom du champ (pour les messages d'erreur)
+     * @returns {any} Valeur nettoyée
      */
     sanitizeValue(value, fieldName = 'unknown') {
         if (value === null || value === undefined) {
@@ -120,9 +126,11 @@ class InputSanitizer {
         return value;
     }
 
-    // Méthode de protection xss
+    // Méthode de protection XSS
     /**
-     * Protection XSS
+     * Protection contre les attaques XSS
+     * @param {string} input - Chaîne à nettoyer
+     * @returns {string} Chaîne nettoyée
      */
     sanitizeXSS(input) {
         return xss(input, this.xssOptions);
@@ -130,7 +138,9 @@ class InputSanitizer {
 
     // Méthode de protection contre les injections SQL
     /**
-     * Protection SQL Injection
+     * Protection contre les injections SQL
+     * @param {string} input - Chaîne à vérifier
+     * @returns {string} Chaîne sécurisée
      */
     sanitizeSQL(input) {
         // Détection de patterns SQL dangereux
@@ -154,13 +164,16 @@ class InputSanitizer {
             }
         }
 
-        // Evite les caractères spéciaux SQL
-        return sqlstring.escape(input).slice(1, -1); // Enlever les quotes ajoutées
+        // Échappe les caractères spéciaux SQL
+        return sqlstring.escape(input).slice(1, -1); // Enleve les quotes ajoutées
     }
 
     // Méthode de sanitization des nombres
     /**
-     * Sanitize les nombres
+     * Sanitize et valide les nombres
+     * @param {number} value - Nombre à valider
+     * @param {string} fieldName - Nom du champ
+     * @returns {number} Nombre validé
      */
     sanitizeNumber(value, fieldName) {
         if (!Number.isFinite(value)) {
@@ -176,18 +189,6 @@ class InputSanitizer {
         }
 
         return value;
-    }
-
-    // Méthode de validation selon des règles spécifiques
-    /**
-     * Valide et sanitize selon des règles spécifiques
-     */
-    validateAndSanitize(value, rules) {
-        // D'abord valider
-        const validated = validateInput(value, rules);
-        
-        // Puis sanitizer
-        return this.sanitizeValue(validated);
     }
 }
 
