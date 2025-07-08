@@ -7,9 +7,14 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest",
     "lint": "eslint src/",
-    "format": "prettier --write 'src/**/*.js'"
+    "format": "prettier --write 'src/**/*.js'",
+    "test": "NODE_OPTIONS='--experimental-vm-modules' jest",
+    "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest --watch",
+    "test:coverage": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage",
+    "test:setup": "node tests/setup-test-data.js",
+    "test:all": "npm run test:setup && npm run test",
+    "studio:test": "echo 'Ouvrez https://studio.apollographql.com et connectez-vous à http://localhost:4000/graphql'"
   },
   "repository": {
     "type": "git",
@@ -36,5 +41,10 @@
     "sqlstring": "^2.3.3",
     "winston": "^3.17.0",
     "yaml": "^2.7.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "@jest/globals": "^29.7.0",
+    "eslint": "^8.56.0"
   }
 }
