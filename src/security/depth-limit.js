@@ -129,4 +129,4 @@ const createSimpleDepthLimitRule = (maxDepth = 5) => {
     };
 };
 
-export { createDepthLimitRule, createDepthLimitRule };
+export { createDepthLimitRule, createSimpleDepthLimitRule };
