@@ -1,5 +1,5 @@
 // Tests unitaires pour l'API GraphQL avec Jest
-// Imortation des modules
+// Importatioon des modules
 import { ApolloServer } from 'apollo-server-express';
 import { schema } from '../src/schema/index.js';
 import { createLoaders } from '../src/loaders/index.js';
@@ -7,6 +7,10 @@ import { setupTestData } from './setup-test-data.js';
 import { closeConnections } from '../src/db/index.js';
 import { redis } from '../src/cache/index.js';
 import { v4 as uuidv4 } from 'uuid';
+
+// Configuration de l'environnement de test
+process.env.NODE_ENV = 'test';
+process.env.DB_PATH = 'test-data/test-database.db';
 
 // Créer un serveur de test
 const createTestServer = () => {
@@ -32,7 +36,9 @@ beforeAll(async () => {
 afterAll(async () => {
   // Nettoyer les connexions
   await closeConnections();
-  await redis.quit();
+  if (redis && redis.quit) {
+    await redis.quit();
+  }
 });
 
 describe('API GraphQL DuckDB Tests', () => {
