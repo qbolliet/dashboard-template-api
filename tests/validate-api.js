@@ -5,6 +5,7 @@ import { request } from 'graphql-request';
 import chalk from 'chalk';
 import { DuckDBInstance } from '@duckdb/node-api';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -89,7 +90,22 @@ async function validateAPI() {
   validator.section('1. Vérification de la base de données');
   
   try {
-    const dbPath = path.resolve(__dirname, '../../outputs/database.db');
+    // Utiliser la base de données de test si elle existe, sinon la base de production
+    const testDbPath = path.resolve(__dirname, '../test-data/test-database.db');
+    const prodDbPath = path.resolve(__dirname, '../../outputs/database.db');
+    
+    let dbPath;
+    if (fs.existsSync(testDbPath)) {
+      dbPath = testDbPath;
+      validator.info(`Utilisation de la base de test : ${testDbPath}`);
+    } else if (fs.existsSync(prodDbPath)) {
+      dbPath = prodDbPath;
+      validator.warn(`Base de test non trouvée, utilisation de la base de production : ${prodDbPath}`);
+    } else {
+      validator.fail('Aucune base de données trouvée', 'Exécutez "node tests/setup-test-data.js" pour créer la base de test');
+      return false;
+    }
+    
     const instance = await DuckDBInstance.create(dbPath);
     const conn = await instance.connect();
     
