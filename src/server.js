@@ -3,10 +3,6 @@ import { ApolloServer } from 'apollo-server-express';
 import express from 'express';
 import compression from 'compression';
 import { v4 as uuidv4 } from 'uuid';
-import fs from 'fs';
-import path from 'path';
-import yaml from 'yaml';
-import { fileURLToPath } from 'url';
 
 // Importation des modules locaux
 import { schema } from './schema/index.js';
@@ -14,8 +10,9 @@ import { createLoaders } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeConnections } from './db/index.js';
 import { redis } from './cache/index.js';
-import { initializeSecurityManager, getSecurityManager } from './security/index.js';
+import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+import { config } from './utils/config-loader.js';
 
 
 // Configuration des chemins avec ES modules
@@ -36,16 +33,24 @@ async function startServer() {
 
     // Headers de sécurité
     app.use((req, res, next) => {
+        // Détermine les origines autorisées selon l'environnement
+        const allowedOrigins = config.API.CORS.ORIGINS;
+        const origin = req.headers.origin;
+        
+        if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+            res.set('Access-Control-Allow-Origin', origin || '*');
+        }
+        
         res.set({
-            'Access-Control-Allow-Origin': process.env.NODE_ENV === 'production' ? config['DOMAIN'] : 'https://studio.apollographql.com',
-            'Access-Control-Allow-Credentials': 'true',
-            'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Allow-Credentials': String(config.API.CORS.CREDENTIALS),
+            'Access-Control-Allow-Methods': config.API.CORS.METHODS.join(', '),
+            'Access-Control-Allow-Headers': config.API.CORS.HEADERS.join(', '),
             'X-Content-Type-Options': 'nosniff',
             'X-Frame-Options': 'DENY',
             'X-XSS-Protection': '1; mode=block',
             'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
         });
+        
         if (req.method === 'OPTIONS') {
             return res.sendStatus(204);
         }
@@ -55,7 +60,7 @@ async function startServer() {
     // Gestion de la taille limite des requêtes
     app.use(express.json({
         // Vérifie que la taille de la requête est inférieure à la taille maximale fixée en paramètre
-        limit: config['REQUEST_LIMITS']['MAX_REQUEST_SIZE'],
+        limit: config.API.REQUEST_LIMITS.MAX_REQUEST_SIZE,
         verify: (req, res, buf) => {
             // Ne vérifie pas la taille des requêtes pour les requêtes d'introspection
             try {
@@ -85,7 +90,7 @@ async function startServer() {
         
                 // Vérification du nombre de champs
                 const fields = countFields(body);
-                if (fields > config['REQUEST_LIMITS']['MAX_FIELDS']) {
+                if (fields > config.API.REQUEST_LIMITS.MAX_FIELDS) {
                     throw new Error('Too many fields in request');
                 }
         
@@ -93,7 +98,7 @@ async function startServer() {
                 const checkFieldSize = (obj) => {
                     if (typeof obj === 'object' && obj !== null) {
                         Object.entries(obj).forEach(([key, value]) => {
-                            if (typeof value === 'string' && value.length > config['REQUEST_LIMITS']['MAX_FIELD_SIZE']) {
+                            if (typeof value === 'string' && value.length > config.API.REQUEST_LIMITS.MAX_FIELD_SIZE) {
                                 throw new Error(`Field ${key} exceeds maximum allowed size`);
                             }
                             if (typeof value === 'object' && value !== null) {
@@ -113,21 +118,23 @@ async function startServer() {
     }));
 
     // Compression pour les requêtes les plus importantes
-    app.use(compression({
-        threshold: 1024, // Compresse seulement les réponses de plus de 1 kB
-        filter: (req, res) => {
-            // Ne compresse pas les réponses pour les navigateurs les plus anciens
-            if (req.headers['x-no-compression']) return false;
-            return compression.filter(req, res);
-        },
-        level: 6 // Niveau de compression équilibré
-    }));
+    if (config.API.COMPRESSION.ENABLED) {
+        // Ne compresse que les requêtes les plus importantes
+        app.use(compression({
+            threshold: config.API.COMPRESSION.THRESHOLD,
+            level: config.API.COMPRESSION.LEVEL,
+            filter: (req, res) => {
+                if (req.headers['x-no-compression']) return false;
+                return compression.filter(req, res);
+            }
+        }));
+    }
 
-    // Contrôle du cache
+    // Contrôle du cache HTTP
     app.use((req, res, next) => {
-        if (config['CACHE']['PUBLIC_PATHS'].some(path => req.path.startsWith(path))) {
-            res.set('Cache-Control', `public, max-age=${config['CACHE']['DEFAULT_MAX_AGE']}`);
-            res.set('Vary', config['CACHE']['VARY_BY_HEADERS'].join(', '));
+        if (config.CACHE.HTTP_CACHE.PUBLIC_PATHS.some(path => req.path.startsWith(path))) {
+            res.set('Cache-Control', `public, max-age=${config.CACHE.TTL.DEFAULT}`);
+            res.set('Vary', config.CACHE.HTTP_CACHE.VARY_BY_HEADERS.join(', '));
         } else {
             res.set('Cache-Control', 'no-store');
         }
@@ -149,7 +156,7 @@ async function startServer() {
             res
         }),
         // Autorise l'introspection en developpement
-        introspection: process.env.NODE_ENV !== 'production',
+        introspection: config.API.GRAPHQL.INTROSPECTION,
         // Formattage des erreurs
         formatError: (err) => {
             // Création d'un identifiant associé à l'erreur
@@ -159,10 +166,9 @@ async function startServer() {
                 stack: err.stack,
             });
             // Distinction de message d'erreur suivant que l'on se situe en production ou non
+            const isProduction = config.ENVIRONMENT === 'production';
             return {
-                message: process.env.NODE_ENV === 'production' 
-                    ? 'An error occurred' 
-                    : err.message,
+                message: isProduction ? 'An error occurred' : err.message,
                 code: err.extensions?.code || 'INTERNAL_SERVER_ERROR',
                 errorId,
             };
@@ -178,12 +184,13 @@ async function startServer() {
                     const operationName = node.name?.value;
 
                     // Ne valide pas les requêtes d'introspection en environnement de développement
-                    if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
+                    if (config.ENVIRONMENT !== 'production' && operationName === 'IntrospectionQuery') {
                         return;
                     }
                     // Vérification que l'opération fait bien partie des opérations autorisées
-                    if (!config['ALLOWED_OPERATIONS'].includes(operationName)) {
-                        throw new Error(`Operation ${operationName || 'anonymous'} is not allowed`);
+                    const allowedOps = config.ALLOWED_OPERATIONS;
+                    if (allowedOps && allowedOps.length > 0 && operationName && !allowedOps.includes(operationName)) {
+                        throw new Error(`Operation ${operationName} is not allowed`);
                     }
                 }
             })
@@ -240,15 +247,13 @@ async function startServer() {
         
         // Formattage de l'erreur en production
         formatResponse: (response, { context }) => {
-            if (response.errors) {
-                // Log errors but sanitize response in production
-                if (process.env.NODE_ENV === 'production') {
-                    response.errors = response.errors.map(error => ({
-                        message: 'An error occurred',
-                        errorId: error.extensions?.errorId,
-                        code: error.extensions?.code
-                    }));
-                }
+            // Log des erreurs en production
+            if (response.errors && config.ENVIRONMENT === 'production') {
+                response.errors = response.errors.map(error => ({
+                    message: 'An error occurred',
+                    errorId: error.extensions?.errorId,
+                    code: error.extensions?.code
+                }));
             }
             return response;
         }
@@ -265,25 +270,28 @@ async function startServer() {
             requestId: req.requestId
         });
         // Distinction du message d'erreur suivant que l'on se trouve ou non dans un environnement de production
+        const isProduction = config.ENVIRONMENT === 'production';
         res.status(err.status || 500).json({
-            error: process.env.NODE_ENV === 'production' 
-                ? 'Internal server error' 
-                : err.message,
+            error: isProduction ? 'Internal server error' : err.message,
             errorId,
             requestId: req.requestId
         });
     });
 
-    // Fermeture de la session
-    process.on('SIGTERM', async () => {
+    // Gestion de la fermeture gracieuse
+    const gracefulShutdown = async (signal) => {
         // Logging
-        logger.info('Received SIGTERM signal. Starting graceful shutdown...');
+        logger.info(`Received ${signal} signal. Starting graceful shutdown...`);
         // Fermeture de l'ensemble des connexions
         try {
             await Promise.all([
+                // Fermeture du cache
                 redis.quit(),
+                /// Fermeture des connexions
                 closeConnections(),
+                // Fermeture du gestionnaire de sécurité
                 securityManager.cleanup(),
+                // Fermeture du serveur
                 new Promise((resolve) => server.stop().then(resolve))
             ]);
             // Logging
@@ -296,30 +304,12 @@ async function startServer() {
             // Fin
             process.exit(1);
         }
-    });
+    };
     
+    // Fermeture de la session
+    process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     // Fermeture de la session dans les environnements de développement
-    process.on('SIGINT', async () => {
-        // Logging
-        logger.info('Received SIGINT signal. Starting graceful shutdown...');
-        // Fermeture de l'ensemble des connexions
-        try {
-            await Promise.all([
-                redis.quit(),
-                closeConnections(),
-                new Promise((resolve) => server.stop().then(resolve))
-            ]);
-            // Logging
-            logger.info('Graceful shutdown completed');
-            // Fin
-            process.exit(0);
-        } catch (error) {
-            // Logging
-            logger.error('Error during graceful shutdown:', error);
-            // Fin
-            process.exit(1);
-        }
-    });
+    process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
     // Lancement du serveur
     await server.start();
@@ -329,6 +319,8 @@ async function startServer() {
     const port = process.env.PORT || 4000;
     app.listen(port, () => {
         logger.info(`🚀 Server ready at http://localhost:${port}${server.graphqlPath}`);
+        logger.info(`🌍 Environment: ${config.ENVIRONMENT}`);
+        logger.info(`📊 GraphQL Playground: ${config.API.GRAPHQL.PLAYGROUND ? 'enabled' : 'disabled'}`);
     });
 }
 
