@@ -26,7 +26,8 @@ class ConfigLoader {
             'api.yaml',
             'cache.yaml',
             'security.yaml',
-            'operations.yaml',
+            'security-patterns.yaml',
+            //'operations.yaml',
             'logging.yaml'
         ];
 
@@ -47,6 +48,9 @@ class ConfigLoader {
 
         // Application des valeurs spécifiques à l'environnement
         this.config = this.applyEnvironmentSpecific(this.config);
+
+        // Conversion des valeurs numériques
+        this.config = this.convertNumericValues(this.config);
 
         return this.config;
     }
@@ -123,6 +127,42 @@ class ConfigLoader {
         };
 
         return applyEnv(config);
+    }
+
+    // Méthode de conversion automatique des valeurs numériques
+    convertNumericValues(obj) {
+        const convert = (item) => {
+            if (typeof item === 'string') {
+                // Vérifie si la chaîne représente un nombre entier
+                if (/^-?\d+$/.test(item.trim())) {
+                    return parseInt(item.trim(), 10);
+                }
+                // Vérifie si la chaîne représente un nombre décimal
+                if (/^-?\d*\.\d+$/.test(item.trim())) {
+                    return parseFloat(item.trim());
+                }
+                // Vérifie si la chaîne représente un booléen
+                if (item.trim().toLowerCase() === 'true') {
+                    return true;
+                }
+                if (item.trim().toLowerCase() === 'false') {
+                    return false;
+                }
+                // Retourne la chaîne telle quelle si ce n'est pas un nombre
+                return item;
+            } else if (Array.isArray(item)) {
+                return item.map(convert);
+            } else if (this.isObject(item)) {
+                const converted = {};
+                Object.keys(item).forEach(key => {
+                    converted[key] = convert(item[key]);
+                });
+                return converted;
+            }
+            return item;
+        };
+
+        return convert(obj);
     }
 
     // Méthode d'obtention d'une valeur de configuration avec un chemin en pointillés
