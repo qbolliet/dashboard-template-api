@@ -1,14 +1,7 @@
 // Importation des modules
-import fs from 'fs';
-import yaml from 'yaml';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { GraphQLError } from 'graphql';
 import { createContextLogger } from '../utils/logger.js';
-
-// Définition des chemins
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import { config } from '../utils/config-loader.js';
 
 // Classe de validation des patterns de requête
 class PatternValidator {
@@ -24,34 +17,27 @@ class PatternValidator {
 
     // Méthode de chargement des patterns
     /**
-     * Charge les patterns depuis le fichier de configuration
+     * Charge les patterns depuis la configuration déjà chargée
      */
     loadPatterns() {
         try {
-            // Chargement de la configuration
-            const configPath = path.resolve(__dirname, '../../config/security-patterns.yaml');
-            const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
-            
             const env = process.env.NODE_ENV || 'development';
+            
+            
+            // Vérification que la configuration des patterns de sécurité existe
+            if (!config.SECURITY_PATTERNS) {
+                throw new Error('SECURITY_PATTERNS configuration not found');
+            }
             
             // Fusion des patterns communs et spécifiques à l'environnement
             const patterns = {
-                blocked: [...(config.SECURITY_PATTERNS.common?.blocked || [])],
-                allowed: []
+                blocked: [...(config.SECURITY_PATTERNS.blocked || [])],
+                allowed: [...(config.SECURITY_PATTERNS.allowed || [])]
             };
 
-            // Ajout des patterns spécifiques à l'environnement
-            if (config.SECURITY_PATTERNS[env]) {
-                if (config.SECURITY_PATTERNS[env].blocked) {
-                    patterns.blocked.push(...config.SECURITY_PATTERNS[env].blocked);
-                }
-                if (config.SECURITY_PATTERNS[env].allowed) {
-                    patterns.allowed = config.SECURITY_PATTERNS[env].allowed;
-                }
-            }
 
             // Logging
-            this.logger.debug('Patterns loaded', {
+            this.logger.security('Patterns loaded', {
                 environment: env,
                 blockedCount: patterns.blocked.length,
                 allowedCount: patterns.allowed.length
@@ -92,9 +78,8 @@ class PatternValidator {
                 });
             } catch (error) {
                 // Logging
-                this.logger.error('Failed to compile pattern', {
-                    pattern: patternConfig.pattern,
-                    error: error.message
+                this.logger.error('Failed to compile pattern', error, {
+                    pattern: patternConfig.pattern
                 });
             }
         }
@@ -117,7 +102,7 @@ class PatternValidator {
         // Vérification des patterns autorisés
         for (const allowed of this.compiledPatterns.allowed) {
             if (query.includes(allowed)) {
-                this.logger.debug('Query contains allowed pattern', { pattern: allowed });
+                this.logger.security('Query contains allowed pattern', { pattern: allowed });
                 return; // Pattern autorisé, pas de vérification supplémentaire
             }
         }

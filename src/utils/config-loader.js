@@ -113,7 +113,25 @@ class ConfigLoader {
             if (this.isObject(obj)) {
                 // Si l'objet contient des clés d'environnement
                 if (obj.development || obj.production) {
-                    return obj[env] || obj.development || {};
+                    // Cas spécial pour SECURITY_PATTERNS : fusionner avec common
+                    if (obj.common) {
+                        const envSpecific = obj[env] || obj.development || {};
+                        const result = { ...obj.common };
+                        
+                        // Fusionner les propriétés spécifiques à l'environnement
+                        Object.keys(envSpecific).forEach(key => {
+                            if (Array.isArray(result[key]) && Array.isArray(envSpecific[key])) {
+                                result[key] = [...result[key], ...envSpecific[key]];
+                            } else {
+                                result[key] = envSpecific[key];
+                            }
+                        });
+                        
+                        return result;
+                    } else {
+                        // Comportement par défaut pour les autres objets
+                        return obj[env] || obj.development || {};
+                    }
                 }
                 
                 // Sinon, appliquer récursivement
