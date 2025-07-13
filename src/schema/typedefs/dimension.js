@@ -5,7 +5,7 @@ import { gql } from 'apollo-server';
 // Définition des types associés aux requêtes des dimensions
 const dimensionTypeDefs = gql`
     type Dimension {
-        value: Int
+        value: String
         label: String
     }
 
