@@ -35,7 +35,14 @@ class DimensionLoader extends BaseQueryLoader {
             const results = await connection.all(query);
             
             console.log(`Query returned ${results ? results.length : 0} rows`);
-            return results || [];
+            
+            // Convert BIGINT values to strings for GraphQL serialization
+            const convertedResults = results ? results.map(row => ({
+                ...row,
+                value: String(row.value)
+            })) : [];
+            
+            return convertedResults;
         } catch (error) {
             console.error(`Error executing dimension query for ${name}:`, error);
             // Retourne un array vide en cas d'erreur
