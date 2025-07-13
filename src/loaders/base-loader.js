@@ -60,11 +60,17 @@ class BaseQueryLoader {
      */
     async loadWithCache(key, loader) {
         if (!this.cacheEnabled) {
-            return loader();
+            return await loader();
         }
 
-        const cacheKey = `${this.cachePrefix}:${JSON.stringify(key)}`;
-        return withCache(cacheKey, loader, this.cacheTimeout);
+        try {
+            const cacheKey = `${this.cachePrefix}:${JSON.stringify(key)}`;
+            return await withCache(cacheKey, loader, this.cacheTimeout);
+        } catch (error) {
+            logger.error(`Cache error in ${this.cachePrefix} loader:`, error);
+            // En cas d'erreur de cache, exécuter directement le loader
+            return await loader();
+        }
     }
 
     // Méthode de création d'un loader
@@ -79,9 +85,14 @@ class BaseQueryLoader {
             return this.executeWithConnection(async (connection) => {
                 return Promise.all(keys.map(async (key) => {
                     try {
+                        // Direct call to avoid recursion
+                        if (!this.cacheEnabled) {
+                            return await loadFn(connection, key);
+                        }
+                        
                         return await this.loadWithCache(
                             key,
-                            () => loadFn(connection, key)
+                            async () => await loadFn(connection, key)
                         );
                     } catch (error) {
                         logger.error(`Error loading ${this.cachePrefix} for key:`, key, error);
