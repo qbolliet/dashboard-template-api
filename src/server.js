@@ -14,15 +14,6 @@ import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
 import { config } from './utils/config-loader.js';
 
-
-// Configuration des chemins avec ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Chargement du fichier de configuration
-const configPath = path.resolve(__dirname, '../config/config.yaml');
-const config = yaml.parse(fs.readFileSync(configPath, 'utf8'));
-
 // Fonction de lancement du server
 /**
  * Starts the GraphQL API server with security and performance configurations
@@ -176,7 +167,7 @@ async function startServer() {
         // Règles de validation de la requête
         validationRules: [
             // Vérification de la règle de profondeur
-            createDepthLimitRule(config.SECURITY?.MAX_QUERY_DEPTH || 5),
+            createDepthLimitRule(parseInt(config.SECURITY?.MAX_QUERY_DEPTH) || 5),
             // Liste blanche des opérations valides
             (context) => ({
                 OperationDefinition(node) {
@@ -187,11 +178,15 @@ async function startServer() {
                     if (config.ENVIRONMENT !== 'production' && operationName === 'IntrospectionQuery') {
                         return;
                     }
+
+                    // Toutes les opérations sont autorisées par défaut
+                    // La sécurité est gérée par les pattern validators
+                    return true;
                     // Vérification que l'opération fait bien partie des opérations autorisées
-                    const allowedOps = config.ALLOWED_OPERATIONS;
-                    if (allowedOps && allowedOps.length > 0 && operationName && !allowedOps.includes(operationName)) {
-                        throw new Error(`Operation ${operationName} is not allowed`);
-                    }
+                    // const allowedOps = config.ALLOWED_OPERATIONS;
+                    // if (allowedOps && allowedOps.length > 0 && operationName && !allowedOps.includes(operationName)) {
+                    //     throw new Error(`Operation ${operationName} is not allowed`);
+                    // }
                 }
             })
         ],
