@@ -106,16 +106,16 @@ class DuckDBPool {
                                 // Exécution 
                                 const result = await prepared.run();
                                 
-                                // Utilisation de getRowsObject pour obtenir directement un tableau d'objets
+                                // Utilisation de getRowObjects pour obtenir directement un tableau d'objets
                                 // Cette méthode est plus efficace que la conversion manuelle
-                                return await result.getRowsObject();
+                                return await result.getRowObjects();
                             } else {
                                 // Pour les requêtes non paramétrées
                                 // Exécution de la requête
                                 const result = await duckdbConnection.run(query);
                                 
-                                // Utilisation de getRowsObject pour obtenir directement un tableau d'objets
-                                return await result.getRowsObject();
+                                // Utilisation de getRowObjects pour obtenir directement un tableau d'objets
+                                return await result.getRowObjects();
                             }
                         },
                         
@@ -205,7 +205,7 @@ class DuckDBPool {
                             const columnNames = result.columnNames();
                             
                             // Récupération des données
-                            const rows = await result.getRowsObject();
+                            const rows = await result.getRowObjects();
                             
                             // Format optimisé pour D3
                             // Structure qui facilite le filtrage, le tri et l'affichage

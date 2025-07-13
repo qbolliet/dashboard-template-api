@@ -243,10 +243,10 @@ async function setupTestData() {
 
         // Statistiques finales
         const stats = await conn.run('SELECT COUNT(*) as total FROM fact_table');
-        const totalRecords = (await stats.getRowsObject())[0].total;
+        const totalRecords = (await stats.getRowObjects())[0].total;
         
         const dateStats = await conn.run('SELECT MIN(date) as min_date, MAX(date) as max_date FROM fact_table');
-        const dateRange = await dateStats.getRowsObject();
+        const dateRange = await dateStats.getRowObjects();
         
         console.log(`\n📊 Statistiques finales :`);
         console.log(`   - Total d'enregistrements : ${totalRecords}`);

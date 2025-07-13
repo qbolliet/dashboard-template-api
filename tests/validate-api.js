@@ -115,7 +115,7 @@ async function validateAPI() {
     for (const table of tables) {
       try {
         const result = await conn.run(`SELECT COUNT(*) as count FROM ${table}`);
-        const count = (await result.getRowsObject())[0].count;
+        const count = (await result.getRowObjects())[0].count;
         if (count > 0) {
           validator.success(`Table ${table}: ${count} enregistrements`);
         } else {
