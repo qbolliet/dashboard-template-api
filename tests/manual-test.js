@@ -85,7 +85,9 @@ async function manualTest() {
   }
 }
 
-// Exécuter si appelé directement
-if (import.meta.url === `file://${process.argv[1]}`) {
-  manualTest();
-}
+// Debug: afficher les valeurs pour diagnostiquer
+console.log('Debug - import.meta.url:', import.meta.url);
+console.log('Debug - process.argv[1]:', process.argv[1]);
+
+// Exécuter si appelé directement (méthode simplifiée)
+manualTest();
