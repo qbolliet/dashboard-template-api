@@ -1,6 +1,6 @@
 SECURITY:
   # Profondeur maximale des requêtes GraphQL
-  MAX_QUERY_DEPTH: ${MAX_QUERY_DEPTH:-5}  
+  MAX_QUERY_DEPTH: ${MAX_QUERY_DEPTH:-15}  
   # Configuration du rate limiting
   RATE_LIMIT:
     # Nombre maximum de requêtes par fenêtre

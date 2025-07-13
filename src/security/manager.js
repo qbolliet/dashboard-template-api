@@ -146,14 +146,14 @@ class SecurityManager {
      * Vérifie si une opération est autorisée
      */
     isOperationAllowed(operationName) {
-        const allowedOperations = config.ALLOWED_OPERATIONS || [];
-        
         // En développement, autoriser l'introspection
         if (process.env.NODE_ENV !== 'production' && operationName === 'IntrospectionQuery') {
             return true;
         }
         
-        return allowedOperations.includes(operationName);
+        // Toutes les opérations sont autorisées par défaut
+        // La sécurité est gérée par les pattern validators
+        return true;
     }
 
     // Méthode déterminant si le rate limiting doit être ignoré
