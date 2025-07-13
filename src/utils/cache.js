@@ -22,7 +22,7 @@ const withCache = async (key, loader, timeout = 300) => {
   } catch (error) {
       console.error('Cache operation failed:', error);
       // Si le cache échoue, on  retombe sur le loader
-      return loader();
+      return await loader();
   }
 };
 
