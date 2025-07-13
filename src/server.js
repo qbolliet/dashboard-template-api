@@ -190,8 +190,7 @@ async function startServer() {
                 }
             })
         ],
-        // Monitoring de la performance pour les resolvers
-        fieldResolver: securityManager.createSecurityMiddleware(),
+        // Security is handled via plugins and validation rules
         // Plug-ins
         plugins: [
             {
