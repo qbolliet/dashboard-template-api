@@ -1,5 +1,6 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
+import { config } from '../utils/config-loader.js';
 
 // Classe de chargement des options de sélection
 /**
@@ -10,10 +11,10 @@ class SelectOptionsLoader extends BaseQueryLoader {
     // Initialisation
     constructor() {
         super({
-            batchSize: 5,
+            batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'select-options',
             cache: true,
-            cacheTimeout: 600 // 10 minutes pour les options qui changent peu
+            cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT // 10 minutes pour les options qui changent peu
         });
     }
 

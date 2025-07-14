@@ -1,5 +1,6 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
+import { config } from '../utils/config-loader.js';
 import { buildWhereClause } from '../utils/utils.js';
 
 // Classe de chargement de la table des faits
@@ -11,10 +12,10 @@ class FactLoader extends FactQueryLoader {
     // Initialisation
     constructor() {
         super({
-            batchSize: 5,
+            batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'facts',
             cache: true,
-            cacheTimeout: 300 // 5 minutes pour les faits
+            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT // 5 minutes pour les faits
         });
     }
 

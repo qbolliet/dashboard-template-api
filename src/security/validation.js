@@ -1,12 +1,13 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { config } from '../utils/config-loader.js';
 
 // Règles de validation
 const ValidationRules = {
     STRING: {
         type: 'string',
         minLength: 0,
-        maxLength: 500,
+        maxLength: config.API.SECURITY_THRESHOLDS.VALIDATION_MAX_LENGTH,
     },
     NUMBER: {
         type: 'number',

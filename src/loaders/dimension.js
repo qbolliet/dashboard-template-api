@@ -1,5 +1,6 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
+import { config } from '../utils/config-loader.js';
 
 // Classe de chargement des tables de dimension
 /**
@@ -10,10 +11,10 @@ class DimensionLoader extends BaseQueryLoader {
     // Initialisation
     constructor() {
         super({
-            batchSize: 10,
+            batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'dimension',
             cache: true,
-            cacheTimeout: 600 // 10 minutes pour les dimensions qui changent rarement
+            cacheTimeout: config.API.LOADERS.DIMENSION_CACHE_TIMEOUT // 10 minutes pour les dimensions qui changent rarement
         });
     }
 
@@ -178,7 +179,7 @@ const createDimensionValueLoader = () => {
         (connection, params) => loader.loadBatchValues(connection, params),
         {
             cacheKeyFn: ({ dimensionName, value }) => `${dimensionName}:${value}`,
-            maxBatchSize: 50 // Augmentation de la taille de batch pour les dimensions
+            maxBatchSize: config.API.LOADERS.MAX_BATCH_SIZE // Augmentation de la taille de batch pour les dimensions
         }
     );
 };

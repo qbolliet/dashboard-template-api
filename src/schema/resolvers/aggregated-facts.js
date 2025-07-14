@@ -3,6 +3,7 @@ import { withTimeout } from '../../utils/timeout.js';
 import { ValidationError } from 'apollo-server';
 import { enrichAggregatedFacts } from './field-resolvers.js';
 import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
+import { config } from '../../utils/config-loader.js';
 
 // Resolver pour les données agrégées
 const aggregatedFactsResolvers = {
@@ -13,7 +14,7 @@ const aggregatedFactsResolvers = {
             structuredFilters,
             groupBy,
             aggregation = 'SUM',
-            limit = 100,
+            limit = config.API.PAGINATION.DEFAULT_LIMIT,
             offset = 0,
             sort = []
         }, { loaders }) => {
@@ -31,13 +32,13 @@ const aggregatedFactsResolvers = {
             }
             
             // Définition d'un offset valide
-            if (offset > 1000) {
-                throw new ValidationError('Offset cannot exceed 1000');
+            if (offset > config.API.PAGINATION.MAX_OFFSET) {
+                throw new ValidationError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
             }
 
             // Définition d'une limite valide
-            if (limit > 1000) {
-                throw new ValidationError('Limit cannot exceed 1000');
+            if (limit > config.API.PAGINATION.MAX_LIMIT) {
+                throw new ValidationError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
             }
 
             // Validation des champs sur lesquels trier et des opérations de tri
@@ -64,7 +65,7 @@ const aggregatedFactsResolvers = {
                         offset,
                         sort
                     }),
-                    10000,
+                    config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts fetch timeout'
                 );
                 
@@ -73,7 +74,7 @@ const aggregatedFactsResolvers = {
                 const enrichedResults = enrichAggregatedFacts(results, groupBy);
                 return await withTimeout(
                     enrichAggregatedFactsWithLabels(enrichedResults, groupBy, loaders),
-                    10000,
+                    config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts labels enrichment timeout'
                 );
             } catch (error) {
@@ -90,7 +91,7 @@ const aggregatedFactsResolvers = {
             structuredFilters,
             groupBy,
             aggregation = 'SUM',
-            limit = 100,
+            limit = config.API.PAGINATION.DEFAULT_LIMIT,
             offset = 0,
             sort = []
         }, { loaders }) => {
@@ -108,13 +109,13 @@ const aggregatedFactsResolvers = {
             }
             
             // Définition d'un offset valide
-            if (offset > 1000) {
-                throw new ValidationError('Offset cannot exceed 1000');
+            if (offset > config.API.PAGINATION.MAX_OFFSET) {
+                throw new ValidationError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
             }
 
             // Définition d'une limite valide
-            if (limit > 1000) {
-                throw new ValidationError('Limit cannot exceed 1000');
+            if (limit > config.API.PAGINATION.MAX_LIMIT) {
+                throw new ValidationError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
             }
 
             // Validation des champs sur lesquels trier et des opérations de tri
@@ -141,7 +142,7 @@ const aggregatedFactsResolvers = {
                         offset,
                         sort
                     }),
-                    10000,
+                    config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts with metadata fetch timeout'
                 );
                 
@@ -150,7 +151,7 @@ const aggregatedFactsResolvers = {
                 const enrichedData = enrichAggregatedFacts(result.data, groupBy);
                 result.data = await withTimeout(
                     enrichAggregatedFactsWithLabels(enrichedData, groupBy, loaders),
-                    10000,
+                    config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts labels enrichment timeout'
                 );
                 

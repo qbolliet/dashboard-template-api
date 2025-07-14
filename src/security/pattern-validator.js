@@ -114,7 +114,7 @@ class PatternValidator {
                 this.logger.security('Blocked pattern detected in query', {
                     pattern: original,
                     message,
-                    querySnippet: query.substring(0, 100) + '...'
+                    querySnippet: query.substring(0, config.API.SECURITY_THRESHOLDS.QUERY_SNIPPET_LENGTH) + '...'
                 });
 
                 throw new GraphQLError(message, {

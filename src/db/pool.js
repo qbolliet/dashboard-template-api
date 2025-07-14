@@ -15,9 +15,9 @@ class DuckDBPool {
         // Initialisation de l'ensemble de connexions
         this.pool = [];
         // Nombre maximal de connexions
-        this.maxConnections = config.maxConnections || 10;
+        this.maxConnections = config.maxConnections || config.DATABASE.POOL.MAX_CONNECTIONS;
         // Timeout pour l'acquisition de la connexion
-        this.acquireTimeout = config.acquireTimeout || 10000; // 10 seconds
+        this.acquireTimeout = config.acquireTimeout || config.DATABASE.POOL.ACQUIRE_TIMEOUT; // 10 seconds
         // Single DuckDB instance for all connections
         this.instance = null;
         // Promise to track instance initialization
@@ -282,7 +282,7 @@ class DuckDBPool {
                             availableConnection.inUse = true;
                             resolve(availableConnection);
                         }
-                    }, 500);
+                    }, config.DATABASE.POOL.POOL_RETRY_DELAY);
                 }
             } catch (error) {
                 reject(error);

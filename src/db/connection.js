@@ -40,8 +40,8 @@ const poolConfig = {
     path: dbPath,
     maxConnections: config.DATABASE.POOL.MAX_CONNECTIONS,
     acquireTimeout: config.DATABASE.POOL.ACQUIRE_TIMEOUT,
-    retryDelay: config.DATABASE.POOL.CONNECTION_RETRY_DELAY || 1000,
-    maxRetries: config.DATABASE.POOL.CONNECTION_RETRY_MAX || 3
+    retryDelay: config.DATABASE.POOL.CONNECTION_RETRY_DELAY,
+    maxRetries: config.DATABASE.POOL.CONNECTION_RETRY_MAX
 };
 
 dbLogger.database('Initializing database pool', {

@@ -27,7 +27,6 @@ class ConfigLoader {
             'cache.yaml',
             'security.yaml',
             'security-patterns.yaml',
-            //'operations.yaml',
             'logging.yaml'
         ];
 
@@ -51,6 +50,9 @@ class ConfigLoader {
 
         // Conversion des valeurs numériques
         this.config = this.convertNumericValues(this.config);
+
+        // Validation de l'environnement
+        this.validateEnvironment(this.config);
 
         return this.config;
     }
@@ -181,6 +183,16 @@ class ConfigLoader {
         };
 
         return convert(obj);
+    }
+
+    // Méthode de validation de l'environnement
+    validateEnvironment(config) {
+        const validEnvironments = ['development', 'production'];
+        const environment = config.ENVIRONMENT;
+        
+        if (!validEnvironments.includes(environment)) {
+            throw new Error(`Invalid environment: ${environment}. Must be one of: ${validEnvironments.join(', ')}`);
+        }
     }
 
     // Méthode d'obtention d'une valeur de configuration avec un chemin en pointillés
