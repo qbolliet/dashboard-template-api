@@ -2,6 +2,7 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { ValidationError } from 'apollo-server';
 import { enrichAggregatedFacts } from './field-resolvers.js';
+import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
 
 // Resolver pour les données agrégées
 const aggregatedFactsResolvers = {
@@ -68,8 +69,13 @@ const aggregatedFactsResolvers = {
                 );
                 
                 // Enrichissement des résultats avec le champ de regroupement
-                // pour permettre la résolution des labels
-                return enrichAggregatedFacts(results, groupBy);
+                // et chargement en masse des labels
+                const enrichedResults = enrichAggregatedFacts(results, groupBy);
+                return await withTimeout(
+                    enrichAggregatedFactsWithLabels(enrichedResults, groupBy, loaders),
+                    10000,
+                    'Aggregated facts labels enrichment timeout'
+                );
             } catch (error) {
                 if (error.message === 'Aggregated facts fetch timeout') {
                     throw error;
@@ -140,7 +146,13 @@ const aggregatedFactsResolvers = {
                 );
                 
                 // Enrichissement les données avec le champ de regroupement
-                result.data = enrichAggregatedFacts(result.data, groupBy);
+                // et chargement en masse des labels
+                const enrichedData = enrichAggregatedFacts(result.data, groupBy);
+                result.data = await withTimeout(
+                    enrichAggregatedFactsWithLabels(enrichedData, groupBy, loaders),
+                    10000,
+                    'Aggregated facts labels enrichment timeout'
+                );
                 
                 return result;
             } catch (error) {
