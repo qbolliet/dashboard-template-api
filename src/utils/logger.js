@@ -187,7 +187,7 @@ class LoggerFactory {
         
         if (info.operationName) tags.push('graphql');
         if (info.error) tags.push('error');
-        if (info.duration > 1000) tags.push('slow-query');
+        if (info.duration > config.LOGGING.PERFORMANCE.SLOW_QUERY_THRESHOLD) tags.push('slow-query');
         if (info.cacheHit !== undefined) tags.push(info.cacheHit ? 'cache-hit' : 'cache-miss');
         
         return tags;

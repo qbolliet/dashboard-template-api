@@ -1,6 +1,7 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { enrichFactsWithDimensions } from '../../utils/dimension-enrichment.js';
+import { config } from '../../utils/config-loader.js';
 
 // Construction de resolvers pour la table des données
 /**
@@ -13,7 +14,7 @@ const factResolvers = {
         getFactTable: async (_, args, { loaders }) => {
             const result = await withTimeout(
                 loaders.factWithCount.load(args),
-                10000,
+                config.API.TIMEOUTS.FACT_SIMPLE,
                 'Fact table fetch timeout'
             );
 
@@ -21,7 +22,7 @@ const factResolvers = {
             if (result && result.data) {
                 const enrichedData = await withTimeout(
                     enrichFactsWithDimensions(result.data, loaders),
-                    15000,
+                    config.API.TIMEOUTS.FACT_COMPLEX,
                     'Dimension enrichment timeout'
                 );
                 
@@ -38,7 +39,7 @@ const factResolvers = {
         getFactTableWithMetadata: async (_, args, { loaders }) => {
             const result = await withTimeout(
                 loaders.factWithMetadata.load(args),
-                10000,
+                config.API.TIMEOUTS.FACT_SIMPLE,
                 'Metadata fact table fetch timeout'
             );
 
@@ -46,7 +47,7 @@ const factResolvers = {
             if (result && result.data) {
                 const enrichedData = await withTimeout(
                     enrichFactsWithDimensions(result.data, loaders),
-                    15000,
+                    config.API.TIMEOUTS.FACT_COMPLEX,
                     'Dimension enrichment timeout'
                 );
                 

@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { config } from '../utils/config-loader.js';
 
 // Fonction calculant la profondeur d'un noeud
 /**
@@ -48,7 +49,7 @@ const calculateNodeDepth = (node, context, currentDepth = 0) => {
  * @param {number} maxDepth - Profondeur maximale autorisée
  * @returns {Function} Fonction de règle de validation
  */
-const createDepthLimitRule = (maxDepth = 5) => {
+const createDepthLimitRule = (maxDepth = config.SECURITY?.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT || 5) => {
     // Validation du paramètre
     if (maxDepth < 1 || !Number.isInteger(maxDepth)) {
         throw new Error('maxDepth must be a positive integer');
@@ -90,7 +91,7 @@ const createDepthLimitRule = (maxDepth = 5) => {
  * @param {number} maxDepth - Profondeur maximale autorisée
  * @returns {Function} Fonction de règle de validation
  */
-const createSimpleDepthLimitRule = (maxDepth = 5) => {
+const createSimpleDepthLimitRule = (maxDepth = config.SECURITY?.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT || 5) => {
     // Validation du paramètre
     if (maxDepth < 1 || !Number.isInteger(maxDepth)) {
         throw new Error('maxDepth must be a positive integer');

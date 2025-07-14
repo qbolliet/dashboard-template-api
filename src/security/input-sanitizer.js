@@ -16,7 +16,7 @@ class InputSanitizer {
         this.config = {
             enableXSS: config.ENABLE_XSS !== false,
             enableSQL: config.ENABLE_SQL !== false,
-            maxStringLength: config.MAX_STRING_LENGTH || 1000,
+            maxStringLength: config.MAX_STRING_LENGTH || config.SECURITY.SECURITY_LIMITS.MAX_INPUT_LENGTH,
             allowedTags: config.ALLOWED_TAGS || [],
             customSanitizers: config.CUSTOM_SANITIZERS || {}
         };
@@ -155,7 +155,7 @@ class InputSanitizer {
             if (pattern.test(input)) {
                 this.logger.security('SQL injection attempt detected', {
                     pattern: pattern.toString(),
-                    input: input.substring(0, 50) + '...'
+                    input: input.substring(0, config.API.SECURITY_THRESHOLDS.ERROR_TRUNCATION_LENGTH) + '...'
                 });
                 
                 throw new GraphQLError('Invalid input detected', {

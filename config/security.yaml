@@ -1,6 +1,8 @@
 SECURITY:
   # Profondeur maximale des requêtes GraphQL
-  MAX_QUERY_DEPTH: ${MAX_QUERY_DEPTH:-15}  
+  MAX_QUERY_DEPTH:
+    development: 15
+    production: 7  
   # Configuration du rate limiting
   RATE_LIMIT:
     # Nombre maximum de requêtes par fenêtre
@@ -55,3 +57,16 @@ TIMEOUTS:
   TIMEOUT_PER_COMPLEXITY: ${TIMEOUT_PER_COMPLEXITY:-100}
   # Timeout maximum en millisecondes
   MAX_TIMEOUT: ${MAX_TIMEOUT:-30000}
+  
+# Configuration des seuils de sécurité
+SECURITY_LIMITS:
+  # Seuil de profondeur par défaut pour les requêtes simples
+  DEFAULT_DEPTH_LIMIT: ${DEFAULT_DEPTH_LIMIT:-5}
+  # Longueur maximale des chaînes d'entrée
+  MAX_INPUT_LENGTH: ${MAX_INPUT_LENGTH:-1000}
+  # Facteur de complexité pour les listes
+  COMPLEXITY_LIST_FACTOR: ${COMPLEXITY_LIST_FACTOR:-10}
+  # Facteur de complexité pour la profondeur
+  COMPLEXITY_DEPTH_FACTOR: ${COMPLEXITY_DEPTH_FACTOR:-1.5}
+  # Constante pour le calcul de complexité
+  COMPLEXITY_CALCULATION_FACTOR: ${COMPLEXITY_CALCULATION_FACTOR:-0.1}

@@ -3,6 +3,7 @@ import DataLoader from 'dataloader';
 import { dbPool } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
+import { config } from '../utils/config-loader.js';
 
 // Classe de base pour la requête d'une base de données
 /**
@@ -23,7 +24,7 @@ class BaseQueryLoader {
         this.batchSize = config.batchSize || 5;
         this.cachePrefix = config.cachePrefix || 'default';
         this.cacheEnabled = config.cache !== false;
-        this.cacheTimeout = config.cacheTimeout || 300; // 5 minutes par défaut
+        this.cacheTimeout = config.cacheTimeout || config.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
     }
 
     // Méthode exécutant une fonction à partir d'une connexion à la base de données
@@ -177,11 +178,11 @@ class FactQueryLoader extends BaseQueryLoader {
      * @throws {Error} If parameters are invalid
      */
     validatePagination(limit, offset) {
-        if (limit > 1000) {
-            throw new Error('Limit cannot exceed 1000');
+        if (limit > config.API.PAGINATION.MAX_LIMIT) {
+            throw new Error(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
         }
-        if (offset > 10000) {
-            throw new Error('Offset cannot exceed 10000');
+        if (offset > config.API.PAGINATION.MAX_OFFSET) {
+            throw new Error(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
         }
     }
 }

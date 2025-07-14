@@ -1,5 +1,6 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
+import { config } from '../utils/config-loader.js';
 
 // Classe de chargement des méta-données
 /**
@@ -10,10 +11,10 @@ class MetadataLoader extends BaseQueryLoader {
     // Initialisation
     constructor() {
         super({
-            batchSize: 10,
+            batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'metadata',
             cache: true,
-            cacheTimeout: 600 // 10 minutes pour les méta-données qui changent rarement
+            cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT // 10 minutes pour les méta-données qui changent rarement
         });
     }
 

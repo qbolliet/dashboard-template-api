@@ -39,7 +39,7 @@ async function startServer() {
             'X-Content-Type-Options': 'nosniff',
             'X-Frame-Options': 'DENY',
             'X-XSS-Protection': '1; mode=block',
-            'Strict-Transport-Security': 'max-age=31536000; includeSubDomains'
+            'Strict-Transport-Security': `max-age=${config.API.SECURITY_THRESHOLDS.HSTS_MAX_AGE}; includeSubDomains`
         });
         
         if (req.method === 'OPTIONS') {
@@ -167,7 +167,7 @@ async function startServer() {
         // Règles de validation de la requête
         validationRules: [
             // Vérification de la règle de profondeur
-            createDepthLimitRule(parseInt(config.SECURITY?.MAX_QUERY_DEPTH) || 5),
+            createDepthLimitRule(config.SECURITY?.MAX_QUERY_DEPTH || config.SECURITY?.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT || 5),
             // Liste blanche des opérations valides
             (context) => ({
                 OperationDefinition(node) {

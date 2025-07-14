@@ -1,8 +1,9 @@
 // Importation des modules
 import { redis } from '../cache/index.js';
+import { config } from './config-loader.js';
 
 // Création d'une fonction de cache
-const withCache = async (key, loader, timeout = 300) => {
+const withCache = async (key, loader, timeout = config.API.TIMEOUTS.CACHE_DEFAULT) => {
   // Tentative de connexion au cache
   try {
     // Vérifie si Redis est disponible et connecté

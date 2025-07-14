@@ -1,5 +1,6 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
+import { config } from '../../utils/config-loader.js';
 
 // Construction d'un resolver pour les dimensions
 /**
@@ -20,7 +21,7 @@ const dimensionResolvers = {
             // Utilisation du loader au lieu d'un accès direct à la base
             return withTimeout(
                 loaders.dimension.load(name),
-                5000,
+                config.API.TIMEOUTS.DIMENSION,
                 'Dimension table fetch timeout'
             );
         }

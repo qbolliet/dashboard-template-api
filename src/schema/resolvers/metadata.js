@@ -1,5 +1,6 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
+import { config } from '../../utils/config-loader.js';
 
 // Construction d'un resolver pour les méta-données
 /**
@@ -11,7 +12,7 @@ const metadataResolvers = {
     getMetaData: async (_, { name }, { loaders }) => {
       return withTimeout(
         loaders.metadata.load(name),
-        5000,
+        config.API.TIMEOUTS.METADATA,
         'Metadata fetch timeout'
       );
     }

@@ -1,5 +1,6 @@
 // Importation des modules
 import { createContextLogger } from '../utils/logger.js';
+import { config } from '../utils/config-loader.js';
 
 // Classe d'analyse de la complexité des requêtes SQL
 /**
@@ -14,8 +15,8 @@ class QueryComplexityAnalyzer {
             maxAllowed: config.MAX_ALLOWED || 100,
             scalarCost: config.SCALAR_COST || 0,
             objectCost: config.OBJECT_COST || 1,
-            listFactor: config.LIST_FACTOR || 10,
-            depthFactor: config.DEPTH_FACTOR || 1.5,
+            listFactor: config.LIST_FACTOR || config.SECURITY.SECURITY_LIMITS.COMPLEXITY_LIST_FACTOR,
+            depthFactor: config.DEPTH_FACTOR || config.SECURITY.SECURITY_LIMITS.COMPLEXITY_DEPTH_FACTOR,
             introspectionCost: config.INTROSPECTION_COST || 1000,
             customScores: config.CUSTOM_SCORES || {}
         };
@@ -139,7 +140,7 @@ class QueryComplexityAnalyzer {
             // Augmentation de la complexité selon le type d'argument
             if (argName === 'limit' || argName === 'first') {
                 const limit = this.extractNumericValue(value);
-                complexity += Math.min(limit, 100) * 0.1; // Limiter l'impact
+                complexity += Math.min(limit, 100) * config.SECURITY.SECURITY_LIMITS.COMPLEXITY_CALCULATION_FACTOR; // Limiter l'impact
             } else if (argName === 'filters' || argName === 'where') {
                 complexity += 2; // Coût fixe pour les filtres
             } else if (argName === 'orderBy' || argName === 'sort') {
