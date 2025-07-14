@@ -83,6 +83,77 @@ class DimensionLoader extends BaseQueryLoader {
             };
         }
     }
+
+    // Charge plusieurs valeurs de dimension en une seule requête
+    /**
+     * Loads multiple dimension values in a single query
+     * More efficient for batch operations
+     * @param {Object} connection - Database connection
+     * @param {Array} params - Array of {dimensionName, value} objects
+     * @returns {Promise<Array>} Array of dimension records
+     */
+    async loadBatchValues(connection, params) {
+        // Groupe les paramètres par dimension pour optimiser les requêtes
+        const groupedParams = params.reduce((acc, param) => {
+            if (!acc[param.dimensionName]) {
+                acc[param.dimensionName] = [];
+            }
+            acc[param.dimensionName].push(param.value);
+            return acc;
+        }, {});
+
+        const results = [];
+        
+        // Pour chaque dimension, exécute une requête batch
+        for (const [dimensionName, values] of Object.entries(groupedParams)) {
+            try {
+                const placeholders = values.map(() => '?').join(',');
+                const query = `SELECT value, label FROM dim_${dimensionName} WHERE value IN (${placeholders})`;
+                const dimensionResults = await connection.all(query, values);
+                
+                // Crée un map pour un accès rapide
+                const resultMap = new Map();
+                if (dimensionResults) {
+                    dimensionResults.forEach(row => {
+                        resultMap.set(row.value, {
+                            name: dimensionName,
+                            value: row.value,
+                            label: row.label
+                        });
+                    });
+                }
+                
+                // Ajoute les résultats dans l'ordre des paramètres originaux
+                values.forEach(value => {
+                    const found = resultMap.get(value);
+                    if (found) {
+                        results.push(found);
+                    } else {
+                        results.push({
+                            name: dimensionName,
+                            value: value,
+                            label: value
+                        });
+                    }
+                });
+            } catch (error) {
+                console.error(`Error loading batch dimension values for ${dimensionName}:`, error);
+                // En cas d'erreur, ajoute les valeurs brutes
+                values.forEach(value => {
+                    results.push({
+                        name: dimensionName,
+                        value: value,
+                        label: value
+                    });
+                });
+            }
+        }
+        
+        // Retourne les résultats dans l'ordre des paramètres originaux
+        return params.map(param => {
+            return results.find(r => r.name === param.dimensionName && r.value === param.value);
+        });
+    }
 }
 
 // Fonction de création d'un loader pour les dimensions
@@ -98,15 +169,16 @@ const createDimensionLoader = () => {
 // Fonction de création d'un loader pour rechercher les labels correspondant à une valeur
 /**
  * Creates a DataLoader for dimension value lookups
- * Used to resolve labels for fact data
+ * Used to resolve labels for fact data - optimized for batch operations
  * @returns {DataLoader} DataLoader instance for dimension values
  */
 const createDimensionValueLoader = () => {
     const loader = new DimensionLoader();
-    return loader.createLoader(
-        (connection, params) => loader.loadSingleValue(connection, params),
+    return loader.createBatchLoader(
+        (connection, params) => loader.loadBatchValues(connection, params),
         {
-            cacheKeyFn: ({ dimensionName, value }) => `${dimensionName}:${value}`
+            cacheKeyFn: ({ dimensionName, value }) => `${dimensionName}:${value}`,
+            maxBatchSize: 50 // Augmentation de la taille de batch pour les dimensions
         }
     );
 };

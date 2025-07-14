@@ -11,21 +11,26 @@ const fieldResolvers = {
         // Résout les détails des dimensions pour inclure un label dans la table des faits
         /**
          * Resolves dimension details including labels
-         * This resolver is called only when dimensionDetails field is requested
-         * @param {Object} parent - The fact record
+         * Now returns pre-loaded dimension details from bulk enrichment
+         * @param {Object} parent - The fact record (already enriched)
          * @param {Object} args - Field arguments (none for this field)
          * @param {Object} context - GraphQL context with loaders
-         * @returns {Promise<Array>} Array of dimension details
+         * @returns {Array} Array of dimension details (pre-loaded)
          */
         dimensionDetails: async (parent, args, { loaders }) => {
-            // Si le parent n'a pas de champs, retourner un tableau vide
+            // Si le parent a déjà des dimensionDetails pré-chargés, les retourner
+            if (parent && parent.dimensionDetails) {
+                return parent.dimensionDetails;
+            }
+
+            // Fallback pour les cas où l'enrichissement n'a pas eu lieu
+            // (ne devrait normalement pas arriver avec la nouvelle implémentation)
             if (!parent || typeof parent !== 'object') {
                 return [];
             }
 
             // Extraction de tous les champs qui pourraient être des dimensions
-            // On exclut les champs spéciaux comme 'value'
-            const excludedFields = ['value', '_groupByField'];
+            const excludedFields = ['value', '_groupByField', 'dimensionDetails'];
             const dimensionFields = Object.keys(parent).filter(
                 key => !excludedFields.includes(key) && parent[key] !== null
             );
@@ -34,40 +39,13 @@ const fieldResolvers = {
                 return [];
             }
 
-            // Récupération des métadonnées pour identifier les dimensions catégorielles
-            const metadataPromises = dimensionFields.map(fieldName => 
-                loaders.metadata.load(fieldName)
-            );
-
-            const metadataResults = await Promise.all(metadataPromises);
-
-            // Pour chaque dimension, charger les détails si elle est catégorielle
-            const detailPromises = dimensionFields.map(async (fieldName, index) => {
-                const value = parent[fieldName];
-                const metadata = metadataResults[index];
-
-                // Si la dimension est catégorielle, charger le label depuis la table de dimension
-                if (metadata && metadata.is_categorical) {
-                    return loaders.dimensionValue.load({
-                        dimensionName: fieldName, // Utilise directement le nom du champ
-                        value: value
-                    });
-                } else {
-                    // Si non catégorielle, retourner la valeur brute
-                    return {
-                        name: fieldName,
-                        value: String(value),
-                        label: String(value)
-                    };
-                }
-            });
-
-            // Attendre toutes les résolutions avec timeout
-            return withTimeout(
-                Promise.all(detailPromises),
-                5000,
-                'Dimension details resolution timeout'
-            );
+            // Fallback: génération des détails sans chargement de base de données
+            // Pour éviter les requêtes N+1 en cas de problème avec l'enrichissement
+            return dimensionFields.map(fieldName => ({
+                name: fieldName,
+                value: parent[fieldName],
+                label: parent[fieldName] // Utilise la valeur brute comme label
+            }));
         }
     },
 
