@@ -26,76 +26,81 @@ class FactLoader extends FactQueryLoader {
      * @returns {Promise<Array|Object>} Query results in requested format
      */
     async loadFacts(connection, params) {
-        const { 
-            fields, 
-            filters, 
-            structuredFilters, 
-            limit, 
-            offset, 
-            sort, 
-            format = 'default',
-            includeCount = false 
-        } = params;
-        
-        // Validation des paramètres de pagination
-        this.validatePagination(limit, offset);
-        
-        // Construction de la requête SQL
-        const selectClause = this.buildSelectClause(fields);
-        const whereClause = buildWhereClause(filters, structuredFilters);
-        const sortClause = this.buildSortClause(sort);
-        
-        const query = `
-            SELECT ${selectClause} FROM fact_table
-            ${whereClause} 
-            ${sortClause}
-            LIMIT ${limit} OFFSET ${offset}
-        `;
-        
-        console.log('Executing fact query:', query);
-        
-        // Récupération des données selon le format
-        let data;
-        switch (format) {
-            case 'metadata':
-                // Format optimisé pour D3 avec métadonnées
-                data = await connection.getWithMetadata(query);
-                break;
-            case 'json':
-                // Format JSON simple
-                data = await connection.getAsJsonArray(query);
-                break;
-            default:
-                // Format par défaut - tableau d'objets
-                data = await connection.all(query);
-        }
-        
-        // Si includeCount est demandé, ajouter le comptage total
-        if (includeCount || format === 'with-count') {
-            const total = await this.getCount(connection, { filters, structuredFilters });
+        try {
+            const { 
+                fields, 
+                filters, 
+                structuredFilters, 
+                limit, 
+                offset, 
+                sort, 
+                format = 'default',
+                includeCount = false 
+            } = params;
             
-            // Pour le format metadata, enrichir les métadonnées existantes
-            if (format === 'metadata' && data.metadata) {
-                data.metadata = {
-                    ...data.metadata,
-                    total,
-                    hasNextPage: offset + limit < total,
-                    currentPage: Math.floor(offset / limit) + 1,
-                    totalPages: Math.ceil(total / limit)
-                };
-            } else {
-                // Pour les autres formats, wrapper dans un objet
-                data = {
-                    data: Array.isArray(data) ? data : (data?.data || []),
-                    total,
-                    hasNextPage: offset + limit < total,
-                    currentPage: Math.floor(offset / limit) + 1,
-                    totalPages: Math.ceil(total / limit)
-                };
+            // Validation des paramètres de pagination
+            this.validatePagination(limit, offset);
+            
+            // Construction de la requête SQL
+            const selectClause = this.buildSelectClause(fields);
+            const whereClause = buildWhereClause(filters, structuredFilters);
+            const sortClause = this.buildSortClause(sort);
+            
+            const query = `
+                SELECT ${selectClause} FROM fact_table
+                ${whereClause} 
+                ${sortClause}
+                LIMIT ${limit} OFFSET ${offset}
+            `;
+            
+            console.log('Executing fact query:', query);
+            
+            // Récupération des données selon le format
+            let data;
+            switch (format) {
+                case 'metadata':
+                    // Format optimisé pour D3 avec métadonnées
+                    data = await connection.getWithMetadata(query);
+                    break;
+                case 'json':
+                    // Format JSON simple
+                    data = await connection.getAsJsonArray(query);
+                    break;
+                default:
+                    // Format par défaut - tableau d'objets
+                    data = await connection.all(query);
             }
+            
+            // Si includeCount est demandé, ajouter le comptage total
+            if (includeCount || format === 'with-count') {
+                const total = await this.getCount(connection, { filters, structuredFilters });
+                
+                // Pour le format metadata, enrichir les métadonnées existantes
+                if (format === 'metadata' && data.metadata) {
+                    data.metadata = {
+                        ...data.metadata,
+                        total,
+                        hasNextPage: offset + limit < total,
+                        currentPage: Math.floor(offset / limit) + 1,
+                        totalPages: Math.ceil(total / limit)
+                    };
+                } else {
+                    // Pour les autres formats, wrapper dans un objet
+                    data = {
+                        data: Array.isArray(data) ? data : (data?.data || []),
+                        total,
+                        hasNextPage: offset + limit < total,
+                        currentPage: Math.floor(offset / limit) + 1,
+                        totalPages: Math.ceil(total / limit)
+                    };
+                }
+            }
+            
+            return data;
+        } catch (error) {
+            console.error('Error in loadFacts:', error);
+            throw error;
         }
-        
-        return data;
     }
 
     // Méthode de comptage du nombre d'observations

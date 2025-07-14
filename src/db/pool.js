@@ -66,9 +66,10 @@ class DuckDBPool {
                         conn: duckdbConnection,
                         inUse: true,
                         
+                        
                         /**
                          * Execute a query and return results as objects with column names as keys
-                         * Uses native DuckDB methods for optimal performance
+                         * Uses native DuckDB JSON methods for optimal performance and BigInt handling
                          * @param {string} query - SQL query to execute
                          * @param {Array} params - Parameters for prepared statement
                          * @returns {Promise<Array>} - Query results as array of objects
@@ -106,16 +107,16 @@ class DuckDBPool {
                                 // Exécution 
                                 const result = await prepared.run();
                                 
-                                // Utilisation de getRowObjects pour obtenir directement un tableau d'objets
-                                // Cette méthode est plus efficace que la conversion manuelle
-                                return await result.getRowObjects();
+                                // Use native DuckDB JSON serialization for optimal performance
+                                // This handles BigInt conversion automatically and efficiently
+                                return await result.getRowObjectsJson();
                             } else {
                                 // Pour les requêtes non paramétrées
                                 // Exécution de la requête
                                 const result = await duckdbConnection.run(query);
                                 
-                                // Utilisation de getRowObjects pour obtenir directement un tableau d'objets
-                                return await result.getRowObjects();
+                                // Use native DuckDB JSON serialization for optimal performance
+                                return await result.getRowObjectsJson();
                             }
                         },
                         
@@ -160,9 +161,9 @@ class DuckDBPool {
                                 result = await duckdbConnection.run(query);
                             }
                             
-                            // Obtenons les données au format JSON directement
-                            // Plus efficace pour les grands ensembles de données
-                            return await result.getRowsJSON();
+                            // Use native DuckDB JSON array serialization
+                            // More efficient for large datasets with automatic BigInt handling
+                            return await result.getRowsJson();
                         },
                         
                         /**
@@ -204,8 +205,8 @@ class DuckDBPool {
                             // Récupération des noms de colonnes
                             const columnNames = result.columnNames();
                             
-                            // Récupération des données
-                            const rows = await result.getRowObjects();
+                            // Use native JSON serialization for better performance
+                            const rows = await result.getRowObjectsJson();
                             
                             // Format optimisé pour D3
                             // Structure qui facilite le filtrage, le tri et l'affichage
