@@ -36,13 +36,7 @@ class DimensionLoader extends BaseQueryLoader {
             
             console.log(`Query returned ${results ? results.length : 0} rows`);
             
-            // Convert BIGINT values to strings for GraphQL serialization
-            const convertedResults = results ? results.map(row => ({
-                ...row,
-                value: String(row.value)
-            })) : [];
-            
-            return convertedResults;
+            return results || [];
         } catch (error) {
             console.error(`Error executing dimension query for ${name}:`, error);
             // Retourne un array vide en cas d'erreur
@@ -68,7 +62,7 @@ class DimensionLoader extends BaseQueryLoader {
             if (results && results.length > 0) {
                 return {
                     name: dimensionName,
-                    value: String(results[0].value),
+                    value: results[0].value,
                     label: results[0].label
                 };
             }
@@ -76,16 +70,16 @@ class DimensionLoader extends BaseQueryLoader {
             // Si pas trouvé dans la dimension, retourner la valeur brute
             return {
                 name: dimensionName,
-                value: String(value),
-                label: String(value)
+                value: value,
+                label: value
             };
         } catch (error) {
             console.error(`Error loading dimension value for ${dimensionName}:${value}:`, error);
             // En cas d'erreur, retourner la valeur brute
             return {
                 name: dimensionName,
-                value: String(value),
-                label: String(value)
+                value: value,
+                label: value
             };
         }
     }
