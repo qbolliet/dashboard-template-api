@@ -28,7 +28,8 @@ const commonTypeDefs = gql`
   input Filter {
     key: String!
     operator: String!
-    value: String!
+    value: String
+    values: [String!]
   }
 
   input SortInput {
