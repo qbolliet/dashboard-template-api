@@ -18,8 +18,28 @@ class DuckDBPool {
         this.maxConnections = config.maxConnections || 10;
         // Timeout pour l'acquisition de la connexion
         this.acquireTimeout = config.acquireTimeout || 10000; // 10 seconds
-        // Instances DuckDB
-        this.instances = [];
+        // Single DuckDB instance for all connections
+        this.instance = null;
+        // Promise to track instance initialization
+        this.instancePromise = null;
+    }
+
+    /**
+     * Initialize the single DuckDB instance if not already done
+     * @returns {Promise<Object>} The DuckDB instance
+     */
+    async initializeInstance() {
+        if (this.instance) {
+            return this.instance;
+        }
+
+        if (this.instancePromise) {
+            return await this.instancePromise;
+        }
+
+        this.instancePromise = DuckDBInstance.create(this.config.path);
+        this.instance = await this.instancePromise;
+        return this.instance;
     }
     
     /**
@@ -53,9 +73,8 @@ class DuckDBPool {
                 // Sinon, une nouvelle connexion est crée si le pool n'est pas plein
                 if (this.pool.length < this.maxConnections) {
                     
-                    // Création d'une nouvelle instance DuckDB
-                    const instance = await DuckDBInstance.create(this.config.path);
-                    this.instances.push(instance);
+                    // Utilise l'instance unique pour créer une nouvelle connexion
+                    const instance = await this.initializeInstance();
                     
                     // Connexion à l'instance
                     const duckdbConnection = await instance.connect();
@@ -300,8 +319,19 @@ class DuckDBPool {
             }
         }));
 
-        // Réinitialisation du pool
+        // Fermeture de l'instance unique
+        if (this.instance) {
+            try {
+                await this.instance.close();
+            } catch (error) {
+                throw error;
+            }
+        }
+
+        // Réinitialisation du pool et de l'instance
         this.pool = [];
+        this.instance = null;
+        this.instancePromise = null;
     }
 }
 
