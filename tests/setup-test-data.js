@@ -257,8 +257,8 @@ async function setupTestData() {
         console.error('❌ Erreur lors de la création de la base de test :', error);
         throw error;
     } finally {
-        await conn.close();
-        await instance.close();
+        if (conn) await conn.close();
+        // DuckDB instance doesn't have a close method, it's garbage collected
     }
 }
 
