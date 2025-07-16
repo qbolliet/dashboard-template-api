@@ -4,8 +4,7 @@ export default {
   // Utiliser le testEnvironment node pour les tests backend
   testEnvironment: 'node',
   
-  // Support des modules ES6 (removed .js as it's inferred from package.json type: module)
-  preset: 'default',
+  // Support des modules ES6
   
   // Transformation des modules
   transform: {},
