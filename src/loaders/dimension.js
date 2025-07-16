@@ -26,20 +26,15 @@ class DimensionLoader extends BaseQueryLoader {
      * @returns {Promise<Array>} Array of dimension records
      */
     async loadSingle(connection, name) {
-        try {
-            console.log(`Executing query for dimension: ${name}`);
-            
+        try {            
             // Construction de la requête de la table de dimensions
             const query = `SELECT * FROM dim_${name}`;
             
             // Exécution de la requête
             const results = await connection.all(query);
             
-            console.log(`Query returned ${results ? results.length : 0} rows`);
-            
             return results || [];
         } catch (error) {
-            console.error(`Error executing dimension query for ${name}:`, error);
             // Retourne un array vide en cas d'erreur
             return [];
         }
@@ -75,7 +70,6 @@ class DimensionLoader extends BaseQueryLoader {
                 label: value
             };
         } catch (error) {
-            console.error(`Error loading dimension value for ${dimensionName}:${value}:`, error);
             // En cas d'erreur, retourner la valeur brute
             return {
                 name: dimensionName,
@@ -138,7 +132,6 @@ class DimensionLoader extends BaseQueryLoader {
                     }
                 });
             } catch (error) {
-                console.error(`Error loading batch dimension values for ${dimensionName}:`, error);
                 // En cas d'erreur, ajoute les valeurs brutes
                 values.forEach(value => {
                     results.push({

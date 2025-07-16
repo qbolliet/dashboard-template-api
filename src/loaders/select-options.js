@@ -27,8 +27,6 @@ class SelectOptionsLoader extends BaseQueryLoader {
      */
     async loadSelectOptions(connection, { fieldName, limit, searchTerm }) {
         try {
-            console.log(`Loading select options for field: ${fieldName}`);
-            
             // Vérification si le champ est catégoriel
             const metadataQuery = 'SELECT is_categorical FROM metadata WHERE name = ?';
             const metadataResults = await connection.all(metadataQuery, [fieldName]);
@@ -42,7 +40,6 @@ class SelectOptionsLoader extends BaseQueryLoader {
                 return await this.loadFromFacts(connection, fieldName, limit, searchTerm);
             }
         } catch (error) {
-            console.error(`Error loading select options for ${fieldName}:`, error);
             return [];
         }
     }

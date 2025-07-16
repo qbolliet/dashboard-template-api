@@ -147,8 +147,6 @@ class DuckDBPool {
                          * @returns {Promise<Array>} - Query results as JSON array
                          */
                         getAsJsonArray: async (query, params = []) => {
-                            console.log(`Executing query for JSON array: ${query}`);
-                            
                             let result;
                             if (params && params.length > 0) {
                                 // Préparation pour les requêtes paramétrées

@@ -8,7 +8,6 @@ const withCache = async (key, loader, timeout = config.API.TIMEOUTS.CACHE_DEFAUL
   try {
     // Vérifie si Redis est disponible et connecté
     if (!redis || typeof redis.get !== 'function') {
-        console.log(`Redis not available, using direct loader for key: ${key}`);
         return await loader();
     }
     // Extraction du cache
@@ -21,7 +20,6 @@ const withCache = async (key, loader, timeout = config.API.TIMEOUTS.CACHE_DEFAUL
     await redis.set(key, JSON.stringify(result), 'EX', timeout);
     return result;
   } catch (error) {
-      console.error('Cache operation failed:', error);
       // Si le cache échoue, on  retombe sur le loader
       return await loader();
   }
