@@ -54,8 +54,6 @@ class FactLoader extends FactQueryLoader {
                 LIMIT ${limit} OFFSET ${offset}
             `;
             
-            console.log('Executing fact query:', query);
-            
             // Récupération des données selon le format
             let data;
             switch (format) {
@@ -99,7 +97,6 @@ class FactLoader extends FactQueryLoader {
             
             return data;
         } catch (error) {
-            console.error('Error in loadFacts:', error);
             throw error;
         }
     }

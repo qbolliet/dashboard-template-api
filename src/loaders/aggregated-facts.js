@@ -84,11 +84,8 @@ class AggregatedFactsLoader extends FactQueryLoader {
             LIMIT ${limit} OFFSET ${offset}
         `;
         
-        console.log('Executing aggregated facts query:', query);
-        
         // Exécution de la requête
         const results = await connection.all(query);
-        console.log(`Query returned ${results ? results.length : 0} rows`);
         
         // Mise en forme du jeu de données
         let data = results.map(row => ({

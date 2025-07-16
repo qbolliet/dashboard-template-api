@@ -26,8 +26,6 @@ class MetadataLoader extends BaseQueryLoader {
      * @returns {Promise<Object|null>} Metadata object or null
      */
     async loadSingle(connection, name) {
-        console.log(`Executing query for metadata name: ${name}`);
-        
         // Paramétrisation de la requête
         const query = "SELECT * FROM metadata WHERE name = ?";
         
@@ -44,8 +42,6 @@ class MetadataLoader extends BaseQueryLoader {
         if (metadata && 'is_categorical' in metadata) {
             metadata.is_categorical = Boolean(metadata.is_categorical);
         }
-        
-        console.log(`Converted result for ${name}:`, metadata);
         
         return metadata;
     }
