@@ -12,5 +12,9 @@ data/*
 # Environment files
 *.env
 
+# Tests
+coverage/*
+
 # Claude
 CLAUDE.md
+.claude/*

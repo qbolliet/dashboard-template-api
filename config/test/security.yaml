@@ -1,0 +1,21 @@
+# Test security configuration - more permissive for testing
+
+SECURITY:
+  RATE_LIMIT:
+    ENABLED: false
+    MAX_REQUESTS: 10000
+    TIME_WINDOW: 60000
+    BURST_LIMIT: 1000
+    SKIP_PATTERNS: ["__schema", "__type", "__introspection"]
+
+  COMPLEXITY:
+    MAX_COMPLEXITY: 10000
+    MAX_DEPTH: 50
+    INTROSPECTION_COST: 1
+    DEPTH_FACTOR: 1
+
+  SANITIZATION:
+    ENABLED: true
+    XSS_PROTECTION: true
+    SQL_INJECTION_PROTECTION: true
+    MAX_STRING_LENGTH: 10000
