@@ -2,8 +2,12 @@
 node_modules/
 
 # Logs
-logs/
+logs/*
 !logs/.gitkeep
+
+# Data
+data/*
+!data/.gitkeep
 
 # Environment files
 *.env
