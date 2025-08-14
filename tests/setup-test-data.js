@@ -14,7 +14,7 @@ const __dirname = path.dirname(__filename);
  */
 async function setupTestData() {
     // Créer le dossier de test s'il n'existe pas
-    const testDir = path.resolve(__dirname, '../test-data');
+    const testDir = path.resolve(__dirname, '../data');
     if (!fs.existsSync(testDir)) {
         fs.mkdirSync(testDir, { recursive: true });
     }
