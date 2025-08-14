@@ -13,6 +13,7 @@ import { redis } from './cache/index.js';
 import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
 import { config } from './utils/config-loader.js';
+import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 
 // Fonction de lancement du server
 /**
@@ -131,6 +132,9 @@ async function startServer() {
         }
         next();
     });
+
+    // Configuration des routes d'invalidation de cache
+    createCacheInvalidationRoutes(app);
 
     // Création du SecurityManager
     const securityManager = initializeSecurityManager(config.SECURITY);

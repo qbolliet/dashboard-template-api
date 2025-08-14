@@ -1,4 +1,4 @@
-// Importation des modules
+// Importation des modules nécessaires pour la gestion des bases de données
 import { DuckDBPool } from './pool.js';
 import { dirname, resolve } from 'path';
 import fs from 'fs';
@@ -6,11 +6,11 @@ import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
 import { createContextLogger } from '../utils/logger.js';
 
-// Emplacement du fichier et du dossier
+// Résolution de l'emplacement du fichier et du dossier pour les chemins relatifs
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Création du logger contextualisé pour ce module
+// Création du logger contextualisé spécifique à ce module
 const dbLogger = createContextLogger({ 
     component: 'database',
     module: 'database-manager'
@@ -22,11 +22,15 @@ const dbLogger = createContextLogger({
  */
 class DatabaseManager {
     constructor() {
+        // Map pour stocker les pools de connexion de chaque base de données
         this.pools = new Map();
+        
+        // Configuration du routage des bases de données depuis le fichier de config
         this.defaultDatabase = config.DATABASE_ROUTING.DEFAULT_DATABASE;
         this.allowedDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
         this.allowCrossDatabase = config.DATABASE_ROUTING.ALLOW_CROSS_DATABASE_QUERIES;
         
+        // Initialisation automatique de toutes les bases de données configurées
         this.initializeDatabases();
     }
 
@@ -40,21 +44,24 @@ class DatabaseManager {
             allowCrossDatabase: this.allowCrossDatabase
         });
 
-        // Initialize each configured database
+        // Initialisation de chaque base de données configurée dans le fichier de config
         for (const [databaseId, dbConfig] of Object.entries(config.DATABASES)) {
             try {
+                // Tentative d'initialisation de la base de données
                 this.initializeDatabase(databaseId, dbConfig);
             } catch (error) {
+                // Log de l'erreur mais continuation du processus pour les autres bases
                 dbLogger.error(`Failed to initialize database ${databaseId}`, error);
-                // Continue with other databases even if one fails
+                // Continuer avec les autres bases de données même si une échoue
             }
         }
 
-        // Validate that default database was initialized
+        // Validation que la base de données par défaut a été initialisée avec succès
         if (!this.pools.has(this.defaultDatabase)) {
             throw new Error(`Default database '${this.defaultDatabase}' failed to initialize`);
         }
 
+        // Log de confirmation de l'initialisation réussie
         dbLogger.database('Database manager initialized successfully', {
             initializedDatabases: Array.from(this.pools.keys())
         });
@@ -66,17 +73,19 @@ class DatabaseManager {
      * @param {Object} dbConfig - Database configuration
      */
     initializeDatabase(databaseId, dbConfig) {
-        // Construction du chemin vers la base de données
+        // Construction du chemin absolu vers la base de données à partir du chemin relatif configuré
         const dbPath = resolve(__dirname, '../../', dbConfig.PATH);
 
-        // Vérification que le chemin vers la base de données existe
+        // Vérification de l'existence du fichier de base de données
         if (!fs.existsSync(dbPath)) {
+            // Avertissement mais pas d'erreur - DuckDB peut créer le fichier automatiquement
             dbLogger.warn(`Database file not found for ${databaseId}`, {
                 path: dbPath,
                 configPath: dbConfig.PATH
             });
-            // On continue quand même car DuckDB peut créer le fichier
+            // On continue quand même car DuckDB peut créer le fichier si nécessaire
         } else {
+            // Log des informations du fichier existant (taille, date de modification)
             const stats = fs.statSync(dbPath);
             dbLogger.database(`Database file found for ${databaseId}`, {
                 path: dbPath,
@@ -85,7 +94,7 @@ class DatabaseManager {
             });
         }
 
-        // Initialisation de la connection pool avec les paramètres de configuration
+        // Préparation de la configuration du pool de connexions avec les paramètres du fichier config
         const poolConfig = {
             path: dbPath,
             maxConnections: dbConfig.POOL.MAX_CONNECTIONS,
@@ -94,19 +103,21 @@ class DatabaseManager {
             maxRetries: dbConfig.POOL.CONNECTION_RETRY_MAX
         };
 
+        // Log de la configuration avant initialisation du pool
         dbLogger.database(`Initializing database pool for ${databaseId}`, {
             config: {
                 ...poolConfig,
-                path: dbPath.replace(process.cwd(), '.') // Chemin relatif pour les logs
+                path: dbPath.replace(process.cwd(), '.') // Chemin relatif pour les logs (plus lisible)
             }
         });
 
-        // Créer et stocker le pool
+        // Création et stockage du pool de connexions dans la Map
         const pool = new DuckDBPool(poolConfig);
         this.pools.set(databaseId, pool);
 
-        // Gestion des événements du pool
+        // Configuration des écouteurs d'événements du pool pour le monitoring
         if (pool.on) {
+            // Événement de création de nouvelle connexion
             pool.on('connection:created', (connectionId) => {
                 dbLogger.database(`New database connection created for ${databaseId}`, { 
                     databaseId, 
@@ -114,6 +125,7 @@ class DatabaseManager {
                 });
             });
             
+            // Événement d'erreur de connexion
             pool.on('connection:error', (error, connectionId) => {
                 dbLogger.error(`Database connection error for ${databaseId}`, error, { 
                     databaseId, 
@@ -129,12 +141,15 @@ class DatabaseManager {
      * @returns {DuckDBPool} Database connection pool
      */
     getPool(databaseId = null) {
+        // Utilisation de la base par défaut si aucun ID n'est spécifié
         const targetDatabase = databaseId || this.defaultDatabase;
         
+        // Validation que la base demandée est autorisée et configurée
         if (!this.isValidDatabase(targetDatabase)) {
             throw new Error(`Database '${targetDatabase}' is not allowed or configured`);
         }
 
+        // Récupération du pool depuis la Map
         const pool = this.pools.get(targetDatabase);
         if (!pool) {
             throw new Error(`Database pool for '${targetDatabase}' not found`);

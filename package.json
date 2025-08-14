@@ -14,7 +14,11 @@
     "test:coverage": "NODE_OPTIONS='--experimental-vm-modules' jest --coverage",
     "test:setup": "node tests/setup-test-data.js",
     "test:all": "npm run test:setup && npm run test",
-    "studio:test": "echo 'Ouvrez https://studio.apollographql.com et connectez-vous à http://localhost:4000/graphql'"
+    "studio:test": "echo 'Ouvrez https://studio.apollographql.com et connectez-vous à http://localhost:4000/graphql'",
+    "db:update": "node scripts/handle-database-update.js",
+    "db:update:dry": "node scripts/handle-database-update.js --dry-run",
+    "db:invalidate": "curl -X POST http://localhost:4000/api/cache/invalidate-all || echo 'Server not running'",
+    "db:stats": "curl http://localhost:4000/api/cache/stats || echo 'Server not running'"
   },
   "repository": {
     "type": "git",
