@@ -12,7 +12,7 @@ const metadataTypeDefs = gql`
   }
 
   extend type Query {
-    getMetaData(name: String!): Metadata
+    getMetaData(name: String!, database: String): Metadata
   }
 `;
 

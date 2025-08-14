@@ -10,12 +10,13 @@ import { buildWhereClause } from '../utils/utils.js';
  */
 class AggregatedFactsLoader extends FactQueryLoader {
     // Initialisation
-    constructor() {
+    constructor(databaseId = null) {
         super({
             batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'aggregated-facts',
             cache: true,
-            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT // 5 minutes
+            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT, // 5 minutes
+            databaseId: databaseId
         });
     }
 
@@ -237,8 +238,8 @@ class AggregatedFactsLoader extends FactQueryLoader {
  * Creates a DataLoader for aggregated facts
  * @returns {DataLoader} DataLoader instance for aggregated facts
  */
-const createAggregatedFactsLoader = () => {
-    const loader = new AggregatedFactsLoader();
+const createAggregatedFactsLoader = (databaseId = null) => {
+    const loader = new AggregatedFactsLoader(databaseId);
     return loader.createLoader((connection, params) => 
         loader.loadAggregatedFacts(connection, params)
     );
@@ -249,8 +250,8 @@ const createAggregatedFactsLoader = () => {
  * Creates a DataLoader for aggregated facts with metadata
  * @returns {DataLoader} DataLoader instance
  */
-const createAggregatedFactsWithMetadataLoader = () => {
-    const loader = new AggregatedFactsLoader();
+const createAggregatedFactsWithMetadataLoader = (databaseId = null) => {
+    const loader = new AggregatedFactsLoader(databaseId);
     return loader.createLoader((connection, params) => 
         loader.loadAggregatedFacts(connection, { ...params, includeMetadata: true })
     );
@@ -261,8 +262,8 @@ const createAggregatedFactsWithMetadataLoader = () => {
  * Creates a DataLoader for aggregated facts with count
  * @returns {DataLoader} DataLoader instance
  */
-const createAggregatedFactsWithCountLoader = () => {
-    const loader = new AggregatedFactsLoader();
+const createAggregatedFactsWithCountLoader = (databaseId = null) => {
+    const loader = new AggregatedFactsLoader(databaseId);
     return loader.createLoader((connection, params) => 
         loader.loadAggregatedFacts(connection, { ...params, includeCount: true })
     );

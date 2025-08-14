@@ -11,9 +11,14 @@ import { config } from '../../utils/config-loader.js';
 const factResolvers = {
     Query: {
         // Requête standard des faits avec pagination et comptage
-        getFactTable: async (_, args, { loaders }) => {
+        getFactTable: async (_, args, { loaders, getLoadersForDatabase }) => {
+            // Get appropriate loaders for the database
+            const targetLoaders = getLoadersForDatabase(args.database);
+            const factLoader = targetLoaders ? targetLoaders.factWithCount : loaders.factWithCount;
+            const enrichmentLoaders = targetLoaders || loaders;
+            
             const result = await withTimeout(
-                loaders.factWithCount.load(args),
+                factLoader.load(args),
                 config.API.TIMEOUTS.FACT_SIMPLE,
                 'Fact table fetch timeout'
             );
@@ -21,7 +26,7 @@ const factResolvers = {
             // Enrichissement en masse des dimensions pour toutes les lignes
             if (result && result.data) {
                 const enrichedData = await withTimeout(
-                    enrichFactsWithDimensions(result.data, loaders),
+                    enrichFactsWithDimensions(result.data, enrichmentLoaders),
                     config.API.TIMEOUTS.FACT_COMPLEX,
                     'Dimension enrichment timeout'
                 );

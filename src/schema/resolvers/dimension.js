@@ -17,10 +17,14 @@ const dimensionResolvers = {
          * @param {Object} context - GraphQL context with loaders
          * @returns {Promise<Array>} Array of dimension records
          */
-        getDimensionTable: async (_, { name }, { loaders }) => {
+        getDimensionTable: async (_, { name, database }, { loaders, getLoadersForDatabase }) => {
+            // Get appropriate loader for the database
+            const targetLoaders = getLoadersForDatabase(database);
+            const loader = targetLoaders ? targetLoaders.dimension : loaders.dimension;
+            
             // Utilisation du loader au lieu d'un accès direct à la base
             return withTimeout(
-                loaders.dimension.load(name),
+                loader.load(name),
                 config.API.TIMEOUTS.DIMENSION,
                 'Dimension table fetch timeout'
             );

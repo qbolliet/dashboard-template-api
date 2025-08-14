@@ -9,12 +9,13 @@ import { config } from '../utils/config-loader.js';
  */
 class MetadataLoader extends BaseQueryLoader {
     // Initialisation
-    constructor() {
+    constructor(databaseId = null) {
         super({
             batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'metadata',
             cache: true,
-            cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT // 10 minutes pour les méta-données qui changent rarement
+            cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT, // 10 minutes pour les méta-données qui changent rarement
+            databaseId: databaseId
         });
     }
 
@@ -52,8 +53,8 @@ class MetadataLoader extends BaseQueryLoader {
  * Creates a DataLoader for metadata
  * @returns {DataLoader} DataLoader instance for metadata
  */
-const createMetadataLoader = () => {
-    const loader = new MetadataLoader();
+const createMetadataLoader = (databaseId = null) => {
+    const loader = new MetadataLoader(databaseId);
     return loader.createLoader((connection, name) => loader.loadSingle(connection, name));
 };
 

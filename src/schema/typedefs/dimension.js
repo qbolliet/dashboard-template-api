@@ -10,7 +10,7 @@ const dimensionTypeDefs = gql`
     }
 
     type Query {
-        getDimensionTable(name: String!): [Dimension]
+        getDimensionTable(name: String!, database: String): [Dimension]
     }
 `;
 

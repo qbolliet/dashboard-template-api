@@ -9,12 +9,13 @@ import { config } from '../utils/config-loader.js';
  */
 class SelectOptionsLoader extends BaseQueryLoader {
     // Initialisation
-    constructor() {
+    constructor(databaseId = null) {
         super({
             batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'select-options',
             cache: true,
-            cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT // 10 minutes pour les options qui changent peu
+            cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT, // 10 minutes pour les options qui changent peu
+            databaseId: databaseId
         });
     }
 
@@ -110,8 +111,8 @@ class SelectOptionsLoader extends BaseQueryLoader {
  * Creates a DataLoader for select options
  * @returns {DataLoader} DataLoader instance for select options
  */
-const createSelectOptionsLoader = () => {
-    const loader = new SelectOptionsLoader();
+const createSelectOptionsLoader = (databaseId = null) => {
+    const loader = new SelectOptionsLoader(databaseId);
     return loader.createLoader((connection, params) => loader.loadSelectOptions(connection, params));
 };
 

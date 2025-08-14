@@ -9,12 +9,13 @@ import { config } from '../utils/config-loader.js';
  */
 class DimensionLoader extends BaseQueryLoader {
     // Initialisation
-    constructor() {
+    constructor(databaseId = null) {
         super({
             batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'dimension',
             cache: true,
-            cacheTimeout: config.API.LOADERS.DIMENSION_CACHE_TIMEOUT // 10 minutes pour les dimensions qui changent rarement
+            cacheTimeout: config.API.LOADERS.DIMENSION_CACHE_TIMEOUT, // 10 minutes pour les dimensions qui changent rarement
+            databaseId: databaseId
         });
     }
 
@@ -155,8 +156,8 @@ class DimensionLoader extends BaseQueryLoader {
  * Creates a DataLoader for dimensions
  * @returns {DataLoader} DataLoader instance for dimensions
  */
-const createDimensionLoader = () => {
-    const loader = new DimensionLoader();
+const createDimensionLoader = (databaseId = null) => {
+    const loader = new DimensionLoader(databaseId);
     return loader.createLoader((connection, name) => loader.loadSingle(connection, name));
 };
 
@@ -166,8 +167,8 @@ const createDimensionLoader = () => {
  * Used to resolve labels for fact data - optimized for batch operations
  * @returns {DataLoader} DataLoader instance for dimension values
  */
-const createDimensionValueLoader = () => {
-    const loader = new DimensionLoader();
+const createDimensionValueLoader = (databaseId = null) => {
+    const loader = new DimensionLoader(databaseId);
     return loader.createBatchLoader(
         (connection, params) => loader.loadBatchValues(connection, params),
         {

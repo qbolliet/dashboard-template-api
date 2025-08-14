@@ -5,18 +5,22 @@ import { config } from '../../utils/config-loader.js';
 // Resolver pour la sélection des options
 const selectOptionsResolvers = {
     Query: {
-        getSelectOptions: async (_, { fieldName, limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT, searchTerm = "" }, { loaders }) => {
+        getSelectOptions: async (_, { fieldName, limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT, searchTerm = "", database }, { loaders, getLoadersForDatabase }) => {
+            const targetLoaders = getLoadersForDatabase(database);
+            const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
             return withTimeout(
-                loaders.selectOptions.load({ fieldName, limit, searchTerm }),
+                loader.load({ fieldName, limit, searchTerm }),
                 config.API.TIMEOUTS.SELECT_OPTIONS,
                 'Select options fetch timeout'
             );
         },
 
-        getGroupedSelectOptions: async (_, { groupField, optionsField, limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT }, { loaders }) => {
+        getGroupedSelectOptions: async (_, { groupField, optionsField, limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT, database }, { loaders, getLoadersForDatabase }) => {
+            const targetLoaders = getLoadersForDatabase(database);
+            const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
             const [groupOptions, fieldOptions] = await Promise.all([
-                loaders.selectOptions.load({ fieldName: groupField, limit }),
-                loaders.selectOptions.load({ fieldName: optionsField, limit })
+                loader.load({ fieldName: groupField, limit }),
+                loader.load({ fieldName: optionsField, limit })
             ]);
 
             return {

@@ -7,12 +7,14 @@ const selectTypeDefs = gql`
       fieldName: String!
       limit: Int = 50
       searchTerm: String = ""
+      database: String
     ): [SelectOption!]!
     
     getGroupedSelectOptions(
       groupField: String!
       optionsField: String!
       limit: Int = 50
+      database: String
     ): GroupedSelectOptions!
   }
 
