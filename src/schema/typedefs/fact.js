@@ -110,6 +110,7 @@ const factTypeDefs = gql`
             limit: Int! = 100
             offset: Int! = 0
             sort: [SortInput!]
+            database: String
         ): PaginatedFacts
         
         "Get fact data optimized for D3 visualization"
@@ -120,6 +121,7 @@ const factTypeDefs = gql`
             limit: Int! = 100
             offset: Int! = 0
             sort: [SortInput!]
+            database: String
         ): DatasetWithMetadata
         
         "Get aggregated facts for charts and summaries"
@@ -132,6 +134,7 @@ const factTypeDefs = gql`
             limit: Int! = 100
             offset: Int! = 0
             sort: [SortInput!]
+            database: String
         ): [AggregatedFact]
 
         "Get aggregated facts with D3 metadata"
@@ -144,6 +147,7 @@ const factTypeDefs = gql`
             limit: Int! = 100
             offset: Int! = 0
             sort: [SortInput!]
+            database: String
         ): AggregatedFactsWithMetadata
     }
 `;

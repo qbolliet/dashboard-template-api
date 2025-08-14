@@ -16,25 +16,26 @@ import {
 // Fonction de création des différents loaders
 /**
  * Creates and initializes all data loaders
+ * @param {string} databaseId - Database identifier to use for all loaders
  * @returns {Object} Object containing all initialized loaders
  */
-const createLoaders = () => {
+const createLoaders = (databaseId = null) => {
     // Initialisation de tous les loaders
-    const metadataLoader = createMetadataLoader();
-    const dimensionLoader = createDimensionLoader();
-    const dimensionValueLoader = createDimensionValueLoader();
+    const metadataLoader = createMetadataLoader(databaseId);
+    const dimensionLoader = createDimensionLoader(databaseId);
+    const dimensionValueLoader = createDimensionValueLoader(databaseId);
     
     // Loaders pour les faits
-    const factLoader = createFactLoader();
-    const factWithCountLoader = createFactWithCountLoader();
-    const factWithMetadataLoader = createFactWithMetadataLoader();
+    const factLoader = createFactLoader(databaseId);
+    const factWithCountLoader = createFactWithCountLoader(databaseId);
+    const factWithMetadataLoader = createFactWithMetadataLoader(databaseId);
     
     // Loaders pour les faits agrégés
-    const aggregatedFactsLoader = createAggregatedFactsLoader();
-    const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader();
-    const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader();
+    const aggregatedFactsLoader = createAggregatedFactsLoader(databaseId);
+    const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader(databaseId);
+    const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(databaseId);
     
-    const selectOptionsLoader = createSelectOptionsLoader();
+    const selectOptionsLoader = createSelectOptionsLoader(databaseId);
 
     // Retourne un objet avec l'ensemble des loaders
     return {
@@ -123,8 +124,8 @@ const createLoaders = () => {
 };
 
 // Fonction pour créer de nouveaux loaders pour chaque demande
-const createLoadersForRequest = () => {
-    return createLoaders();
+const createLoadersForRequest = (databaseId = null) => {
+    return createLoaders(databaseId);
 };
 
 export { createLoaders, createLoadersForRequest };

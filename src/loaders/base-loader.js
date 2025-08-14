@@ -1,6 +1,6 @@
 // Importation des modules
 import DataLoader from 'dataloader';
-import { dbPool } from '../db/index.js';
+import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../utils/config-loader.js';
@@ -19,12 +19,14 @@ class BaseQueryLoader {
      * @param {number} config.batchSize - Maximum batch size for DataLoader
      * @param {string} config.cachePrefix - Prefix for cache keys
      * @param {boolean} config.cache - Whether to enable caching
+     * @param {string} config.databaseId - Database identifier to use
      */
     constructor(config = {}) {
         this.batchSize = config.batchSize || 5;
         this.cachePrefix = config.cachePrefix || 'default';
         this.cacheEnabled = config.cache !== false;
         this.cacheTimeout = config.cacheTimeout || config.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
+        this.databaseId = config.databaseId || null; // null means use default database
     }
 
     // Méthode exécutant une fonction à partir d'une connexion à la base de données
@@ -36,18 +38,21 @@ class BaseQueryLoader {
      */
     async executeWithConnection(queryFn) {
         let connection;
+        let pool;
         try {
+            // Get the appropriate database pool
+            pool = databaseManager.getPool(this.databaseId);
             // Acquisition de la connexion
-            connection = await dbPool.acquire();
+            connection = await pool.acquire();
             // Exécution de la fonction avec la connexion
             return await queryFn(connection);
         } catch (error) {
-            logger.error(`Error in ${this.cachePrefix} loader:`, error);
+            logger.error(`Error in ${this.cachePrefix} loader (database: ${this.databaseId || 'default'}):`, error);
             throw error;
         } finally {
             // Libération de la connexion
-            if (connection) {
-                dbPool.release(connection);
+            if (connection && pool) {
+                pool.release(connection);
             }
         }
     }
@@ -65,7 +70,7 @@ class BaseQueryLoader {
         }
 
         try {
-            const cacheKey = `${this.cachePrefix}:${JSON.stringify(key)}`;
+            const cacheKey = `${this.cachePrefix}:${this.databaseId || 'default'}:${JSON.stringify(key)}`;
             return await withCache(cacheKey, loader, this.cacheTimeout);
         } catch (error) {
             logger.error(`Cache error in ${this.cachePrefix} loader:`, error);

@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { schema } from './schema/index.js';
 import { createLoaders } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
-import { closeConnections } from './db/index.js';
+import { closeAllConnections, databaseManager } from './db/index.js';
 import { redis } from './cache/index.js';
 import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
@@ -140,12 +140,38 @@ async function startServer() {
         // Schéma de l'API
         schema,
         // Contexte de la requête
-        context: async ({ req, res }) => ({
-            requestId: uuidv4(),
-            loaders: createLoaders(),
-            req,
-            res
-        }),
+        context: async ({ req, res }) => {
+            // Extract database routing information
+            const headerDatabase = req.headers['x-database-id'];
+            
+            // Validate database routing if specified
+            let validatedDatabase = null;
+            if (headerDatabase) {
+                try {
+                    validatedDatabase = databaseManager.validateDatabaseRouting(null, headerDatabase);
+                } catch (error) {
+                    logger.warn('Invalid database specified in header', { 
+                        requestedDatabase: headerDatabase,
+                        error: error.message 
+                    });
+                    // Continue with default database rather than failing
+                }
+            }
+            
+            return {
+                requestId: uuidv4(),
+                loaders: createLoaders(validatedDatabase), // Create loaders for the specific database
+                databaseManager,
+                requestDatabase: validatedDatabase, // Store for GraphQL parameter override
+                // Helper function to get loaders for a specific database
+                getLoadersForDatabase: (databaseId) => {
+                    const targetDb = databaseManager.validateDatabaseRouting(databaseId, validatedDatabase);
+                    return targetDb === validatedDatabase ? null : createLoaders(targetDb);
+                },
+                req,
+                res
+            };
+        },
         // Autorise l'introspection en developpement
         introspection: config.API.GRAPHQL.INTROSPECTION,
         // Formattage des erreurs
@@ -282,7 +308,7 @@ async function startServer() {
                 // Fermeture du cache
                 redis.quit(),
                 /// Fermeture des connexions
-                closeConnections(),
+                closeAllConnections(),
                 // Fermeture du gestionnaire de sécurité
                 securityManager.cleanup(),
                 // Fermeture du serveur

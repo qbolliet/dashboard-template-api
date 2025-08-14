@@ -10,12 +10,13 @@ import { buildWhereClause } from '../utils/utils.js';
  */
 class FactLoader extends FactQueryLoader {
     // Initialisation
-    constructor() {
+    constructor(databaseId = null) {
         super({
             batchSize: config.API.LOADERS.BATCH_SIZE,
             cachePrefix: 'facts',
             cache: true,
-            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT // 5 minutes pour les faits
+            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT, // 5 minutes pour les faits
+            databaseId: databaseId
         });
     }
 
@@ -121,8 +122,8 @@ class FactLoader extends FactQueryLoader {
  * Creates a DataLoader for facts
  * @returns {DataLoader} DataLoader instance for facts
  */
-const createFactLoader = () => {
-    const loader = new FactLoader();
+const createFactLoader = (databaseId = null) => {
+    const loader = new FactLoader(databaseId);
     return loader.createLoader((connection, params) => loader.loadFacts(connection, params));
 };
 
@@ -131,8 +132,8 @@ const createFactLoader = () => {
  * Creates a DataLoader for facts with count
  * @returns {DataLoader} DataLoader instance for facts with count
  */
-const createFactWithCountLoader = () => {
-    const loader = new FactLoader();
+const createFactWithCountLoader = (databaseId = null) => {
+    const loader = new FactLoader(databaseId);
     return loader.createLoader((connection, params) => 
         loader.loadFacts(connection, { ...params, includeCount: true })
     );
@@ -143,8 +144,8 @@ const createFactWithCountLoader = () => {
  * Creates a DataLoader for facts with D3 metadata
  * @returns {DataLoader} DataLoader instance for facts with metadata
  */
-const createFactWithMetadataLoader = () => {
-    const loader = new FactLoader();
+const createFactWithMetadataLoader = (databaseId = null) => {
+    const loader = new FactLoader(databaseId);
     return loader.createLoader((connection, params) => 
         loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true })
     );
