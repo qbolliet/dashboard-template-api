@@ -1,0 +1,742 @@
+# Requêtes de test pour l'API GraphQL DuckDB avec support multi-database
+# À utiliser dans Apollo Studio (https://studio.apollographql.com)
+#
+# CONFIGURATION MULTI-DATABASE:
+# - HTTP Header: X-Database-ID: [database_name]
+# - GraphQL Parameter: database: "[database_name]"
+# - Databases disponibles: default, macroeconomics, public_finance
+#
+# Priorité: GraphQL parameter > HTTP header > default database
+
+# ============================================
+# 1. TESTS DES MÉTADONNÉES
+# ============================================
+
+# Test 1.1: Récupérer les métadonnées d'un champ (database par défaut)
+query TestGetMetadata {
+  getMetaData(name: "country") {
+    name
+    label
+    python_type
+    sql_type
+    is_categorical
+  }
+}
+
+# Test 1.1b: Récupérer les métadonnées avec database spécifique
+query TestGetMetadataSpecificDB {
+  getMetaData(name: "country", database: "macroeconomics") {
+    name
+    label
+    python_type
+    sql_type
+    is_categorical
+  }
+}
+
+# Test 1.2: Récupérer les métadonnées de plusieurs champs
+query TestMultipleMetadata {
+  indicator: getMetaData(name: "indicator") {
+    name
+    label
+    is_categorical
+  }
+  value: getMetaData(name: "value") {
+    name
+    label
+    is_categorical
+  }
+  date: getMetaData(name: "date") {
+    name
+    sql_type
+    is_categorical
+  }
+}
+
+# Test 1.2b: Récupérer les métadonnées de plusieurs champs avec databases différentes
+query TestMultipleMetadataCrossDB {
+  defaultIndicator: getMetaData(name: "indicator", database: "default") {
+    name
+    label
+    is_categorical
+  }
+  macroeconomicsValue: getMetaData(name: "value", database: "macroeconomics") {
+    name
+    label
+    is_categorical
+  }
+  public_financeDate: getMetaData(name: "date", database: "public_finance") {
+    name
+    sql_type
+    is_categorical
+  }
+}
+
+# ============================================
+# 2. TESTS DES TABLES DE DIMENSION
+# ============================================
+
+# Test 2.1: Récupérer une table de dimension
+query TestGetDimension {
+  getDimensionTable(name: "country") {
+    value
+    label
+  }
+}
+
+# Test 2.1b: Récupérer une table de dimension depuis macroeconomics database
+query TestGetDimensionmacroeconomics {
+  getDimensionTable(name: "country", database: "macroeconomics") {
+    value
+    label
+  }
+}
+
+# Test 2.2: Récupérer plusieurs dimensions
+query TestMultipleDimensions {
+  countries: getDimensionTable(name: "country") {
+    value
+    label
+  }
+  indicators: getDimensionTable(name: "indicator") {
+    value
+    label
+  }
+  kinds: getDimensionTable(name: "kind") {
+    value
+    label
+  }
+}
+
+# Test 2.2b: Récupérer dimensions depuis databases différentes
+query TestMultipleDimensionsCrossDB {
+  defaultCountries: getDimensionTable(name: "country", database: "default") {
+    value
+    label
+  }
+  macroeconomicsIndicators: getDimensionTable(name: "indicator", database: "macroeconomics") {
+    value
+    label
+  }
+  public_financeKinds: getDimensionTable(name: "kind", database: "public_finance") {
+    value
+    label
+  }
+}
+
+# ============================================
+# 3. TESTS DE LA TABLE DES FAITS
+# ============================================
+
+# Test 3.1: Requête simple avec pagination
+query TestFactTableSimple {
+  getFactTable(limit: 10, offset: 0) {
+    data {
+      value
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
+  }
+}
+
+# Test 3.1b: Requête simple depuis macroeconomics database
+query TestFactTablemacroeconomics {
+  getFactTable(limit: 10, offset: 0, database: "macroeconomics") {
+    data {
+      value
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
+  }
+}
+
+# Test 3.2: Requête avec filtres
+query TestFactTableWithFilters {
+  getFactTable(
+    filters: "country = 1 AND indicator = 1"
+    limit: 20
+    offset: 0
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 3.3: Requête avec filtres structurés
+query TestFactTableStructuredFilters {
+  getFactTable(
+    structuredFilters: [
+      { key: "country", operator: "=", value: "1" }
+      { key: "kind", operator: "=", value: "1" }
+    ]
+    limit: 10
+    offset: 0
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 3.4: Requête avec tri
+query TestFactTableWithSort {
+  getFactTable(
+    sort: [
+      { field: "value", order: DESC }
+      { field: "date", order: ASC }
+    ]
+    limit: 15
+    offset: 0
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 3.5: Requête avec sélection de champs spécifiques
+query TestFactTableSelectFields {
+  getFactTable(
+    fields: ["country", "indicator", "value", "date"]
+    limit: 5
+    offset: 0
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 3.6: Requête avec détails des dimensions
+query TestFactTableWithDimensionDetails {
+  getFactTable(limit: 5, offset: 0) {
+    data {
+      value
+      dimensionDetails {
+        name
+        value
+        label
+      }
+    }
+    total
+  }
+}
+
+# ============================================
+# 4. TESTS DE LA TABLE DES FAITS AVEC MÉTADONNÉES
+# ============================================
+
+# Test 4.1: Requête avec métadonnées optimisées pour D3
+query TestFactTableWithMetadata {
+  getFactTableWithMetadata(limit: 50, offset: 0) {
+    columns
+    data
+    metadata {
+      count
+      extents
+      total
+      hasNextPage
+      currentPage
+      totalPages
+    }
+  }
+}
+
+# Test 4.2: Requête avec métadonnées et filtres
+query TestFactTableMetadataFiltered {
+  getFactTableWithMetadata(
+    structuredFilters: [
+      { key: "country", operator: "IN", values: ["1", "2", "3"] }
+    ]
+    limit: 100
+    offset: 0
+  ) {
+    columns
+    data
+    metadata {
+      count
+      extents
+      total
+    }
+  }
+}
+
+# ============================================
+# 5. TESTS DES FAITS AGRÉGÉS
+# ============================================
+
+# Test 5.1: Agrégation simple
+query TestAggregatedFactsSimple {
+  getAggregatedFacts(
+    groupBy: "country"
+    aggregation: SUM
+    limit: 10
+    offset: 0
+  ) {
+    key
+    aggregatedValue
+    count
+  }
+}
+
+# Test 5.2: Différentes fonctions d'agrégation
+query TestAggregationFunctions {
+  sumByCountry: getAggregatedFacts(groupBy: "country", aggregation: SUM) {
+    key
+    aggregatedValue
+  }
+  avgByIndicator: getAggregatedFacts(groupBy: "indicator", aggregation: AVG) {
+    key
+    aggregatedValue
+  }
+  maxByKind: getAggregatedFacts(groupBy: "kind", aggregation: MAX) {
+    key
+    aggregatedValue
+  }
+  countByModel: getAggregatedFacts(groupBy: "model", aggregation: COUNT) {
+    key
+    aggregatedValue
+  }
+}
+
+# Test 5.3: Agrégation avec filtres
+query TestAggregatedFactsFiltered {
+  getAggregatedFacts(
+    groupBy: "indicator"
+    aggregation: AVG
+    filters: "country IN (1, 2) AND kind = 1"
+    limit: 20
+    offset: 0
+  ) {
+    key
+    aggregatedValue
+    count
+  }
+}
+
+# Test 5.4: Agrégation avec tri
+query TestAggregatedFactsSorted {
+  getAggregatedFacts(
+    groupBy: "country"
+    aggregation: SUM
+    sort: [{ field: "aggregatedValue", order: DESC }]
+    limit: 10
+    offset: 0
+  ) {
+    key
+    aggregatedValue
+    count
+  }
+}
+
+# Test 5.5: Agrégation avec labels de clés
+query TestAggregatedFactsWithKeyLabels {
+  getAggregatedFacts(
+    groupBy: "country"
+    aggregation: SUM
+    limit: 5
+    offset: 0
+  ) {
+    key
+    keyLabel
+    aggregatedValue
+    count
+  }
+}
+
+# ============================================
+# 6. TESTS DES FAITS AGRÉGÉS AVEC MÉTADONNÉES
+# ============================================
+
+# Test 6.1: Agrégation avec métadonnées complètes
+query TestAggregatedFactsWithMetadata {
+  getAggregatedFactsWithMetadata(
+    groupBy: "indicator"
+    aggregation: AVG
+    limit: 10
+    offset: 0
+  ) {
+    data {
+      key
+      keyLabel
+      aggregatedValue
+      count
+    }
+    metadata {
+      count
+      keyExtent
+      valueExtent
+      statistics {
+        mean
+        median
+        stdDev
+        quartiles
+      }
+      groupByFieldInfo {
+        name
+        label
+        is_categorical
+      }
+    }
+  }
+}
+
+# ============================================
+# 7. TESTS DES OPTIONS DE SÉLECTION
+# ============================================
+
+# Test 7.1: Options de sélection simples
+query TestSelectOptions {
+  getSelectOptions(fieldName: "country", limit: 10) {
+    value
+    label
+  }
+}
+
+# Test 7.2: Options avec recherche
+query TestSelectOptionsWithSearch {
+  getSelectOptions(
+    fieldName: "country"
+    searchTerm: "Fra"
+    limit: 5
+  ) {
+    value
+    label
+  }
+}
+
+# Test 7.3: Options groupées
+query TestGroupedSelectOptions {
+  getGroupedSelectOptions(
+    groupField: "country"
+    optionsField: "indicator"
+    limit: 20
+  ) {
+    group {
+      value
+      label
+    }
+    options {
+      value
+      label
+    }
+  }
+}
+
+# ============================================
+# 8. TESTS DE PAGINATION
+# ============================================
+
+# Test 8.1: Pagination sur les faits
+query TestPaginationFacts {
+  page1: getFactTable(limit: 10, offset: 0) {
+    data {
+      value
+    }
+    total
+    currentPage
+    hasNextPage
+  }
+  page2: getFactTable(limit: 10, offset: 10) {
+    data {
+      value
+    }
+    currentPage
+    hasNextPage
+  }
+}
+
+# Test 8.2: Pagination sur les agrégations
+query TestPaginationAggregated {
+  getAggregatedFacts(
+    groupBy: "country"
+    aggregation: SUM
+    limit: 2
+    offset: 2
+  ) {
+    key
+    aggregatedValue
+  }
+}
+
+# ============================================
+# 9. TESTS DE LIMITES ET ERREURS
+# ============================================
+
+# Test 9.1: Limite maximale (devrait échouer)
+query TestMaxLimit {
+  getFactTable(limit: 1001, offset: 0) {
+    data {
+      value
+    }
+  }
+}
+
+# Test 9.2: Offset maximal (devrait échouer)
+query TestMaxOffset {
+  getFactTable(limit: 10, offset: 10001) {
+    data {
+      value
+    }
+  }
+}
+
+# Test 9.3: Champ inexistant (devrait échouer)
+query TestInvalidField {
+  getMetaData(name: "field_that_does_not_exist") {
+    name
+    label
+  }
+}
+
+# ============================================
+# 10. TESTS DE COMPLEXITÉ
+# ============================================
+
+# Test 10.1: Requête complexe combinée
+query TestComplexQuery {
+  # Métadonnées
+  countryMeta: getMetaData(name: "country") {
+    name
+    label
+    is_categorical
+  }
+  
+  # Dimensions
+  countries: getDimensionTable(name: "country") {
+    value
+    label
+  }
+  
+  # Faits avec détails
+  facts: getFactTable(
+    structuredFilters: [
+      { key: "country", operator: "=", value: "1" }
+    ]
+    sort: [{ field: "value", order: DESC }]
+    limit: 5
+    offset: 0
+  ) {
+    data {
+      value
+      dimensionDetails {
+        name
+        value
+        label
+      }
+    }
+    total
+  }
+  
+  # Agrégations
+  aggregated: getAggregatedFacts(
+    groupBy: "indicator"
+    aggregation: AVG
+    filters: "country = 1"
+  ) {
+    key
+    keyLabel
+    aggregatedValue
+  }
+  
+  # Options de sélection
+  options: getSelectOptions(fieldName: "indicator") {
+    value
+    label
+  }
+}
+
+# ============================================
+# 11. TESTS DE PERFORMANCE
+# ============================================
+
+# Test 11.1: Requête volumineuse
+query TestLargeDataset {
+  getFactTable(limit: 1000, offset: 0) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 11.2: Agrégation sur grande période
+query TestLargeAggregation {
+  getAggregatedFacts(
+    groupBy: "date"
+    aggregation: AVG
+    limit: 1000
+    offset: 0
+  ) {
+    key
+    aggregatedValue
+    count
+  }
+}
+
+# ============================================
+# 12. VARIABLES DE TEST
+# ============================================
+
+# Pour tester avec des variables dans Apollo Studio
+query TestWithVariables(
+  $country: String!
+  $limit: Int!
+  $offset: Int!
+) {
+  getFactTable(
+    structuredFilters: [
+      { key: "country", operator: "=", value: $country }
+    ]
+    limit: $limit
+    offset: $offset
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Variables à utiliser :
+# {
+#   "country": "1",
+#   "limit": 10,
+#   "offset": 0
+# }
+
+# ============================================
+# 13. TESTS MULTI-DATABASE AVEC HTTP HEADERS
+# ============================================
+
+# Test 13.1: Utilisation du header HTTP X-Database-ID
+# Dans Apollo Studio, ajouter dans Headers:
+# {
+#   "X-Database-ID": "macroeconomics"
+# }
+query TestWithHTTPHeader {
+  getMetaData(name: "country") {
+    name
+    label
+    is_categorical
+  }
+  getDimensionTable(name: "country") {
+    value
+    label
+  }
+}
+
+# Test 13.2: Override du header avec paramètre GraphQL
+# Header: X-Database-ID: macroeconomics
+# Paramètre GraphQL: database: "public_finance"
+# Le paramètre GraphQL devrait avoir la priorité
+query TestParameterOverridesHeader {
+  fromHeader: getMetaData(name: "country") {
+    name
+    label
+  }
+  fromParameter: getMetaData(name: "country", database: "public_finance") {
+    name
+    label
+  }
+}
+
+# Test 13.3: Requête complexe multi-database
+query TestComplexMultiDB {
+  # Métadonnées depuis default
+  defaultMeta: getMetaData(name: "country") {
+    name
+    label
+    is_categorical
+  }
+  
+  # Dimensions depuis macroeconomics
+  macroeconomicsDims: getDimensionTable(name: "country", database: "macroeconomics") {
+    value
+    label
+  }
+  
+  # Faits depuis public_finance
+  public_financeFacts: getFactTable(
+    limit: 5
+    offset: 0
+    database: "public_finance"
+  ) {
+    data {
+      value
+    }
+    total
+  }
+  
+  # Options depuis macroeconomics
+  macroeconomicsOptions: getSelectOptions(
+    fieldName: "country"
+    limit: 5
+    database: "macroeconomics"
+  ) {
+    value
+    label
+  }
+}
+
+# ============================================
+# 14. TESTS DE VALIDATION DES DATABASES
+# ============================================
+
+# Test 14.1: Database invalide (devrait utiliser default)
+query TestInvalidDatabase {
+  getMetaData(name: "country", database: "nonexistent") {
+    name
+    label
+  }
+}
+
+# Test 14.2: Database vide (devrait utiliser context/default)
+query TestEmptyDatabase {
+  getMetaData(name: "country", database: "") {
+    name
+    label
+  }
+}
+
+# ============================================
+# 15. INSTRUCTIONS POUR APOLLO STUDIO
+# ============================================
+
+# Pour tester avec Apollo Studio:
+#
+# 1. HEADER HTTP:
+#    Dans l'onglet "Headers" d'Apollo Studio, ajouter:
+#    {
+#      "X-Database-ID": "macroeconomics"
+#    }
+#
+# 2. PARAMÈTRE GRAPHQL:
+#    Utiliser le paramètre database dans vos requêtes:
+#    getMetaData(name: "country", database: "public_finance")
+#
+# 3. PRIORITÉ:
+#    GraphQL parameter > HTTP header > default database
+#
+# 4. DATABASES DISPONIBLES:
+#    - default (database principal)
+#    - macroeconomics (données analytiques)
+#    - public_finance (données de public_finance)
+#
+# 5. VALIDATION:
+#    Les databases non configurées reviennent au default
+#    Les erreurs de configuration sont loggées
+#
+# 6. EXEMPLES DE HEADERS:
+#    Valide:   { "X-Database-ID": "macroeconomics" }
+#    Invalide: { "X-Database-ID": "unknown" }  -> utilise default
+#    Vide:     { "X-Database-ID": "" }         -> utilise default
