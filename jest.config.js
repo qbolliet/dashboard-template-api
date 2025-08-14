@@ -5,9 +5,17 @@ export default {
   testEnvironment: 'node',
   
   // Support des modules ES6
+  moduleNameMapper: {
+    '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^@/(.*)$': '<rootDir>/src/$1',
+    '^@tests/(.*)$': '<rootDir>/tests/$1'
+  },
   
-  // Transformation des modules
+  // Transformation des modules - disable transforms for ES modules
   transform: {},
+  transformIgnorePatterns: [
+    'node_modules/(?!(chalk|graphql-request|other-esm-modules)/)'
+  ],
   
   // Patterns des fichiers de test
   testMatch: [
@@ -19,7 +27,8 @@ export default {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/dist/',
-    '/build/'
+    '/build/',
+    '/test-data/'
   ],
   
   // Coverage
@@ -28,6 +37,8 @@ export default {
     '!src/index.js',
     '!src/server.js'
   ],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['text', 'lcov', 'html'],
   
   // Timeout pour les tests (utile pour les tests de base de données)
   testTimeout: 30000,
@@ -38,5 +49,16 @@ export default {
   },
   
   // Setup des tests
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.js']
+  setupFiles: ['<rootDir>/tests/setup-env.js'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+  
+  // Clear mocks between tests
+  clearMocks: true,
+  restoreMocks: true,
+  
+  // Verbose output for debugging
+  verbose: true,
+  
+  // Enable experimental VM modules
+  injectGlobals: false
 };

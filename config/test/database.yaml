@@ -1,0 +1,29 @@
+# Test database configuration
+
+DATABASE_ROUTING:
+  DEFAULT_DATABASE: "main"
+  ALLOWED_DATABASES: ["main", "test", "analytics"]
+  ALLOW_CROSS_DATABASE_QUERIES: true
+
+DATABASES:
+  main:
+    PATH: "${DB_PATH:-test-data/main.db}"
+    POOL:
+      MAX_CONNECTIONS: 3
+      ACQUIRE_TIMEOUT: 5000
+      CONNECTION_RETRY_DELAY: 500
+      CONNECTION_RETRY_MAX: 2
+  test:
+    PATH: "test-data/test.db"
+    POOL:
+      MAX_CONNECTIONS: 2
+      ACQUIRE_TIMEOUT: 3000
+      CONNECTION_RETRY_DELAY: 300
+      CONNECTION_RETRY_MAX: 1
+  analytics:
+    PATH: "test-data/analytics.db"
+    POOL:
+      MAX_CONNECTIONS: 2
+      ACQUIRE_TIMEOUT: 3000
+      CONNECTION_RETRY_DELAY: 300
+      CONNECTION_RETRY_MAX: 1
