@@ -29,16 +29,13 @@ class DuckDBPool {
      * @returns {Promise<Object>} The DuckDB instance
      */
     async initializeInstance() {
-        if (this.instance) {
-            return this.instance;
-        }
-
-        if (this.instancePromise) {
-            return await this.instancePromise;
-        }
-
-        this.instancePromise = DuckDBInstance.create(this.config.path);
+        this.instancePromise = DuckDBInstance.create(':memory:');  // ou fichier temporaire
         this.instance = await this.instancePromise;
+        const conn = await this.instance.connect();
+        await conn.run("INSTALL ducklake; LOAD ducklake;");
+        await conn.run(`ATTACH 'ducklake:${this.config.catalogPath}' AS db (READ_ONLY)`);
+        await conn.run("USE db");
+        await conn.close();
         return this.instance;
     }
     
