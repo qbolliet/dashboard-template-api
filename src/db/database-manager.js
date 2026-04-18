@@ -74,10 +74,12 @@ class DatabaseManager {
         const catalogs = [];
 
         for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
-            // Résolution du chemin absolu vers le fichier catalogue
-            const catalogPath = resolve(__dirname, '../../', catalogConfig.PATH);
+            // Résolution du chemin absolu vers le fichier catalogue (slashes pour DuckLake)
+            const catalogPath = resolve(__dirname, '../../', catalogConfig.PATH).replace(/\\/g, '/');
             // Résolution du chemin absolu vers le répertoire de données Parquet
-            const dataPath = resolve(__dirname, '../../', catalogConfig.DATA_PATH);
+            const dataPathRaw = resolve(__dirname, '../../', catalogConfig.DATA_PATH).replace(/\\/g, '/');
+            // DuckLake exige un slash final sur DATA_PATH
+            const dataPath = dataPathRaw.endsWith('/') ? dataPathRaw : dataPathRaw + '/';
 
             // Vérification de l'existence du fichier catalogue
             if (!fs.existsSync(catalogPath)) {
