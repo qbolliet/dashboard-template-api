@@ -1,5 +1,5 @@
 // Importation des modules
-import { gql } from 'apollo-server';
+import { gql } from 'graphql-tag';
 
 // Définition du type des méta-données
 const metadataTypeDefs = gql`

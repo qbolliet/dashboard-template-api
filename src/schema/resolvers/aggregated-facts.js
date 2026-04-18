@@ -1,6 +1,6 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
-import { ValidationError } from 'apollo-server';
+import { GraphQLError } from 'graphql';
 import { enrichAggregatedFacts } from './field-resolvers.js';
 import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
@@ -21,35 +21,35 @@ const aggregatedFactsResolvers = {
             // Validation des opérations d'agrégation
             const validAggregations = ['SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'];
             if (!validAggregations.includes(aggregation)) {
-                throw new ValidationError(
+                throw new GraphQLError(
                     `Invalid aggregation type. Must be one of: ${validAggregations.join(', ')}`
                 );
             }
 
             // Groupby est un élément obligatoire
             if (!groupBy) {
-                throw new ValidationError('groupBy field is required');
+                throw new GraphQLError('groupBy field is required');
             }
             
             // Définition d'un offset valide
             if (offset > config.API.PAGINATION.MAX_OFFSET) {
-                throw new ValidationError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
+                throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
             }
 
             // Définition d'une limite valide
             if (limit > config.API.PAGINATION.MAX_LIMIT) {
-                throw new ValidationError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+                throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
             }
 
             // Validation des champs sur lesquels trier et des opérations de tri
             sort.forEach(({ field, order }) => {
                 if (field !== 'key' && field !== 'aggregatedValue') {
-                    throw new ValidationError(
+                    throw new GraphQLError(
                         'Sort field must be either "key" or "aggregatedValue"'
                     );
                 }
                 if (!['ASC', 'DESC'].includes(order)) {
-                    throw new ValidationError('Sort order must be either "ASC" or "DESC"');
+                    throw new GraphQLError('Sort order must be either "ASC" or "DESC"');
                 }
             });
 
@@ -98,35 +98,35 @@ const aggregatedFactsResolvers = {
             // Validation des opérations d'agrégation
             const validAggregations = ['SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'];
             if (!validAggregations.includes(aggregation)) {
-                throw new ValidationError(
+                throw new GraphQLError(
                     `Invalid aggregation type. Must be one of: ${validAggregations.join(', ')}`
                 );
             }
 
             // Groupby est un élément obligatoire
             if (!groupBy) {
-                throw new ValidationError('groupBy field is required');
+                throw new GraphQLError('groupBy field is required');
             }
             
             // Définition d'un offset valide
             if (offset > config.API.PAGINATION.MAX_OFFSET) {
-                throw new ValidationError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
+                throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
             }
 
             // Définition d'une limite valide
             if (limit > config.API.PAGINATION.MAX_LIMIT) {
-                throw new ValidationError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+                throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
             }
 
             // Validation des champs sur lesquels trier et des opérations de tri
             sort.forEach(({ field, order }) => {
                 if (field !== 'key' && field !== 'aggregatedValue') {
-                    throw new ValidationError(
+                    throw new GraphQLError(
                         'Sort field must be either "key" or "aggregatedValue"'
                     );
                 }
                 if (!['ASC', 'DESC'].includes(order)) {
-                    throw new ValidationError('Sort order must be either "ASC" or "DESC"');
+                    throw new GraphQLError('Sort order must be either "ASC" or "DESC"');
                 }
             });
             
