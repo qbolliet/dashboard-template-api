@@ -66,8 +66,8 @@ class DuckDBPool {
             const instance = await DuckDBInstance.create(':memory:');
             const conn = await instance.connect();
 
-            // Installation et chargement de l'extension DuckLake (opération unique)
-            await conn.run("INSTALL ducklake FROM community; LOAD ducklake;");
+            // Chargement de ducklake
+            await conn.run("LOAD ducklake;");
 
             // Support S3 : chargement de l'extension httpfs si activé dans la config
             if (config.S3?.ENABLED) {
