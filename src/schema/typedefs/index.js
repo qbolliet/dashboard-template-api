@@ -1,5 +1,5 @@
 // Importation des éléments du dossier
-import { gql } from 'apollo-server';
+import { gql } from 'graphql-tag';
 import { mergeTypeDefs } from '@graphql-tools/merge';
 import { commonTypeDefs } from './common.js';
 import { dimensionTypeDefs } from './dimension.js';
