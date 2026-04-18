@@ -29,7 +29,7 @@ class DimensionLoader extends BaseQueryLoader {
     async loadSingle(connection, name) {
         try {            
             // Construction de la requête de la table de dimensions
-            const query = `SELECT * FROM dim_${name}`;
+            const query = `SELECT * FROM ${this.qualifyTable(`dim_${name}`)}`;
             
             // Exécution de la requête
             const results = await connection.all(query);
@@ -53,7 +53,7 @@ class DimensionLoader extends BaseQueryLoader {
      */
     async loadSingleValue(connection, { dimensionName, value }) {
         try {
-            const query = `SELECT value, label FROM dim_${dimensionName} WHERE value = ?`;
+            const query = `SELECT value, label FROM ${this.qualifyTable(`dim_${dimensionName}`)} WHERE value = ?`;
             const results = await connection.all(query, [value]);
             
             if (results && results.length > 0) {
@@ -104,7 +104,7 @@ class DimensionLoader extends BaseQueryLoader {
         for (const [dimensionName, values] of Object.entries(groupedParams)) {
             try {
                 const placeholders = values.map(() => '?').join(',');
-                const query = `SELECT value, label FROM dim_${dimensionName} WHERE value IN (${placeholders})`;
+                const query = `SELECT value, label FROM ${this.qualifyTable(`dim_${dimensionName}`)} WHERE value IN (${placeholders})`;
                 const dimensionResults = await connection.all(query, values);
                 
                 // Crée un map pour un accès rapide

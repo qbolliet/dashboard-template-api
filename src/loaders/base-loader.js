@@ -57,6 +57,20 @@ class BaseQueryLoader {
         }
     }
 
+    // Méthode de qualification d'un nom de table avec le catalogue DuckLake courant
+    /**
+     * Returns a fully qualified table name for the current catalog.
+     * With DuckLake multi-catalog setup, all table names must be prefixed:
+     *   {catalogId}.main.{tableName}
+     *
+     * @param {string} tableName - Bare table name (e.g. 'fact_table', 'dim_country').
+     * @returns {string} Fully qualified table name.
+     */
+    qualifyTable(tableName) {
+        const catalog = this.databaseId || databaseManager.defaultDatabase;
+        return `${catalog}.main.${tableName}`;
+    }
+
     // Méthode de chargement de données avec mise en cache
     /**
      * Loads data with caching support

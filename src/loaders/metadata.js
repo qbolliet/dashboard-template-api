@@ -28,7 +28,7 @@ class MetadataLoader extends BaseQueryLoader {
      */
     async loadSingle(connection, name) {
         // Paramétrisation de la requête
-        const query = "SELECT * FROM metadata WHERE name = ?";
+        const query = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
         
         // Exécution de la requête
         const result = await connection.all(query, [name]);

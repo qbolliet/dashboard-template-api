@@ -34,15 +34,12 @@ describe('Simple Unit Tests', () => {
         ALLOWED_DATABASES: ['main', 'test'],
         ALLOW_CROSS_DATABASE_QUERIES: true
       },
-      DATABASES: {
-        main: {
-          PATH: 'test.db',
-          POOL: { MAX_CONNECTIONS: 5, ACQUIRE_TIMEOUT: 5000, CONNECTION_RETRY_DELAY: 1000, CONNECTION_RETRY_MAX: 3 }
-        },
-        test: {
-          PATH: 'test2.db',
-          POOL: { MAX_CONNECTIONS: 3, ACQUIRE_TIMEOUT: 3000, CONNECTION_RETRY_DELAY: 500, CONNECTION_RETRY_MAX: 2 }
-        }
+      CATALOGS: {
+        main: { PATH: 'main.ducklake', DATA_PATH: 'main_data/', READ_ONLY: true },
+        test: { PATH: 'test.ducklake', DATA_PATH: 'test_data/', READ_ONLY: false }
+      },
+      DATABASE: {
+        POOL: { MAX_CONNECTIONS: 5, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 100 }
       }
     });
 
@@ -68,41 +65,38 @@ describe('Simple Unit Tests', () => {
 
     test('should validate database configuration', () => {
       const config = createMockConfig();
-      
+
       expect(config.DATABASE_ROUTING.DEFAULT_DATABASE).toBe('main');
       expect(config.DATABASE_ROUTING.ALLOWED_DATABASES).toContain('main');
       expect(config.DATABASE_ROUTING.ALLOWED_DATABASES).toContain('test');
-      expect(config.DATABASES.main.POOL.MAX_CONNECTIONS).toBe(5);
-      expect(config.DATABASES.test.POOL.MAX_CONNECTIONS).toBe(3);
+      expect(config.CATALOGS.main.PATH).toContain('ducklake');
+      expect(config.DATABASE.POOL.MAX_CONNECTIONS).toBe(5);
     });
 
-    test('should handle pool statistics logic', () => {
-      const mockPools = new Map();
-      mockPools.set('main', { available: 5, using: 0, waiting: 0 });
-      mockPools.set('test', { available: 3, using: 1, waiting: 2 });
-      
-      const getStatistics = (pools, config) => {
-        const stats = {};
-        for (const [id, pool] of pools.entries()) {
-          stats[id] = {
-            available: pool.available || 0,
-            using: pool.using || 0,
-            waiting: pool.waiting || 0
-          };
-        }
-        return {
-          databases: stats,
-          defaultDatabase: config.DATABASE_ROUTING.DEFAULT_DATABASE,
-          allowedDatabases: config.DATABASE_ROUTING.ALLOWED_DATABASES
-        };
+    test('should handle shared pool statistics logic', () => {
+      const sharedPool = {
+        pool: [{ inUse: false }, { inUse: true }],
+        maxConnections: 5,
+        catalogs: [{ alias: 'main' }, { alias: 'test' }]
       };
 
-      const stats = getStatistics(mockPools, createMockConfig());
-      
-      expect(stats.databases.main.available).toBe(5);
-      expect(stats.databases.test.available).toBe(3);
-      expect(stats.databases.test.using).toBe(1);
-      expect(stats.databases.test.waiting).toBe(2);
+      const getStatistics = (pool, config) => ({
+        sharedPool: {
+          available: pool.pool.filter(c => !c.inUse).length,
+          using: pool.pool.filter(c => c.inUse).length,
+          total: pool.pool.length,
+          maxConnections: pool.maxConnections,
+          attachedCatalogs: pool.catalogs.map(c => c.alias)
+        },
+        defaultDatabase: config.DATABASE_ROUTING.DEFAULT_DATABASE,
+        allowedDatabases: config.DATABASE_ROUTING.ALLOWED_DATABASES
+      });
+
+      const stats = getStatistics(sharedPool, createMockConfig());
+
+      expect(stats.sharedPool.available).toBe(1);
+      expect(stats.sharedPool.using).toBe(1);
+      expect(stats.sharedPool.attachedCatalogs).toContain('main');
       expect(stats.defaultDatabase).toBe('main');
     });
   });

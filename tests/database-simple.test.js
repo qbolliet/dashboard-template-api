@@ -8,26 +8,26 @@ const mockConfig = {
     ALLOWED_DATABASES: ['main', 'test'],
     ALLOW_CROSS_DATABASE_QUERIES: true
   },
-  DATABASES: {
+  CATALOGS: {
     main: {
-      PATH: 'test/main.db',
-      POOL: {
-        MAX_CONNECTIONS: 5,
-        ACQUIRE_TIMEOUT: 5000,
-        CONNECTION_RETRY_DELAY: 1000,
-        CONNECTION_RETRY_MAX: 3
-      }
+      PATH: 'data/test-main.ducklake',
+      DATA_PATH: 'data/test-main_data/',
+      READ_ONLY: false
     },
     test: {
-      PATH: 'test/test.db',
-      POOL: {
-        MAX_CONNECTIONS: 3,
-        ACQUIRE_TIMEOUT: 3000,
-        CONNECTION_RETRY_DELAY: 500,
-        CONNECTION_RETRY_MAX: 2
-      }
+      PATH: 'data/test-test.ducklake',
+      DATA_PATH: 'data/test-test_data/',
+      READ_ONLY: false
     }
-  }
+  },
+  DATABASE: {
+    POOL: {
+      MAX_CONNECTIONS: 5,
+      ACQUIRE_TIMEOUT: 5000,
+      POOL_RETRY_DELAY: 100
+    }
+  },
+  S3: { ENABLED: false }
 };
 
 jest.mock('../src/utils/config-loader.js', () => ({ config: mockConfig }));
@@ -45,11 +45,13 @@ jest.mock('../src/utils/logger.js', () => ({
 }));
 
 const mockPool = {
+  pool: [],
+  catalogs: [{ alias: 'main' }, { alias: 'test' }],
+  maxConnections: 5,
   close: jest.fn().mockResolvedValue(),
   on: jest.fn(),
-  available: 5,
-  using: 0,
-  waiting: 0
+  acquire: jest.fn().mockResolvedValue({}),
+  release: jest.fn()
 };
 
 jest.mock('../src/db/pool.js', () => ({
@@ -60,7 +62,6 @@ describe('DatabaseManager Unit Tests', () => {
   let DatabaseManager;
 
   beforeAll(async () => {
-    // Import after mocks are set up
     const module = await import('../src/db/database-manager.js');
     DatabaseManager = module.DatabaseManager;
   });
@@ -71,102 +72,84 @@ describe('DatabaseManager Unit Tests', () => {
 
   test('should create DatabaseManager instance', () => {
     const manager = new DatabaseManager();
-    
+
     expect(manager.defaultDatabase).toBe('main');
     expect(manager.allowedDatabases).toEqual(['main', 'test']);
     expect(manager.allowCrossDatabase).toBe(true);
+    expect(manager.sharedPool).toBeDefined();
   });
 
   test('should validate database IDs correctly', () => {
     const manager = new DatabaseManager();
-    
-    // Mock the pools map
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
-    manager.pools.set('test', mockPool);
-    
+
     expect(manager.isValidDatabase('main')).toBe(true);
     expect(manager.isValidDatabase('test')).toBe(true);
     expect(manager.isValidDatabase('invalid')).toBe(false);
+    expect(manager.isValidDatabase(null)).toBe(false);
   });
 
-  test('should return available databases', () => {
+  test('should return available databases from allowed list', () => {
     const manager = new DatabaseManager();
-    
-    // Mock the pools
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
-    manager.pools.set('test', mockPool);
-    
+
     const databases = manager.getAvailableDatabases();
-    expect(databases).toEqual(['main', 'test']);
+    expect(databases).toEqual(expect.arrayContaining(['main', 'test']));
+    expect(databases).toHaveLength(2);
   });
 
   test('should validate database routing', () => {
     const manager = new DatabaseManager();
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
-    manager.pools.set('test', mockPool);
-    
+
     expect(manager.validateDatabaseRouting('test')).toBe('test');
     expect(manager.validateDatabaseRouting(null, 'test')).toBe('test');
     expect(manager.validateDatabaseRouting()).toBe('main');
-    
+
     expect(() => manager.validateDatabaseRouting('invalid')).toThrow();
   });
 
-  test('should provide database statistics', () => {
+  test('should provide database statistics for shared pool', () => {
     const manager = new DatabaseManager();
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
-    manager.pools.set('test', mockPool);
-    
     const stats = manager.getStatistics();
-    
-    expect(stats.databases).toHaveProperty('main');
-    expect(stats.databases).toHaveProperty('test');
+
+    expect(stats.sharedPool).toBeDefined();
     expect(stats.defaultDatabase).toBe('main');
     expect(stats.allowedDatabases).toEqual(['main', 'test']);
   });
 
-  test('should handle pool operations', () => {
+  test('should handle pool operations via shared pool', () => {
     const manager = new DatabaseManager();
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
-    
+
     const pool = manager.getPool('main');
     expect(pool).toBe(mockPool);
-    
+
     const defaultPool = manager.getPool();
     expect(defaultPool).toBe(mockPool);
-    
+
     expect(() => manager.getPool('invalid')).toThrow();
   });
 });
 
-describe('Multiple Database Support Tests', () => {
-  test('should handle multiple database configurations', () => {
+describe('Multiple Catalog Support Tests', () => {
+  test('should handle multiple catalog configurations', () => {
     const multiConfig = {
       DATABASE_ROUTING: {
         DEFAULT_DATABASE: 'main',
         ALLOWED_DATABASES: ['main', 'analytics', 'audit'],
         ALLOW_CROSS_DATABASE_QUERIES: true
       },
-      DATABASES: {
-        main: { PATH: 'main.db', POOL: { MAX_CONNECTIONS: 5, ACQUIRE_TIMEOUT: 5000, CONNECTION_RETRY_DELAY: 1000, CONNECTION_RETRY_MAX: 3 } },
-        analytics: { PATH: 'analytics.db', POOL: { MAX_CONNECTIONS: 10, ACQUIRE_TIMEOUT: 8000, CONNECTION_RETRY_DELAY: 1500, CONNECTION_RETRY_MAX: 5 } },
-        audit: { PATH: 'audit.db', POOL: { MAX_CONNECTIONS: 3, ACQUIRE_TIMEOUT: 3000, CONNECTION_RETRY_DELAY: 500, CONNECTION_RETRY_MAX: 2 } }
+      CATALOGS: {
+        main: { PATH: 'main.ducklake', DATA_PATH: 'main_data/', READ_ONLY: true },
+        analytics: { PATH: 'analytics.ducklake', DATA_PATH: 'analytics_data/', READ_ONLY: true },
+        audit: { PATH: 'audit.ducklake', DATA_PATH: 'audit_data/', READ_ONLY: true }
+      },
+      DATABASE: {
+        POOL: { MAX_CONNECTIONS: 5, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 100 }
       }
     };
 
-    // Mock config for this test
-    jest.doMock('../src/utils/config-loader.js', () => ({ config: multiConfig }), { virtual: true });
-
-    // This would test the multi-database scenario
     expect(multiConfig.DATABASE_ROUTING.ALLOWED_DATABASES).toHaveLength(3);
-    expect(multiConfig.DATABASES).toHaveProperty('main');
-    expect(multiConfig.DATABASES).toHaveProperty('analytics');
-    expect(multiConfig.DATABASES).toHaveProperty('audit');
+    expect(multiConfig.CATALOGS).toHaveProperty('main');
+    expect(multiConfig.CATALOGS).toHaveProperty('analytics');
+    expect(multiConfig.CATALOGS).toHaveProperty('audit');
   });
 });
 
@@ -174,8 +157,6 @@ describe('Security Tests', () => {
   test('should reject malicious database identifiers', async () => {
     const { DatabaseManager } = await import('../src/db/database-manager.js');
     const manager = new DatabaseManager();
-    manager.pools = new Map();
-    manager.pools.set('main', mockPool);
 
     const maliciousIds = [
       '../../../etc/passwd',

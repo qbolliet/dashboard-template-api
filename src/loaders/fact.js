@@ -49,8 +49,8 @@ class FactLoader extends FactQueryLoader {
             const sortClause = this.buildSortClause(sort);
             
             const query = `
-                SELECT ${selectClause} FROM fact_table
-                ${whereClause} 
+                SELECT ${selectClause} FROM ${this.qualifyTable('fact_table')}
+                ${whereClause}
                 ${sortClause}
                 LIMIT ${limit} OFFSET ${offset}
             `;
@@ -111,7 +111,7 @@ class FactLoader extends FactQueryLoader {
      */
     async getCount(connection, { filters, structuredFilters }) {
         const whereClause = buildWhereClause(filters, structuredFilters);
-        const countQuery = `SELECT COUNT(*) as total FROM fact_table ${whereClause}`;
+        const countQuery = `SELECT COUNT(*) as total FROM ${this.qualifyTable('fact_table')} ${whereClause}`;
         const result = await connection.all(countQuery);
         return result[0].total;
     }

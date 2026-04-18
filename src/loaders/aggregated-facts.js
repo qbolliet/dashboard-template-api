@@ -74,11 +74,11 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
         // Construction de la requête principale
         const query = `
-            SELECT 
-                ${groupBy} as key, 
+            SELECT
+                ${groupBy} as key,
                 ${aggregationQuery}(value) as aggregatedValue,
                 COUNT(*) as count
-            FROM fact_table
+            FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
             GROUP BY ${groupBy}
             ${sortClause}
@@ -147,8 +147,8 @@ class AggregatedFactsLoader extends FactQueryLoader {
         const whereClause = buildWhereClause(filters, structuredFilters);
         
         const countQuery = `
-            SELECT COUNT(DISTINCT ${groupBy}) as totalGroups 
-            FROM fact_table 
+            SELECT COUNT(DISTINCT ${groupBy}) as totalGroups
+            FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
         `;
         
@@ -168,7 +168,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
         const { groupBy } = params;
         
         // Récupération des infos sur le champ de regroupement
-        const fieldMetaQuery = 'SELECT * FROM metadata WHERE name = ?';
+        const fieldMetaQuery = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
         const fieldMeta = await connection.all(fieldMetaQuery, [groupBy]);
         
         // Calcul des extents

@@ -1,5 +1,4 @@
-// Script pour créer une base de données de test indépendante
-// Imortation des modules
+// Script pour créer une base de données de test DuckLake indépendante
 import { DuckDBInstance } from '@duckdb/node-api';
 import path from 'path';
 import fs from 'fs';
@@ -9,35 +8,51 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /**
- * Crée une base de données de test avec des données fictives
- * Cette base est totalement indépendante de la base de production
+ * Crée un catalogue DuckLake de test avec des données fictives.
+ * Ce catalogue est totalement indépendant de la base de production.
+ * Il est attaché en mode READ_ONLY=false pour permettre les insertions.
  */
 async function setupTestData() {
-    // Créer le dossier de test s'il n'existe pas
-    const testDir = path.resolve(__dirname, '../data');
-    if (!fs.existsSync(testDir)) {
-        fs.mkdirSync(testDir, { recursive: true });
+    const dataDir = path.resolve(__dirname, '../data');
+
+    // Création du dossier de données si nécessaire
+    if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    // Base de données de test séparée
-    const dbPath = path.resolve(testDir, 'test-database.db');
-    
-    // Supprimer l'ancienne base de test si elle existe
-    if (fs.existsSync(dbPath)) {
-        fs.unlinkSync(dbPath);
-        console.log('🗑️  Ancienne base de test supprimée');
+    // Chemins du catalogue DuckLake de test (catalogue "main" du test config)
+    const catalogPath = path.resolve(dataDir, 'test-main.ducklake');
+    const dataPath = path.resolve(dataDir, 'test-main_data');
+
+    // Suppression de l'ancienne base de test si elle existe
+    if (fs.existsSync(catalogPath)) {
+        fs.unlinkSync(catalogPath);
+        console.log('Ancienne base de test supprimée');
+    }
+    if (fs.existsSync(dataPath)) {
+        fs.rmSync(dataPath, { recursive: true, force: true });
+        console.log('Anciens fichiers Parquet supprimés');
     }
 
-    const instance = await DuckDBInstance.create(dbPath);
+    // Création du répertoire de données Parquet
+    fs.mkdirSync(dataPath, { recursive: true });
+
+    const instance = await DuckDBInstance.create(':memory:');
     const conn = await instance.connect();
 
     try {
-        console.log('🔧 Création de la base de données de test...');
-        console.log(`📁 Emplacement : ${dbPath}`);
+        console.log('Installation de l\'extension DuckLake...');
+        await conn.run("INSTALL ducklake FROM community; LOAD ducklake;");
+
+        // Attachement du catalogue DuckLake de test (alias "main")
+        await conn.run(
+            `ATTACH 'ducklake:${catalogPath}' AS main (DATA_PATH '${dataPath}/')`
+        );
+        console.log(`Catalogue DuckLake attaché : ${catalogPath}`);
 
         // Création de la table metadata
         await conn.run(`
-            CREATE TABLE IF NOT EXISTS metadata (
+            CREATE TABLE main.main.metadata (
                 name VARCHAR PRIMARY KEY,
                 label VARCHAR,
                 python_type VARCHAR,
@@ -45,23 +60,23 @@ async function setupTestData() {
                 is_categorical BOOLEAN
             )
         `);
-        console.log('✓ Table metadata créée');
+        console.log('Table metadata créée');
 
         // Création des tables de dimension
         const dimensions = ['country', 'indicator', 'kind', 'model', 'training'];
         for (const dim of dimensions) {
             await conn.run(`
-                CREATE TABLE IF NOT EXISTS dim_${dim} (
+                CREATE TABLE main.main.dim_${dim} (
                     value BIGINT PRIMARY KEY,
                     label VARCHAR
                 )
             `);
-            console.log(`✓ Table dim_${dim} créée`);
+            console.log(`Table dim_${dim} créée`);
         }
 
         // Création de la table des faits
         await conn.run(`
-            CREATE TABLE IF NOT EXISTS fact_table (
+            CREATE TABLE main.main.fact_table (
                 indicator BIGINT,
                 country BIGINT,
                 date TIMESTAMP_NS,
@@ -73,7 +88,7 @@ async function setupTestData() {
                 training DOUBLE
             )
         `);
-        console.log('✓ Table fact_table créée');
+        console.log('Table fact_table créée');
 
         // Insertion des métadonnées
         const metadataInserts = [
@@ -90,13 +105,13 @@ async function setupTestData() {
 
         for (const meta of metadataInserts) {
             await conn.run(
-                'INSERT INTO metadata (name, label, python_type, sql_type, is_categorical) VALUES (?, ?, ?, ?, ?)',
+                'INSERT INTO main.main.metadata (name, label, python_type, sql_type, is_categorical) VALUES (?, ?, ?, ?, ?)',
                 meta
             );
         }
-        console.log('✓ Métadonnées insérées');
+        console.log('Métadonnées insérées');
 
-        // Données de dimension avec des valeurs réalistes
+        // Données de dimension
         const dimensionData = {
             country: [
                 { value: 1, label: 'France' },
@@ -137,71 +152,49 @@ async function setupTestData() {
             ]
         };
 
-        // Insérer les données de dimension
         for (const [dimName, data] of Object.entries(dimensionData)) {
             for (const row of data) {
                 await conn.run(
-                    `INSERT INTO dim_${dimName} (value, label) VALUES (?, ?)`,
+                    `INSERT INTO main.main.dim_${dimName} (value, label) VALUES (?, ?)`,
                     [row.value, row.label]
                 );
             }
-            console.log(`✓ Dimension dim_${dimName} remplie avec ${data.length} enregistrements`);
+            console.log(`Dimension dim_${dimName} remplie avec ${data.length} enregistrements`);
         }
 
-        // Générer des données de fait réalistes
+        // Génération des données de fait
         const startDate = new Date('2022-01-01');
         const endDate = new Date('2024-12-31');
         let insertCount = 0;
 
-        console.log('🔄 Génération des données de fait...');
+        console.log('Génération des données de fait...');
 
-        // Fonction pour générer une valeur réaliste selon l'indicateur
         const generateValue = (indicator, country, date, kind) => {
             let baseValue;
             const monthVariation = Math.sin(date.getMonth() * Math.PI / 6) * 0.1;
             const randomVariation = (Math.random() - 0.5) * 0.2;
-            
-            // Valeurs de base par indicateur
+
             switch (indicator.value) {
-                case 1: // GDP Growth Rate
-                    baseValue = 2.5 + (country.value % 3) * 0.5;
-                    break;
-                case 2: // Inflation Rate
-                    baseValue = 2.0 + (country.value % 4) * 0.3;
-                    break;
-                case 3: // Unemployment Rate
-                    baseValue = 7.0 - (country.value % 4) * 0.8;
-                    break;
-                case 4: // Trade Balance (en milliards)
-                    baseValue = -20 + (country.value % 5) * 15;
-                    break;
-                case 5: // Interest Rate
-                    baseValue = 3.5 + (country.value % 3) * 0.25;
-                    break;
-                case 6: // Consumer Confidence
-                    baseValue = 100 + (country.value % 4) * 5;
-                    break;
-                default:
-                    baseValue = 50;
+                case 1: baseValue = 2.5 + (country.value % 3) * 0.5; break;
+                case 2: baseValue = 2.0 + (country.value % 4) * 0.3; break;
+                case 3: baseValue = 7.0 - (country.value % 4) * 0.8; break;
+                case 4: baseValue = -20 + (country.value % 5) * 15; break;
+                case 5: baseValue = 3.5 + (country.value % 3) * 0.25; break;
+                case 6: baseValue = 100 + (country.value % 4) * 5; break;
+                default: baseValue = 50;
             }
-            
-            // Ajuster selon le type de données
-            if (kind.value === 2) { // Forecast
-                baseValue *= 1.1; // Les prévisions sont souvent optimistes
-            } else if (kind.value === 3) { // Estimate
-                baseValue *= 0.95; // Les estimations sont conservatrices
-            }
-            
+
+            if (kind.value === 2) baseValue *= 1.1;
+            else if (kind.value === 3) baseValue *= 0.95;
+
             return baseValue + monthVariation + randomVariation;
         };
 
-        // Générer des données mensuelles pour chaque combinaison
-        for (const country of dimensionData.country.slice(0, 5)) { // 5 premiers pays
-            for (const indicator of dimensionData.indicator.slice(0, 4)) { // 4 premiers indicateurs
-                for (const kind of dimensionData.kind.slice(0, 2)) { // Actual et Forecast
-                    
+        for (const country of dimensionData.country.slice(0, 5)) {
+            for (const indicator of dimensionData.indicator.slice(0, 4)) {
+                for (const kind of dimensionData.kind.slice(0, 2)) {
                     const currentDate = new Date(startDate);
-                    
+
                     while (currentDate <= endDate) {
                         const value = generateValue(indicator, country, currentDate, kind);
                         const horizon = kind.value === 2 ? Math.floor(Math.random() * 12) + 1 : 0;
@@ -210,55 +203,32 @@ async function setupTestData() {
                         const training = dimensionData.training[Math.floor(Math.random() * dimensionData.training.length)].value;
 
                         await conn.run(
-                            `INSERT INTO fact_table (indicator, country, date, value, kind, horizon, week, model, training) 
+                            `INSERT INTO main.main.fact_table
+                             (indicator, country, date, value, kind, horizon, week, model, training)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [
-                                indicator.value,
-                                country.value,
-                                currentDate.toISOString(),
-                                value,
-                                kind.value,
-                                horizon,
-                                week,
-                                model,
-                                training
-                            ]
+                            [indicator.value, country.value, currentDate.toISOString(),
+                             value, kind.value, horizon, week, model, training]
                         );
-                        
+
                         insertCount++;
-                        
-                        // Afficher la progression tous les 100 enregistrements
                         if (insertCount % 100 === 0) {
                             process.stdout.write(`\r  ${insertCount} enregistrements insérés...`);
                         }
-                        
-                        // Avancer d'un mois
+
                         currentDate.setMonth(currentDate.getMonth() + 1);
                     }
                 }
             }
         }
 
-        console.log(`\n✓ ${insertCount} enregistrements insérés dans fact_table`);
-
-        // Statistiques finales
-        const stats = await conn.run('SELECT COUNT(*) as total FROM fact_table');
-        const totalRecords = (await stats.getRowObjects())[0].total;
-        
-        const dateStats = await conn.run('SELECT MIN(date) as min_date, MAX(date) as max_date FROM fact_table');
-        const dateRange = await dateStats.getRowObjects();
-        
-        console.log(`\n📊 Statistiques finales :`);
-        console.log(`   - Total d'enregistrements : ${totalRecords}`);
-        console.log(`   - Période couverte : ${new Date(dateRange[0].min_date).toLocaleDateString()} à ${new Date(dateRange[0].max_date).toLocaleDateString()}`);
-        console.log(`   - Base de données : ${dbPath}`);
+        console.log(`\n${insertCount} enregistrements insérés dans fact_table`);
+        console.log(`Catalogue DuckLake de test créé : ${catalogPath}`);
 
     } catch (error) {
-        console.error('❌ Erreur lors de la création de la base de test :', error);
+        console.error('Erreur lors de la création de la base de test :', error);
         throw error;
     } finally {
         if (conn) await conn.close();
-        // DuckDB instance doesn't have a close method, it's garbage collected
     }
 }
 
@@ -266,12 +236,11 @@ async function setupTestData() {
 if (import.meta.url === `file://${process.argv[1]}`) {
     setupTestData()
         .then(() => {
-            console.log('\n✅ Base de données de test créée avec succès !');
-            console.log('📌 Vous pouvez maintenant exécuter les tests avec cette base.');
+            console.log('\nBase de données de test DuckLake créée avec succès !');
             process.exit(0);
         })
         .catch((error) => {
-            console.error('\n❌ Échec de la création de la base de test :', error);
+            console.error('\nÉchec de la création de la base de test :', error);
             process.exit(1);
         });
 }
