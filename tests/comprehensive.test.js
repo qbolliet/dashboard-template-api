@@ -62,34 +62,29 @@ describe('Comprehensive API Unit Tests', () => {
 
   describe('Multi-Database Architecture Tests', () => {
     test('should support multiple database configurations', () => {
-      const createDatabaseConfig = (databases) => ({
+      const createDatabaseConfig = (catalogs) => ({
         DATABASE_ROUTING: {
           DEFAULT_DATABASE: 'main',
-          ALLOWED_DATABASES: Object.keys(databases),
+          ALLOWED_DATABASES: Object.keys(catalogs),
           ALLOW_CROSS_DATABASE_QUERIES: true
         },
-        DATABASES: databases
-      });
-
-      const config = createDatabaseConfig({
-        main: {
-          PATH: 'data/main.db',
-          POOL: { MAX_CONNECTIONS: 10, ACQUIRE_TIMEOUT: 5000, CONNECTION_RETRY_DELAY: 1000, CONNECTION_RETRY_MAX: 3 }
-        },
-        analytics: {
-          PATH: 'data/analytics.db',
-          POOL: { MAX_CONNECTIONS: 15, ACQUIRE_TIMEOUT: 8000, CONNECTION_RETRY_DELAY: 1500, CONNECTION_RETRY_MAX: 5 }
-        },
-        archive: {
-          PATH: 'data/archive.db',
-          POOL: { MAX_CONNECTIONS: 3, ACQUIRE_TIMEOUT: 10000, CONNECTION_RETRY_DELAY: 2000, CONNECTION_RETRY_MAX: 3 }
+        CATALOGS: catalogs,
+        DATABASE: {
+          POOL: { MAX_CONNECTIONS: 10, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 100 }
         }
       });
 
+      const config = createDatabaseConfig({
+        main: { PATH: 'data/main.ducklake', DATA_PATH: 'data/main_data/', READ_ONLY: true },
+        analytics: { PATH: 'data/analytics.ducklake', DATA_PATH: 'data/analytics_data/', READ_ONLY: true },
+        archive: { PATH: 'data/archive.ducklake', DATA_PATH: 'data/archive_data/', READ_ONLY: true }
+      });
+
       expect(config.DATABASE_ROUTING.ALLOWED_DATABASES).toHaveLength(3);
-      expect(config.DATABASES.main.POOL.MAX_CONNECTIONS).toBe(10);
-      expect(config.DATABASES.analytics.POOL.MAX_CONNECTIONS).toBe(15);
-      expect(config.DATABASES.archive.POOL.MAX_CONNECTIONS).toBe(3);
+      expect(config.CATALOGS).toHaveProperty('main');
+      expect(config.CATALOGS).toHaveProperty('analytics');
+      expect(config.CATALOGS).toHaveProperty('archive');
+      expect(config.DATABASE.POOL.MAX_CONNECTIONS).toBe(10);
     });
 
     test('should route queries to correct databases', () => {

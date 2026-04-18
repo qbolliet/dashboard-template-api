@@ -5,25 +5,22 @@ DATABASE_ROUTING:
   ALLOWED_DATABASES: ["main", "test", "analytics"]
   ALLOW_CROSS_DATABASE_QUERIES: true
 
-DATABASES:
+CATALOGS:
   main:
-    PATH: "${DB_PATH:-test-data/main.db}"
-    POOL:
-      MAX_CONNECTIONS: 3
-      ACQUIRE_TIMEOUT: 5000
-      CONNECTION_RETRY_DELAY: 500
-      CONNECTION_RETRY_MAX: 2
+    PATH: "data/test-main.ducklake"
+    DATA_PATH: "data/test-main_data/"
+    READ_ONLY: false
   test:
-    PATH: "test-data/test.db"
-    POOL:
-      MAX_CONNECTIONS: 2
-      ACQUIRE_TIMEOUT: 3000
-      CONNECTION_RETRY_DELAY: 300
-      CONNECTION_RETRY_MAX: 1
+    PATH: "data/test-test.ducklake"
+    DATA_PATH: "data/test-test_data/"
+    READ_ONLY: false
   analytics:
-    PATH: "test-data/analytics.db"
-    POOL:
-      MAX_CONNECTIONS: 2
-      ACQUIRE_TIMEOUT: 3000
-      CONNECTION_RETRY_DELAY: 300
-      CONNECTION_RETRY_MAX: 1
+    PATH: "data/test-analytics.ducklake"
+    DATA_PATH: "data/test-analytics_data/"
+    READ_ONLY: false
+
+DATABASE:
+  POOL:
+    MAX_CONNECTIONS: 3
+    ACQUIRE_TIMEOUT: 5000
+    POOL_RETRY_DELAY: 100

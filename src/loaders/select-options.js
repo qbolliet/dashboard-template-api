@@ -29,7 +29,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
     async loadSelectOptions(connection, { fieldName, limit, searchTerm }) {
         try {
             // Vérification si le champ est catégoriel
-            const metadataQuery = 'SELECT is_categorical FROM metadata WHERE name = ?';
+            const metadataQuery = `SELECT is_categorical FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
             const metadataResults = await connection.all(metadataQuery, [fieldName]);
             const isCategorical = metadataResults.length > 0 && metadataResults[0].is_categorical;
             
@@ -52,7 +52,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
      */
     async loadFromDimension(connection, fieldName, limit, searchTerm) {
         // Construction de la requête
-        let query = `SELECT value, label FROM dim_${fieldName}`;
+        let query = `SELECT value, label FROM ${this.qualifyTable(`dim_${fieldName}`)}`;
         const params = [];
         
         // Ajout du terme de recherche si présent
@@ -82,12 +82,12 @@ class SelectOptionsLoader extends BaseQueryLoader {
      */
     async loadFromFacts(connection, fieldName, limit, searchTerm) {
         // Construction de la requête
-        let query = `SELECT DISTINCT ${fieldName} as value FROM fact_table`;
+        let query = `SELECT DISTINCT ${fieldName} as value FROM ${this.qualifyTable('fact_table')}`;
         const params = [];
-        
+
         // Ajout du terme de recherche si présent
         if (searchTerm) {
-            query += ' WHERE CAST(${fieldName} AS VARCHAR) LIKE ?';
+            query += ` WHERE CAST(${fieldName} AS VARCHAR) LIKE ?`;
             params.push(`%${searchTerm}%`);
         }
         
