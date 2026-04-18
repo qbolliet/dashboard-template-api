@@ -235,7 +235,15 @@ class LoggerFactory {
                     tags: ['security']
                 });
             },
-            
+
+            warn: (message, context = {}) => {
+                this.logger.warn(message, {
+                    ...baseContext,
+                    ...context,
+                    tags: ['warning', ...(context.tags || [])]
+                });
+            },
+
             error: (message, error, context = {}) => {
                 this.logger.error(message, {
                     ...baseContext,
