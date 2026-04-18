@@ -1,18 +1,36 @@
-# Requêtes de test pour l'API GraphQL DuckDB avec support multi-database
+# Requêtes de test pour l'API GraphQL – DuckLake (multi-catalog)
 # À utiliser dans Apollo Studio (https://studio.apollographql.com)
+#
+# ARCHITECTURE DUCKLAKE:
+# - Chaque catalogue DuckLake (.ducklake) est attaché à un DuckDB partagé.
+# - Les requêtes sont routées via l'alias du catalogue (ex: default.main.fact_table).
 #
 # CONFIGURATION MULTI-DATABASE:
 # - HTTP Header: X-Database-ID: [database_name]
 # - GraphQL Parameter: database: "[database_name]"
-# - Databases disponibles: default, macroeconomics, public_finance
+# - Catalogues disponibles: default, macroeconomics, public_finance
 #
 # Priorité: GraphQL parameter > HTTP header > default database
+#
+# SCHÉMA DES CATALOGUES:
+#
+# default (météorologie):
+#   Catégoriels: indicator, country, kind, model, training, horizon
+#   Continus:    week, date, value, lower_bound, upper_bound, quality_score, notes
+#
+# macroeconomics (macro-économie):
+#   Catégoriels: indicator, country, frequency, source, scenario, year
+#   Continus:    date, value, lower_bound, upper_bound, confidence_level, revision
+#
+# public_finance (finances publiques):
+#   Catégoriels: indicator, country, sector, category, classification, year
+#   Continus:    date, value, pct_gdp, lower_bound, upper_bound, notes
 
 # ============================================
 # 1. TESTS DES MÉTADONNÉES
 # ============================================
 
-# Test 1.1: Récupérer les métadonnées d'un champ (database par défaut)
+# Test 1.1: Récupérer les métadonnées d'un champ (catalogue par défaut)
 query TestGetMetadata {
   getMetaData(name: "country") {
     name
@@ -23,7 +41,7 @@ query TestGetMetadata {
   }
 }
 
-# Test 1.1b: Récupérer les métadonnées avec database spécifique
+# Test 1.1b: Récupérer les métadonnées avec catalogue spécifique
 query TestGetMetadataSpecificDB {
   getMetaData(name: "country", database: "macroeconomics") {
     name
@@ -34,7 +52,7 @@ query TestGetMetadataSpecificDB {
   }
 }
 
-# Test 1.2: Récupérer les métadonnées de plusieurs champs
+# Test 1.2: Récupérer les métadonnées de plusieurs champs (catalogue default)
 query TestMultipleMetadata {
   indicator: getMetaData(name: "indicator") {
     name
@@ -53,19 +71,20 @@ query TestMultipleMetadata {
   }
 }
 
-# Test 1.2b: Récupérer les métadonnées de plusieurs champs avec databases différentes
+# Test 1.2b: Métadonnées depuis des catalogues différents
+# Chaque catalogue expose ses propres champs catégoriels distinctifs
 query TestMultipleMetadataCrossDB {
-  defaultIndicator: getMetaData(name: "indicator", database: "default") {
+  defaultKind: getMetaData(name: "kind", database: "default") {
     name
     label
     is_categorical
   }
-  macroeconomicsValue: getMetaData(name: "value", database: "macroeconomics") {
+  macroeconomicsScenario: getMetaData(name: "scenario", database: "macroeconomics") {
     name
     label
     is_categorical
   }
-  public_financeDate: getMetaData(name: "date", database: "public_finance") {
+  public_financeSector: getMetaData(name: "sector", database: "public_finance") {
     name
     sql_type
     is_categorical
@@ -76,7 +95,7 @@ query TestMultipleMetadataCrossDB {
 # 2. TESTS DES TABLES DE DIMENSION
 # ============================================
 
-# Test 2.1: Récupérer une table de dimension
+# Test 2.1: Récupérer une table de dimension (catalogue default)
 query TestGetDimension {
   getDimensionTable(name: "country") {
     value
@@ -84,15 +103,15 @@ query TestGetDimension {
   }
 }
 
-# Test 2.1b: Récupérer une table de dimension depuis macroeconomics database
-query TestGetDimensionmacroeconomics {
+# Test 2.1b: Récupérer une table de dimension depuis le catalogue macroeconomics
+query TestGetDimensionMacroeconomics {
   getDimensionTable(name: "country", database: "macroeconomics") {
     value
     label
   }
 }
 
-# Test 2.2: Récupérer plusieurs dimensions
+# Test 2.2: Récupérer plusieurs dimensions du catalogue default
 query TestMultipleDimensions {
   countries: getDimensionTable(name: "country") {
     value
@@ -108,17 +127,21 @@ query TestMultipleDimensions {
   }
 }
 
-# Test 2.2b: Récupérer dimensions depuis databases différentes
+# Test 2.2b: Dimensions depuis des catalogues différents
+# Attention: chaque catalogue a ses propres dimensions catégorielles
 query TestMultipleDimensionsCrossDB {
+  # default: indicator, country, kind, model, training, horizon
   defaultCountries: getDimensionTable(name: "country", database: "default") {
     value
     label
   }
-  macroeconomicsIndicators: getDimensionTable(name: "indicator", database: "macroeconomics") {
+  # macroeconomics: indicator, country, frequency, source, scenario, year
+  macroeconomicsScenarios: getDimensionTable(name: "scenario", database: "macroeconomics") {
     value
     label
   }
-  public_financeKinds: getDimensionTable(name: "kind", database: "public_finance") {
+  # public_finance: indicator, country, sector, category, classification, year
+  public_financeSectors: getDimensionTable(name: "sector", database: "public_finance") {
     value
     label
   }
@@ -128,7 +151,7 @@ query TestMultipleDimensionsCrossDB {
 # 3. TESTS DE LA TABLE DES FAITS
 # ============================================
 
-# Test 3.1: Requête simple avec pagination
+# Test 3.1: Requête simple avec pagination (catalogue default)
 query TestFactTableSimple {
   getFactTable(limit: 10, offset: 0) {
     data {
@@ -141,8 +164,8 @@ query TestFactTableSimple {
   }
 }
 
-# Test 3.1b: Requête simple depuis macroeconomics database
-query TestFactTablemacroeconomics {
+# Test 3.1b: Requête simple depuis le catalogue macroeconomics
+query TestFactTableMacroeconomics {
   getFactTable(limit: 10, offset: 0, database: "macroeconomics") {
     data {
       value
@@ -154,7 +177,20 @@ query TestFactTablemacroeconomics {
   }
 }
 
-# Test 3.2: Requête avec filtres
+# Test 3.1c: Requête simple depuis le catalogue public_finance
+query TestFactTablePublicFinance {
+  getFactTable(limit: 10, offset: 0, database: "public_finance") {
+    data {
+      value
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
+  }
+}
+
+# Test 3.2: Requête avec filtres (IDs entiers des dimensions)
 query TestFactTableWithFilters {
   getFactTable(
     filters: "country = 1 AND indicator = 1"
@@ -168,7 +204,8 @@ query TestFactTableWithFilters {
   }
 }
 
-# Test 3.3: Requête avec filtres structurés
+# Test 3.3: Requête avec filtres structurés (catalogue default)
+# Utilise les champs catégoriels propres au catalogue default
 query TestFactTableStructuredFilters {
   getFactTable(
     structuredFilters: [
@@ -177,6 +214,24 @@ query TestFactTableStructuredFilters {
     ]
     limit: 10
     offset: 0
+  ) {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 3.3b: Filtres structurés sur le catalogue macroeconomics
+query TestFactTableStructuredFiltersMacro {
+  getFactTable(
+    structuredFilters: [
+      { key: "country", operator: "=", value: "1" }
+      { key: "scenario", operator: "=", value: "1" }
+    ]
+    limit: 10
+    offset: 0
+    database: "macroeconomics"
   ) {
     data {
       value
@@ -216,7 +271,7 @@ query TestFactTableSelectFields {
   }
 }
 
-# Test 3.6: Requête avec détails des dimensions
+# Test 3.6: Requête avec détails des dimensions (enrichissement automatique)
 query TestFactTableWithDimensionDetails {
   getFactTable(limit: 5, offset: 0) {
     data {
@@ -251,7 +306,7 @@ query TestFactTableWithMetadata {
   }
 }
 
-# Test 4.2: Requête avec métadonnées et filtres
+# Test 4.2: Requête avec métadonnées et filtres (IN sur plusieurs valeurs)
 query TestFactTableMetadataFiltered {
   getFactTableWithMetadata(
     structuredFilters: [
@@ -274,7 +329,7 @@ query TestFactTableMetadataFiltered {
 # 5. TESTS DES FAITS AGRÉGÉS
 # ============================================
 
-# Test 5.1: Agrégation simple
+# Test 5.1: Agrégation simple (catalogue default)
 query TestAggregatedFactsSimple {
   getAggregatedFacts(
     groupBy: "country"
@@ -288,7 +343,7 @@ query TestAggregatedFactsSimple {
   }
 }
 
-# Test 5.2: Différentes fonctions d'agrégation
+# Test 5.2: Différentes fonctions d'agrégation (catalogue default)
 query TestAggregationFunctions {
   sumByCountry: getAggregatedFacts(groupBy: "country", aggregation: SUM) {
     key
@@ -308,7 +363,27 @@ query TestAggregationFunctions {
   }
 }
 
-# Test 5.3: Agrégation avec filtres
+# Test 5.2b: Agrégations sur les catalogues macroeconomics et public_finance
+query TestAggregationFunctionsCrossDB {
+  macroByScenario: getAggregatedFacts(
+    groupBy: "scenario"
+    aggregation: AVG
+    database: "macroeconomics"
+  ) {
+    key
+    aggregatedValue
+  }
+  financeBySector: getAggregatedFacts(
+    groupBy: "sector"
+    aggregation: SUM
+    database: "public_finance"
+  ) {
+    key
+    aggregatedValue
+  }
+}
+
+# Test 5.3: Agrégation avec filtres (catalogue default)
 query TestAggregatedFactsFiltered {
   getAggregatedFacts(
     groupBy: "indicator"
@@ -357,7 +432,7 @@ query TestAggregatedFactsWithKeyLabels {
 # 6. TESTS DES FAITS AGRÉGÉS AVEC MÉTADONNÉES
 # ============================================
 
-# Test 6.1: Agrégation avec métadonnées complètes
+# Test 6.1: Agrégation avec métadonnées complètes (catalogue default)
 query TestAggregatedFactsWithMetadata {
   getAggregatedFactsWithMetadata(
     groupBy: "indicator"
@@ -390,11 +465,44 @@ query TestAggregatedFactsWithMetadata {
   }
 }
 
+# Test 6.2: Agrégation avec métadonnées depuis macroeconomics
+query TestAggregatedFactsWithMetadataMacro {
+  getAggregatedFactsWithMetadata(
+    groupBy: "source"
+    aggregation: AVG
+    limit: 10
+    offset: 0
+    database: "macroeconomics"
+  ) {
+    data {
+      key
+      keyLabel
+      aggregatedValue
+      count
+    }
+    metadata {
+      count
+      keyExtent
+      valueExtent
+      statistics {
+        mean
+        median
+        stdDev
+      }
+      groupByFieldInfo {
+        name
+        label
+        is_categorical
+      }
+    }
+  }
+}
+
 # ============================================
 # 7. TESTS DES OPTIONS DE SÉLECTION
 # ============================================
 
-# Test 7.1: Options de sélection simples
+# Test 7.1: Options de sélection simples (catalogue default)
 query TestSelectOptions {
   getSelectOptions(fieldName: "country", limit: 10) {
     value
@@ -414,7 +522,19 @@ query TestSelectOptionsWithSearch {
   }
 }
 
-# Test 7.3: Options groupées
+# Test 7.3: Options depuis macroeconomics
+query TestSelectOptionsMacro {
+  getSelectOptions(
+    fieldName: "scenario"
+    limit: 10
+    database: "macroeconomics"
+  ) {
+    value
+    label
+  }
+}
+
+# Test 7.4: Options groupées (catalogue default)
 query TestGroupedSelectOptions {
   getGroupedSelectOptions(
     groupField: "country"
@@ -502,7 +622,7 @@ query TestInvalidField {
 # 10. TESTS DE COMPLEXITÉ
 # ============================================
 
-# Test 10.1: Requête complexe combinée
+# Test 10.1: Requête complexe combinée (catalogue default)
 query TestComplexQuery {
   # Métadonnées
   countryMeta: getMetaData(name: "country") {
@@ -510,13 +630,13 @@ query TestComplexQuery {
     label
     is_categorical
   }
-  
+
   # Dimensions
   countries: getDimensionTable(name: "country") {
     value
     label
   }
-  
+
   # Faits avec détails
   facts: getFactTable(
     structuredFilters: [
@@ -536,7 +656,7 @@ query TestComplexQuery {
     }
     total
   }
-  
+
   # Agrégations
   aggregated: getAggregatedFacts(
     groupBy: "indicator"
@@ -547,7 +667,7 @@ query TestComplexQuery {
     keyLabel
     aggregatedValue
   }
-  
+
   # Options de sélection
   options: getSelectOptions(fieldName: "indicator") {
     value
@@ -638,7 +758,7 @@ query TestWithHTTPHeader {
 # Test 13.2: Override du header avec paramètre GraphQL
 # Header: X-Database-ID: macroeconomics
 # Paramètre GraphQL: database: "public_finance"
-# Le paramètre GraphQL devrait avoir la priorité
+# Le paramètre GraphQL a la priorité sur le header
 query TestParameterOverridesHeader {
   fromHeader: getMetaData(name: "country") {
     name
@@ -650,21 +770,21 @@ query TestParameterOverridesHeader {
   }
 }
 
-# Test 13.3: Requête complexe multi-database
+# Test 13.3: Requête complexe multi-catalogue DuckLake
 query TestComplexMultiDB {
   # Métadonnées depuis default
-  defaultMeta: getMetaData(name: "country") {
+  defaultMeta: getMetaData(name: "kind", database: "default") {
     name
     label
     is_categorical
   }
-  
-  # Dimensions depuis macroeconomics
-  macroeconomicsDims: getDimensionTable(name: "country", database: "macroeconomics") {
+
+  # Dimensions depuis macroeconomics (champs propres à ce catalogue)
+  macroeconomicsDims: getDimensionTable(name: "scenario", database: "macroeconomics") {
     value
     label
   }
-  
+
   # Faits depuis public_finance
   public_financeFacts: getFactTable(
     limit: 5
@@ -676,10 +796,10 @@ query TestComplexMultiDB {
     }
     total
   }
-  
+
   # Options depuis macroeconomics
   macroeconomicsOptions: getSelectOptions(
-    fieldName: "country"
+    fieldName: "source"
     limit: 5
     database: "macroeconomics"
   ) {
@@ -692,7 +812,7 @@ query TestComplexMultiDB {
 # 14. TESTS DE VALIDATION DES DATABASES
 # ============================================
 
-# Test 14.1: Database invalide (devrait utiliser default)
+# Test 14.1: Catalogue invalide (devrait lever une erreur)
 query TestInvalidDatabase {
   getMetaData(name: "country", database: "nonexistent") {
     name
@@ -700,7 +820,7 @@ query TestInvalidDatabase {
   }
 }
 
-# Test 14.2: Database vide (devrait utiliser context/default)
+# Test 14.2: Catalogue vide (doit utiliser le catalogue du contexte ou default)
 query TestEmptyDatabase {
   getMetaData(name: "country", database: "") {
     name
@@ -727,16 +847,21 @@ query TestEmptyDatabase {
 # 3. PRIORITÉ:
 #    GraphQL parameter > HTTP header > default database
 #
-# 4. DATABASES DISPONIBLES:
-#    - default (database principal)
-#    - macroeconomics (données analytiques)
-#    - public_finance (données de public_finance)
+# 4. CATALOGUES DUCKLAKE DISPONIBLES:
+#    - default          (météorologie: indicator, country, kind, model, training, horizon)
+#    - macroeconomics   (macro-économie: indicator, country, frequency, source, scenario, year)
+#    - public_finance   (finances publiques: indicator, country, sector, category, classification, year)
 #
-# 5. VALIDATION:
-#    Les databases non configurées reviennent au default
-#    Les erreurs de configuration sont loggées
+# 5. CHAMPS CATÉGORIELS PAR CATALOGUE (utilisables dans getDimensionTable / groupBy):
+#    default:         indicator, country, kind, model, training, horizon
+#    macroeconomics:  indicator, country, frequency, source, scenario, year
+#    public_finance:  indicator, country, sector, category, classification, year
 #
-# 6. EXEMPLES DE HEADERS:
+# 6. VALIDATION:
+#    Les catalogues non configurés lèvent une erreur (contrairement au comportement
+#    précédent qui revenait silencieusement au default).
+#
+# 7. EXEMPLES DE HEADERS:
 #    Valide:   { "X-Database-ID": "macroeconomics" }
-#    Invalide: { "X-Database-ID": "unknown" }  -> utilise default
+#    Invalide: { "X-Database-ID": "unknown" }  -> erreur levée
 #    Vide:     { "X-Database-ID": "" }         -> utilise default
