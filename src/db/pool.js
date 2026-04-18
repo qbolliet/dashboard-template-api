@@ -92,16 +92,17 @@ class DuckDBPool {
                 // Chemin du répertoire de données Parquet associé au catalogue
                 if (catalog.dataPath) {
                     options.push(`DATA_PATH '${catalog.dataPath}'`);
+                    options.push('OVERRIDE_DATA_PATH TRUE');
                 }
                 // Mode lecture seule pour les catalogues de production (API GraphQL)
                 if (catalog.readOnly) {
                     options.push('READ_ONLY');
                 }
                 const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
-                await conn.run(`ATTACH 'ducklake:${catalog.path}' AS ${catalog.alias}${optionClause}`);
+                await conn.run(`ATTACH 'ducklake:${catalog.path}' AS "${catalog.alias}"${optionClause}`);
             }
 
-            await conn.close();
+            conn.closeSync();
             // Stockage de l'instance pour les appels suivants
             this.instance = instance;
             return instance;
@@ -337,7 +338,7 @@ class DuckDBPool {
                          * @returns {Promise<void>}
                          */
                         close: async () => {
-                            await duckdbConnection.close();
+                            duckdbConnection.closeSync();
                         }
                     };
 
@@ -397,7 +398,7 @@ class DuckDBPool {
         // Fermeture de l'instance DuckDB partagée
         if (this.instance) {
             try {
-                await this.instance.close();
+                this.instance.closeSync();
             } catch (error) {
                 throw error;
             }
