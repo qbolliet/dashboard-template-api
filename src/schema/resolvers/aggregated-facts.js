@@ -16,8 +16,9 @@ const aggregatedFactsResolvers = {
             aggregation = 'SUM',
             limit = config.API.PAGINATION.DEFAULT_LIMIT,
             offset = 0,
-            sort = []
-        }, { loaders }) => {
+            sort = [],
+            database
+        }, { loaders, getLoadersForDatabase }) => {
             // Validation des opérations d'agrégation
             const validAggregations = ['SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'];
             if (!validAggregations.includes(aggregation)) {
@@ -54,8 +55,11 @@ const aggregatedFactsResolvers = {
             });
 
             try {
+                const targetLoaders = getLoadersForDatabase(database);
+                const activeLoaders = targetLoaders || loaders;
+
                 const results = await withTimeout(
-                    loaders.aggregatedFacts.load({
+                    activeLoaders.aggregatedFacts.load({
                         fields,
                         filters,
                         structuredFilters,
@@ -68,12 +72,12 @@ const aggregatedFactsResolvers = {
                     config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts fetch timeout'
                 );
-                
+
                 // Enrichissement des résultats avec le champ de regroupement
                 // et chargement en masse des labels
                 const enrichedResults = enrichAggregatedFacts(results, groupBy);
                 return await withTimeout(
-                    enrichAggregatedFactsWithLabels(enrichedResults, groupBy, loaders),
+                    enrichAggregatedFactsWithLabels(enrichedResults, groupBy, activeLoaders),
                     config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts labels enrichment timeout'
                 );
@@ -93,8 +97,9 @@ const aggregatedFactsResolvers = {
             aggregation = 'SUM',
             limit = config.API.PAGINATION.DEFAULT_LIMIT,
             offset = 0,
-            sort = []
-        }, { loaders }) => {
+            sort = [],
+            database
+        }, { loaders, getLoadersForDatabase }) => {
             // Validation des opérations d'agrégation
             const validAggregations = ['SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'];
             if (!validAggregations.includes(aggregation)) {
@@ -131,8 +136,11 @@ const aggregatedFactsResolvers = {
             });
             
             try {
+                const targetLoaders = getLoadersForDatabase(database);
+                const activeLoaders = targetLoaders || loaders;
+
                 const result = await withTimeout(
-                    loaders.aggregatedFactsWithMetadata.load({
+                    activeLoaders.aggregatedFactsWithMetadata.load({
                         fields,
                         filters,
                         structuredFilters,
@@ -145,16 +153,16 @@ const aggregatedFactsResolvers = {
                     config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts with metadata fetch timeout'
                 );
-                
+
                 // Enrichissement les données avec le champ de regroupement
                 // et chargement en masse des labels
                 const enrichedData = enrichAggregatedFacts(result.data, groupBy);
                 result.data = await withTimeout(
-                    enrichAggregatedFactsWithLabels(enrichedData, groupBy, loaders),
+                    enrichAggregatedFactsWithLabels(enrichedData, groupBy, activeLoaders),
                     config.API.TIMEOUTS.AGGREGATED_SIMPLE,
                     'Aggregated facts labels enrichment timeout'
                 );
-                
+
                 return result;
             } catch (error) {
                 if (error.message === 'Aggregated facts fetch timeout') {

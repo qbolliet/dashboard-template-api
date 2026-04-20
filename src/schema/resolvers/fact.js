@@ -41,9 +41,12 @@ const factResolvers = {
         },
         
         // Requête des faits avec métadonnées optimisées pour D3
-        getFactTableWithMetadata: async (_, args, { loaders }) => {
+        getFactTableWithMetadata: async (_, args, { loaders, getLoadersForDatabase }) => {
+            const targetLoaders = getLoadersForDatabase(args.database);
+            const activeLoaders = targetLoaders || loaders;
+
             const result = await withTimeout(
-                loaders.factWithMetadata.load(args),
+                activeLoaders.factWithMetadata.load(args),
                 config.API.TIMEOUTS.FACT_SIMPLE,
                 'Metadata fact table fetch timeout'
             );
@@ -51,11 +54,11 @@ const factResolvers = {
             // Enrichissement en masse des dimensions pour toutes les lignes
             if (result && result.data) {
                 const enrichedData = await withTimeout(
-                    enrichFactsWithDimensions(result.data, loaders),
+                    enrichFactsWithDimensions(result.data, activeLoaders),
                     config.API.TIMEOUTS.FACT_COMPLEX,
                     'Dimension enrichment timeout'
                 );
-                
+
                 return {
                     ...result,
                     data: enrichedData
