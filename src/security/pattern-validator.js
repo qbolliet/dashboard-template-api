@@ -102,7 +102,7 @@ class PatternValidator {
         // Vérification des patterns autorisés
         for (const allowed of this.compiledPatterns.allowed) {
             if (query.includes(allowed)) {
-                this.logger.security('Query contains allowed pattern', { pattern: allowed });
+                this.logger.operation('Query contains allowed pattern', { component: 'security', module: 'patterns', pattern: allowed });
                 return; // Pattern autorisé, pas de vérification supplémentaire
             }
         }
