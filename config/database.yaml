@@ -3,14 +3,17 @@ CATALOGS:
     PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
     DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
     READ_ONLY: ${DEFAULT_READ_ONLY:-true}
+    SCHEMA: ${DEFAULT_SCHEMA:-main}
   macroeconomics:
     PATH: ${MACROECONOMICS_CATALOG_PATH:-../dashboard-template-database/outputs/macroeconomics.ducklake}
     DATA_PATH: ${MACROECONOMICS_DATA_PATH:-../dashboard-template-database/outputs/macroeconomics_data/}
     READ_ONLY: ${MACROECONOMICS_READ_ONLY:-true}
+    SCHEMA: ${MACROECONOMICS_SCHEMA:-main}
   public_finance:
     PATH: ${PUBLIC_FINANCE_CATALOG_PATH:-../dashboard-template-database/outputs/public_finance.ducklake}
     DATA_PATH: ${PUBLIC_FINANCE_DATA_PATH:-../dashboard-template-database/outputs/public_finance_data/}
     READ_ONLY: ${PUBLIC_FINANCE_READ_ONLY:-true}
+    SCHEMA: ${PUBLIC_FINANCE_SCHEMA:-main}
 
 DATABASE:
   POOL:
