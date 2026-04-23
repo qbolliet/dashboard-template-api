@@ -9,6 +9,7 @@ const metadataTypeDefs = gql`
     python_type: String
     sql_type: String
     is_categorical: Boolean
+    is_primary_key: Boolean
   }
 
   extend type Query {
