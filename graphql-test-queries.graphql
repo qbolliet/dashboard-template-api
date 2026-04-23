@@ -865,3 +865,342 @@ query TestEmptyDatabase {
 #    Valide:   { "X-Database-ID": "macroeconomics" }
 #    Invalide: { "X-Database-ID": "unknown" }  -> erreur levée
 #    Vide:     { "X-Database-ID": "" }         -> utilise default
+
+# ============================================
+# 16. TESTS CATALOGUE (getDatabases, getDatabaseSchema, getSharedDimensions)
+# ============================================
+
+# Test 16.1: Lister tous les catalogues disponibles avec leurs champs et dimensions
+# Utile pour alimenter dynamiquement un sélecteur de catalogue dans l'UI
+query TestGetDatabases {
+  getDatabases {
+    id
+    dimensionNames
+    fields {
+      name
+      label
+      is_categorical
+      sql_type
+    }
+  }
+}
+
+# Test 16.1b: Version légère (identifiant + dimensions seulement)
+query TestGetDatabasesLight {
+  getDatabases {
+    id
+    dimensionNames
+  }
+}
+
+# Test 16.2: Schéma complet d'un catalogue spécifique
+# Équivalent de getDatabases mais pour un seul catalogue
+query TestGetDatabaseSchema {
+  getDatabaseSchema(database: "macroeconomics") {
+    name
+    label
+    python_type
+    sql_type
+    is_categorical
+  }
+}
+
+# Test 16.2b: Schéma du catalogue par défaut (paramètre optionnel omis)
+query TestGetDatabaseSchemaDefault {
+  getDatabaseSchema {
+    name
+    label
+    is_categorical
+  }
+}
+
+# Test 16.2c: Schémas de plusieurs catalogues en parallèle
+query TestGetDatabaseSchemaMultiple {
+  defaultSchema: getDatabaseSchema(database: "default") {
+    name
+    label
+    is_categorical
+  }
+  macroSchema: getDatabaseSchema(database: "macroeconomics") {
+    name
+    label
+    is_categorical
+  }
+  financeSchema: getDatabaseSchema(database: "public_finance") {
+    name
+    label
+    is_categorical
+  }
+}
+
+# Test 16.3: Dimensions communes à deux catalogues
+# Résultat attendu: ["indicator", "country"]
+query TestGetSharedDimensions {
+  getSharedDimensions(databases: ["default", "macroeconomics"])
+}
+
+# Test 16.3b: Dimensions communes aux trois catalogues
+# Résultat attendu: ["indicator", "country"]
+query TestGetSharedDimensionsAll {
+  getSharedDimensions(databases: ["default", "macroeconomics", "public_finance"])
+}
+
+# Test 16.3c: Dimensions communes puis récupération des options disponibles
+# Utile pour construire un filtre partagé cross-catalogue dans l'UI
+query TestSharedDimensionsWithOptions {
+  sharedDimensions: getSharedDimensions(
+    databases: ["default", "macroeconomics"]
+  )
+  countryOptions: getDimensionTable(name: "country", database: "default") {
+    value
+    label
+  }
+  indicatorOptions: getDimensionTable(name: "indicator", database: "default") {
+    value
+    label
+  }
+}
+
+# ============================================
+# 17. TESTS CROSS-DATABASE (requiert ALLOW_CROSS_DATABASE_QUERIES=true)
+# ============================================
+#
+# PRÉREQUIS: Définir la variable d'environnement avant de lancer le serveur:
+#   ALLOW_CROSS_DATABASE_QUERIES=true npm run dev
+# ou $env:ALLOW_CROSS_DATABASE_QUERIES="true"; npm run dev sur Powershell
+#
+# Ces requêtes exploitent le fait que tous les catalogues sont attachés
+# à la même instance DuckDB en mémoire – les JOINs sont natifs.
+
+# Test 17.1: Options de sélection communes à deux catalogues
+# Retourne les valeurs de country présentes dans default ET macroeconomics
+query TestCrossDatabaseSelectOptions {
+  crossDatabaseSelectOptions(
+    fieldName: "country"
+    databases: ["default", "macroeconomics"]
+    limit: 50
+  ) {
+    value
+    label
+  }
+}
+
+# Test 17.1b: Options communes à trois catalogues
+query TestCrossDatabaseSelectOptionsAll {
+  crossDatabaseSelectOptions(
+    fieldName: "country"
+    databases: ["default", "macroeconomics", "public_finance"]
+    limit: 50
+  ) {
+    value
+    label
+  }
+}
+
+# Test 17.1c: Options communes pour indicator
+query TestCrossDatabaseSelectOptionsIndicator {
+  crossDatabaseSelectOptions(
+    fieldName: "indicator"
+    databases: ["default", "macroeconomics"]
+    limit: 50
+  ) {
+    value
+    label
+  }
+}
+
+# Test 17.2: Comparaison de faits ligne à ligne entre deux catalogues
+# Joint les tables de faits sur le champ country
+# → Pour chaque ligne de default, trouve la ligne correspondante dans macroeconomics
+query TestCompareFacts {
+  compareFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    joinFields: ["country"]
+    limit: 10
+    offset: 0
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.2b: Comparaison avec tri par delta décroissant
+query TestCompareFactsSorted {
+  compareFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    joinFields: ["country"]
+    limit: 20
+    offset: 0
+    sort: [{ field: "delta", order: DESC }]
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.2c: Comparaison avec jointure sur plusieurs champs
+# Joint sur (country, indicator) – clé composite séparée par '::'
+query TestCompareFactsMultiJoin {
+  compareFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    joinFields: ["country", "indicator"]
+    limit: 10
+    offset: 0
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.3: Comparaison de faits agrégés entre deux catalogues
+# Agrège (SUM) les valeurs par country dans chaque catalogue puis compare
+query TestCompareAggregatedFacts {
+  compareAggregatedFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    groupBy: "country"
+    aggregation: SUM
+    limit: 10
+    offset: 0
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.3b: Comparaison par indicator avec agrégation AVG
+query TestCompareAggregatedFactsByIndicator {
+  compareAggregatedFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    groupBy: "indicator"
+    aggregation: AVG
+    limit: 10
+    offset: 0
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.3c: Comparaison entre macroeconomics et public_finance
+query TestCompareAggregatedFactsOtherPair {
+  compareAggregatedFacts(
+    databaseA: "macroeconomics"
+    databaseB: "public_finance"
+    groupBy: "country"
+    aggregation: AVG
+    limit: 10
+    offset: 0
+  ) {
+    key
+    valueA
+    valueB
+    delta
+    deltaPercent
+  }
+}
+
+# Test 17.4: Requête cross-database désactivée (devrait lever CROSS_DATABASE_DISABLED)
+# Pour tester sans ALLOW_CROSS_DATABASE_QUERIES=true
+query TestCrossDatabaseDisabled {
+  compareFacts(
+    databaseA: "default"
+    databaseB: "macroeconomics"
+    joinFields: ["country"]
+    limit: 5
+  ) {
+    key
+    valueA
+    valueB
+  }
+}
+
+# ============================================
+# 18. TESTS FORMAT DONNÉES (OBJECTS vs ARRAYS)
+# ============================================
+#
+# Le paramètre format: ARRAYS retourne les données comme un tableau de tableaux
+# au lieu d'un tableau d'objets. Utile pour AG Grid, TanStack Table, etc.
+
+# Test 18.1: Format OBJECTS (défaut) – compatible D3, Vega, Recharts
+query TestFactTableFormatObjects {
+  getFactTableWithMetadata(limit: 5, offset: 0) {
+    columns
+    data
+    metadata {
+      count
+      total
+    }
+  }
+}
+
+# Test 18.2: Format ARRAYS – compatible AG Grid / TanStack Table
+# data est un tableau de tableaux: [["val1", "val2", ...], ...]
+# Les colonnes sont dans le même ordre que columns[]
+query TestFactTableFormatArrays {
+  getFactTableWithMetadata(limit: 5, offset: 0, format: ARRAYS) {
+    columns
+    data
+    metadata {
+      count
+      total
+    }
+  }
+}
+
+# Test 18.3: Format ARRAYS avec filtres et tri
+query TestFactTableFormatArraysFiltered {
+  getFactTableWithMetadata(
+    structuredFilters: [
+      { key: "country", operator: "IN", values: ["0", "1", "2"] }
+    ]
+    sort: [{ field: "value", order: DESC }]
+    limit: 10
+    offset: 0
+    format: ARRAYS
+  ) {
+    columns
+    data
+    metadata {
+      count
+      extents
+      total
+    }
+  }
+}
+
+# Test 18.4: Format ARRAYS depuis un catalogue spécifique
+query TestFactTableFormatArraysMacro {
+  getFactTableWithMetadata(
+    limit: 5
+    offset: 0
+    format: ARRAYS
+    database: "macroeconomics"
+  ) {
+    columns
+    data
+    metadata {
+      count
+      total
+    }
+  }
+}
