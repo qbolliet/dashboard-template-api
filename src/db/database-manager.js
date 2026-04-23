@@ -49,11 +49,20 @@ class DatabaseManager {
     constructor() {
         // Configuration du routage des catalogues depuis le fichier de config
         this.defaultDatabase = config.DATABASE_ROUTING.DEFAULT_DATABASE;
-        this.allowedDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+
+        // ALLOWED_DATABASES peut être une string JSON ou un tableau selon le config-loader
+        const rawAllowed = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+        this.allowedDatabases = typeof rawAllowed === 'string'
+            ? JSON.parse(rawAllowed)
+            : rawAllowed;
+
         this.allowCrossDatabase = config.DATABASE_ROUTING.ALLOW_CROSS_DATABASE_QUERIES;
 
         // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
         this.sharedPool = null;
+
+        // Map catalogId -> schéma DuckLake (configurable via SCHEMA dans database.yaml)
+        this.schemas = {};
 
         // Initialisation automatique
         this.initializeDatabases();
@@ -80,6 +89,9 @@ class DatabaseManager {
             const dataPathRaw = resolve(__dirname, '../../', catalogConfig.DATA_PATH).replace(/\\/g, '/');
             // DuckLake exige un slash final sur DATA_PATH
             const dataPath = dataPathRaw.endsWith('/') ? dataPathRaw : dataPathRaw + '/';
+
+            // Stockage du schéma DuckLake configuré pour ce catalogue
+            this.schemas[catalogId] = catalogConfig.SCHEMA || 'main';
 
             // Vérification de l'existence du fichier catalogue
             if (!fs.existsSync(catalogPath)) {
@@ -189,6 +201,17 @@ class DatabaseManager {
      */
     getDefaultDatabase() {
         return this.defaultDatabase;
+    }
+
+    /**
+     * Get the DuckLake schema name for a catalog.
+     * Defaults to 'main' if not configured.
+     *
+     * @param {string} catalogId - Catalog identifier.
+     * @returns {string} Schema name (e.g. 'main').
+     */
+    getSchema(catalogId) {
+        return this.schemas[catalogId] || this.schemas[this.defaultDatabase] || 'main';
     }
 
     /**
