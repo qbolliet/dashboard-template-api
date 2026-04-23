@@ -59,6 +59,15 @@ const factResolvers = {
                     'Dimension enrichment timeout'
                 );
 
+                // Format ARRAYS : transformer [{col: val}] en [[val1, val2, ...]]
+                // Les colonnes sont déjà présentes dans result.columns
+                if (args.format === 'ARRAYS' && result.columns) {
+                    return {
+                        ...result,
+                        data: enrichedData.map(row => result.columns.map(col => row[col] ?? null))
+                    };
+                }
+
                 return {
                     ...result,
                     data: enrichedData
