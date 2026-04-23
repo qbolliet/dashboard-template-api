@@ -68,7 +68,8 @@ class BaseQueryLoader {
      */
     qualifyTable(tableName) {
         const catalog = this.databaseId || databaseManager.defaultDatabase;
-        return `"${catalog}".main.${tableName}`;
+        const schema = databaseManager.getSchema(catalog);
+        return `"${catalog}".${schema}.${tableName}`;
     }
 
     // Méthode de chargement de données avec mise en cache
