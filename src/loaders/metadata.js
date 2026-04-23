@@ -43,6 +43,9 @@ class MetadataLoader extends BaseQueryLoader {
         if (metadata && 'is_categorical' in metadata) {
             metadata.is_categorical = Boolean(metadata.is_categorical);
         }
+        if (metadata && 'is_primary_key' in metadata) {
+            metadata.is_primary_key = Boolean(metadata.is_primary_key);
+        }
         
         return metadata;
     }
