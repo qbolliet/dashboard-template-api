@@ -2,6 +2,7 @@ import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { config } from '../utils/config-loader.js';
 import { AggregatedFactsLoader } from './aggregated-facts.js';
+import { validateIdentifier } from '../utils/utils.js';
 
 class CrossDatabaseLoader extends BaseQueryLoader {
     constructor() {
@@ -27,6 +28,7 @@ class CrossDatabaseLoader extends BaseQueryLoader {
         const schemaA = databaseManager.getSchema(databaseA);
         const schemaB = databaseManager.getSchema(databaseB);
 
+        joinFields.forEach(f => validateIdentifier(f, 'joinField'));
         const joinCondition = joinFields
             .map(f => `a.${f} = b.${f}`)
             .join(' AND ');
@@ -56,14 +58,32 @@ class CrossDatabaseLoader extends BaseQueryLoader {
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-        const results = await connection.all(query);
-        return results.map(row => ({
-            key: String(row.key),
-            valueA: row.valueA != null ? Number(row.valueA) : null,
-            valueB: row.valueB != null ? Number(row.valueB) : null,
-            delta: row.delta != null ? Number(row.delta) : null,
-            deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null
-        }));
+        // Comptage total pour la pagination
+        const countQuery = `
+            SELECT COUNT(*) AS total
+            FROM "${databaseA}".${schemaA}.fact_table a
+            JOIN "${databaseB}".${schemaB}.fact_table b
+                ON ${joinCondition}
+        `;
+        const [results, countResult] = await Promise.all([
+            connection.all(query),
+            connection.all(countQuery)
+        ]);
+        const total = Number(countResult[0]?.total ?? 0);
+
+        return {
+            data: results.map(row => ({
+                key: String(row.key),
+                valueA: row.valueA != null ? Number(row.valueA) : null,
+                valueB: row.valueB != null ? Number(row.valueB) : null,
+                delta: row.delta != null ? Number(row.delta) : null,
+                deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null
+            })),
+            total,
+            hasNextPage: offset + limit < total,
+            currentPage: Math.floor(offset / limit) + 1,
+            totalPages: limit > 0 ? Math.ceil(total / limit) : 1
+        };
     }
 
     async compareAggregatedFacts(connection, params) {
@@ -78,37 +98,64 @@ class CrossDatabaseLoader extends BaseQueryLoader {
 
         const schemaA = databaseManager.getSchema(databaseA);
         const schemaB = databaseManager.getSchema(databaseB);
+        validateIdentifier(groupBy, 'groupBy');
         const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
 
-        // Les sous-requêtes évitent toute ambiguïté de colonne dans la jointure
+        // CTEs pour pré-agréger chaque côté avant la jointure — évite le produit cartésien
         const query = `
+            WITH agg_a AS (
+                SELECT ${groupBy} AS key, ${aggFn}(value) AS value
+                FROM "${databaseA}".${schemaA}.fact_table
+                GROUP BY ${groupBy}
+            ),
+            agg_b AS (
+                SELECT ${groupBy} AS key, ${aggFn}(value) AS value
+                FROM "${databaseB}".${schemaB}.fact_table
+                GROUP BY ${groupBy}
+            )
             SELECT
-                a.${groupBy} AS key,
-                ${aggFn}(a.value) AS valueA,
-                ${aggFn}(b.value) AS valueB,
-                ${aggFn}(b.value) - ${aggFn}(a.value) AS delta,
-                CASE WHEN ${aggFn}(a.value) != 0
-                    THEN (${aggFn}(b.value) - ${aggFn}(a.value)) / ${aggFn}(a.value) * 100.0
+                a.key,
+                a.value AS valueA,
+                b.value AS valueB,
+                b.value - a.value AS delta,
+                CASE WHEN a.value IS NOT NULL AND a.value != 0
+                    THEN (b.value - a.value) / a.value * 100.0
                 END AS deltaPercent
-            FROM "${databaseA}".${schemaA}.fact_table a
-            JOIN "${databaseB}".${schemaB}.fact_table b
-                ON a.${groupBy} = b.${groupBy}
-            GROUP BY a.${groupBy}
+            FROM agg_a a
+            JOIN agg_b b ON a.key = b.key
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-        const results = await connection.all(query);
-        return results.map(row => ({
-            key: String(row.key),
-            valueA: row.valueA != null ? Number(row.valueA) : null,
-            valueB: row.valueB != null ? Number(row.valueB) : null,
-            delta: row.delta != null ? Number(row.delta) : null,
-            deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null
-        }));
+        // Comptage total des groupes communs pour la pagination
+        const countQuery = `
+            WITH keys_a AS (SELECT DISTINCT ${groupBy} AS key FROM "${databaseA}".${schemaA}.fact_table),
+                 keys_b AS (SELECT DISTINCT ${groupBy} AS key FROM "${databaseB}".${schemaB}.fact_table)
+            SELECT COUNT(*) AS total FROM keys_a JOIN keys_b ON keys_a.key = keys_b.key
+        `;
+        const [results, countResult] = await Promise.all([
+            connection.all(query),
+            connection.all(countQuery)
+        ]);
+        const total = Number(countResult[0]?.total ?? 0);
+
+        return {
+            data: results.map(row => ({
+                key: String(row.key),
+                valueA: row.valueA != null ? Number(row.valueA) : null,
+                valueB: row.valueB != null ? Number(row.valueB) : null,
+                delta: row.delta != null ? Number(row.delta) : null,
+                deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null
+            })),
+            total,
+            hasNextPage: offset + limit < total,
+            currentPage: Math.floor(offset / limit) + 1,
+            totalPages: limit > 0 ? Math.ceil(total / limit) : 1
+        };
     }
 
     async crossDatabaseSelectOptions(connection, params) {
         const { fieldName, databases, limit } = params;
+        validateIdentifier(fieldName, 'fieldName');
 
         if (databases.length === 0) return [];
 

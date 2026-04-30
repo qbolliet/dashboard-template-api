@@ -17,6 +17,15 @@ const crossDatabaseTypeDefs = gql`
         deltaPercent: Float
     }
 
+    "Résultat paginé pour les comparaisons cross-database"
+    type PaginatedComparedFacts {
+        data: [ComparedFact!]!
+        total: Int!
+        hasNextPage: Boolean!
+        currentPage: Int!
+        totalPages: Int!
+    }
+
     extend type Query {
         "Compare les faits de deux catalogues sur des champs de jointure communs"
         compareFacts(
@@ -29,7 +38,7 @@ const crossDatabaseTypeDefs = gql`
             limit: Int! = 100
             offset: Int! = 0
             sort: [SortInput!]
-        ): [ComparedFact!]!
+        ): PaginatedComparedFacts!
 
         "Compare les faits agrégés de deux catalogues sur un groupBy commun"
         compareAggregatedFacts(
@@ -40,7 +49,7 @@ const crossDatabaseTypeDefs = gql`
             aggregation: Aggregation! = SUM
             limit: Int! = 100
             offset: Int! = 0
-        ): [ComparedFact!]!
+        ): PaginatedComparedFacts!
 
         "Retourne les options de sélection communes à plusieurs catalogues"
         crossDatabaseSelectOptions(

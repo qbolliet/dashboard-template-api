@@ -19,15 +19,18 @@ class RateLimiter {
             burstWindowMs: config.BURST_WINDOW_MS || 60 * 1000, // 1 minute
             skipFailedRequests: config.SKIP_FAILED_REQUESTS || false,
             keyGenerator: config.KEY_GENERATOR || this.defaultKeyGenerator,
-            skip: config.SKIP || (() => false)
+            skip: config.SKIP || (() => false),
+            // Liste des IPs de proxy de confiance (ex: '127.0.0.1', '10.0.0.0/8')
+            // Seules ces IPs sont autorisées à transmettre x-forwarded-for
+            trustedProxies: new Set(config.TRUSTED_PROXIES || [])
         };
         // Initialisation du stockage
         this.store = new Map();
         // Initialisation du logger
         this.logger = createContextLogger({ component: 'security', module: 'rate-limiter' });
         
-        // Nettoyage périodique du store
-        this.cleanupInterval = setInterval(() => this.cleanup(), this.config.windowMs);
+        // Nettoyage périodique des entrées expirées
+        this.cleanupInterval = setInterval(() => this._removeExpiredEntries(), this.config.windowMs);
     }
 
     // Méthode de vérification que la limite n'est pas atteinte
@@ -123,31 +126,37 @@ class RateLimiter {
 
     // Méthode de génération de clé
     /**
-     * Générateur de clé par défaut basé sur IP et User-Agent
+     * Générateur de clé par défaut basé sur IP et User-Agent.
+     * Ne fait confiance à x-forwarded-for que si l'IP de connexion est dans trustedProxies.
      */
     defaultKeyGenerator(req) {
-        const ip = req.ip || 
-                   req.headers['x-forwarded-for']?.split(',')[0] || 
-                   req.connection?.remoteAddress || 
-                   'unknown';
+        const remoteIp = req.connection?.remoteAddress || req.socket?.remoteAddress || 'unknown';
+
+        let ip = req.ip || remoteIp;
+
+        // Utiliser x-forwarded-for uniquement si le proxy est de confiance
+        const trustedProxies = this.config.trustedProxies;
+        if (trustedProxies.has(remoteIp) || trustedProxies.has('*')) {
+            const forwarded = req.headers['x-forwarded-for'];
+            if (forwarded) {
+                ip = forwarded.split(',')[0].trim();
+            }
+        }
+
         const userAgent = req.headers['user-agent'] || 'no-user-agent';
-        
+
         return crypto
             .createHash('sha256')
             .update(`${ip}:${userAgent}`)
             .digest('hex');
     }
 
-    // Méthode de nettoyage des entrées expirées
-    /**
-     * Nettoie les entrées expirées du store
-     */
-    cleanup() {
+    // Supprime les entrées expirées du store (appelé périodiquement par l'interval)
+    _removeExpiredEntries() {
         const now = Date.now();
         let cleaned = 0;
 
         for (const [key, data] of this.store.entries()) {
-            // Supprimer si toutes les requêtes sont expirées
             if (data.requests.every(timestamp => now - timestamp > this.config.windowMs)) {
                 this.store.delete(key);
                 cleaned++;
@@ -161,7 +170,7 @@ class RateLimiter {
 
     // Méthode d'arrêt du nettoyage périodique
     /**
-     * Arrête le nettoyage périodique
+     * Arrête le nettoyage périodique et vide le store
      */
     async stop() {
         if (this.cleanupInterval) {
@@ -171,8 +180,7 @@ class RateLimiter {
         this.store.clear();
     }
 
-    // Méthode de nettoyage
-    // Alias pour la compatibilité
+    // Alias public pour la compatibilité (appelle stop)
     async cleanup() {
         return this.stop();
     }

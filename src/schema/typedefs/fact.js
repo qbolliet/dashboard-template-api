@@ -63,6 +63,8 @@ const factTypeDefs = gql`
         currentPage: Int
         "Total number of pages"
         totalPages: Int
+        "ISO 8601 timestamp of when this query was executed"
+        generatedAt: String!
     }
     
     "D3-optimized data format with metadata"
@@ -90,6 +92,8 @@ const factTypeDefs = gql`
         valueExtent: [Float!]!
         statistics: AggregationStatistics
         groupByFieldInfo: Metadata
+        "ISO 8601 timestamp of when this query was executed"
+        generatedAt: String!
     }
     
     "Aggregated facts with D3-optimized metadata"

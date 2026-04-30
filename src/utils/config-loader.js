@@ -54,6 +54,9 @@ class ConfigLoader {
         // Validation de l'environnement
         this.validateEnvironment(this.config);
 
+        // Validation des champs obligatoires
+        this.validateRequiredFields(this.config);
+
         return this.config;
     }
 
@@ -189,9 +192,40 @@ class ConfigLoader {
     validateEnvironment(config) {
         const validEnvironments = ['development', 'production'];
         const environment = config.ENVIRONMENT;
-        
+
         if (!validEnvironments.includes(environment)) {
             throw new Error(`Invalid environment: ${environment}. Must be one of: ${validEnvironments.join(', ')}`);
+        }
+    }
+
+    // Validation des champs de configuration obligatoires au démarrage
+    validateRequiredFields(config) {
+        const required = [
+            { path: 'API.PORT', label: 'PORT' },
+            { path: 'DATABASE_ROUTING.DEFAULT_DATABASE', label: 'DEFAULT_DATABASE' },
+            { path: 'DATABASE_ROUTING.ALLOWED_DATABASES', label: 'ALLOWED_DATABASES' },
+            { path: 'DATABASE.POOL.MAX_CONNECTIONS', label: 'DB_MAX_CONNECTIONS' },
+            { path: 'SECURITY.RATE_LIMIT.MAX_REQUESTS', label: 'RATE_LIMIT_MAX_REQUESTS' }
+        ];
+
+        const missing = [];
+        for (const { path, label } of required) {
+            const value = path.split('.').reduce((obj, key) => obj?.[key], config);
+            if (value === undefined || value === null || value === '') {
+                missing.push(label);
+            }
+        }
+
+        if (missing.length > 0) {
+            throw new Error(
+                `Missing required configuration: ${missing.join(', ')}. ` +
+                `Check your environment variables or config files.`
+            );
+        }
+
+        // Vérification que CATALOGS contient au moins une entrée
+        if (!config.CATALOGS || Object.keys(config.CATALOGS).length === 0) {
+            throw new Error('No catalogs configured. Add at least one entry to CATALOGS in database.yaml.');
         }
     }
 

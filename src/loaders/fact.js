@@ -82,7 +82,8 @@ class FactLoader extends FactQueryLoader {
                         total,
                         hasNextPage: offset + limit < total,
                         currentPage: Math.floor(offset / limit) + 1,
-                        totalPages: Math.ceil(total / limit)
+                        totalPages: Math.ceil(total / limit),
+                        generatedAt: new Date().toISOString()
                     };
                 } else {
                     // Pour les autres formats, wrapper dans un objet
@@ -91,7 +92,8 @@ class FactLoader extends FactQueryLoader {
                         total,
                         hasNextPage: offset + limit < total,
                         currentPage: Math.floor(offset / limit) + 1,
-                        totalPages: Math.ceil(total / limit)
+                        totalPages: Math.ceil(total / limit),
+                        generatedAt: new Date().toISOString()
                     };
                 }
             }

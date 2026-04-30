@@ -72,18 +72,22 @@ class DuckDBPool {
             // Support S3 : chargement de l'extension httpfs si activé dans la config
             if (config.S3?.ENABLED) {
                 await conn.run("INSTALL httpfs FROM core; LOAD httpfs;");
-                if (config.S3.REGION) {
-                    await conn.run(`SET s3_region='${config.S3.REGION}';`);
-                }
+                // Utilisation de CREATE SECRET pour éviter l'exposition des credentials dans les logs SQL
+                const esc = (v) => (v || '').replace(/'/g, "''");
+                const secretParts = [
+                    `TYPE S3`,
+                    `REGION '${esc(config.S3.REGION || 'eu-west-1')}'`
+                ];
                 if (config.S3.ACCESS_KEY) {
-                    await conn.run(`SET s3_access_key_id='${config.S3.ACCESS_KEY}';`);
+                    secretParts.push(`KEY_ID '${esc(config.S3.ACCESS_KEY)}'`);
                 }
                 if (config.S3.SECRET_KEY) {
-                    await conn.run(`SET s3_secret_access_key='${config.S3.SECRET_KEY}';`);
+                    secretParts.push(`SECRET '${esc(config.S3.SECRET_KEY)}'`);
                 }
                 if (config.S3.ENDPOINT) {
-                    await conn.run(`SET s3_endpoint='${config.S3.ENDPOINT}';`);
+                    secretParts.push(`ENDPOINT '${esc(config.S3.ENDPOINT)}'`);
                 }
+                await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
             }
 
             // Attachement de chaque catalogue DuckLake avec son alias et ses options
@@ -125,9 +129,16 @@ class DuckDBPool {
         // Logging de l'acquisition
         dbLogger.database('Acquiring connection', { poolSize: this.pool.length });
 
+        // Référence partagée pour nettoyer l'interval d'attente si le timeout gagne la course
+        let waitInterval = null;
+
         // Initialisation du timeout
         const timeoutPromise = new Promise((_, reject) => {
             setTimeout(() => {
+                if (waitInterval) {
+                    clearInterval(waitInterval);
+                    waitInterval = null;
+                }
                 reject(new Error(`Connection acquisition timeout after ${this.acquireTimeout}ms`));
             }, this.acquireTimeout);
         });
@@ -348,11 +359,12 @@ class DuckDBPool {
                     resolve(newConnection);
                 } else {
                     // Attente d'une connexion disponible si le pool est à saturation
-                    const checkInterval = setInterval(() => {
+                    waitInterval = setInterval(() => {
                         // Recherche d'une connexion libre
                         const availableConnection = this.pool.find(conn => !conn.inUse);
                         if (availableConnection) {
-                            clearInterval(checkInterval);
+                            clearInterval(waitInterval);
+                            waitInterval = null;
                             availableConnection.inUse = true;
                             resolve(availableConnection);
                         }
@@ -386,21 +398,22 @@ class DuckDBPool {
      * @returns {Promise<void>}
      */
     async close() {
-        // Fermeture parallèle de toutes les connexions du pool
-        await Promise.all(this.pool.map(async (conn) => {
-            try {
-                await conn.close();
-            } catch (error) {
-                throw error;
+        const dbLogger = createContextLogger({ component: 'database' });
+
+        // allSettled pour fermer toutes les connexions même si l'une échoue
+        const results = await Promise.allSettled(this.pool.map(conn => conn.close()));
+        results.forEach((result, i) => {
+            if (result.status === 'rejected') {
+                dbLogger.error(`Failed to close pool connection #${i}`, result.reason);
             }
-        }));
+        });
 
         // Fermeture de l'instance DuckDB partagée
         if (this.instance) {
             try {
                 this.instance.closeSync();
             } catch (error) {
-                throw error;
+                dbLogger.error('Failed to close DuckDB instance', error);
             }
         }
 
