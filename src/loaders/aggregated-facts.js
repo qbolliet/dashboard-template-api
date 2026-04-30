@@ -166,35 +166,43 @@ class AggregatedFactsLoader extends FactQueryLoader {
      */
     async calculateMetadata(connection, data, params) {
         const { groupBy } = params;
-        
+
         // Récupération des infos sur le champ de regroupement
         const fieldMetaQuery = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
         const fieldMeta = await connection.all(fieldMetaQuery, [groupBy]);
-        
+
         // Calcul des extents
         const values = data.map(d => d.aggregatedValue);
         const keys = data.map(d => d.key);
-        
+
+        // Guard : aucune donnée → retourner des métadonnées vides sûres
+        if (keys.length === 0) {
+            return {
+                count: 0,
+                keyExtent: null,
+                valueExtent: [0, 0],
+                groupByFieldInfo: fieldMeta[0] || null,
+                generatedAt: new Date().toISOString()
+            };
+        }
+
         // Détermination des clés numériques
         const numericKeys = keys.every(k => !isNaN(parseFloat(k)));
-        
+
         // Construction du dictionnaire de méta-données
         const metadata = {
             count: data.length,
-            keyExtent: numericKeys 
+            keyExtent: numericKeys
                 ? [Math.min(...keys.map(Number)), Math.max(...keys.map(Number))]
                 : [keys[0], keys[keys.length - 1]], // Première et dernière pour les strings
-            valueExtent: values.length > 0 
-                ? [Math.min(...values), Math.max(...values)]
-                : [0, 0],
-            groupByFieldInfo: fieldMeta[0] || null
+            valueExtent: [Math.min(...values), Math.max(...values)],
+            groupByFieldInfo: fieldMeta[0] || null,
+            generatedAt: new Date().toISOString()
         };
-        
-        // Calcul des statistiques si demandé
-        if (values.length > 0) {
-            metadata.statistics = this.calculateStatistics(values);
-        }
-        
+
+        // Calcul des statistiques
+        metadata.statistics = this.calculateStatistics(values);
+
         return metadata;
     }
 
@@ -205,6 +213,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
      * @returns {Object} Statistics object
      */
     calculateStatistics(values) {
+        if (!values || values.length === 0) {
+            return { mean: null, median: null, stdDev: null, quartiles: null };
+        }
         const sorted = [...values].sort((a, b) => a - b);
         const n = sorted.length;
         

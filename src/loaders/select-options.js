@@ -1,6 +1,7 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
+import { validateIdentifier } from '../utils/utils.js';
 
 // Classe de chargement des options de sélection
 /**
@@ -28,6 +29,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
      */
     async loadSelectOptions(connection, { fieldName, limit, searchTerm }) {
         try {
+            validateIdentifier(fieldName, 'fieldName');
             // Vérification si le champ est catégoriel
             const metadataQuery = `SELECT is_categorical FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
             const metadataResults = await connection.all(metadataQuery, [fieldName]);

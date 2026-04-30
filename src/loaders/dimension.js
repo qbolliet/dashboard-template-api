@@ -91,62 +91,40 @@ class DimensionLoader extends BaseQueryLoader {
     async loadBatchValues(connection, params) {
         // Groupe les paramètres par dimension pour optimiser les requêtes
         const groupedParams = params.reduce((acc, param) => {
-            if (!acc[param.dimensionName]) {
-                acc[param.dimensionName] = [];
-            }
+            if (!acc[param.dimensionName]) acc[param.dimensionName] = [];
             acc[param.dimensionName].push(param.value);
             return acc;
         }, {});
 
-        const results = [];
-        
-        // Pour chaque dimension, exécute une requête batch
-        for (const [dimensionName, values] of Object.entries(groupedParams)) {
+        // Index global Map<dimensionName, Map<value, result>> pour O(1) au retour
+        const allResults = new Map();
+
+        // Requêtes en parallèle pour toutes les dimensions (I2)
+        await Promise.all(Object.entries(groupedParams).map(async ([dimensionName, values]) => {
+            const dimMap = new Map();
+            allResults.set(dimensionName, dimMap);
             try {
                 const placeholders = values.map(() => '?').join(',');
                 const query = `SELECT value, label FROM ${this.qualifyTable(`dim_${dimensionName}`)} WHERE value IN (${placeholders})`;
                 const dimensionResults = await connection.all(query, values);
-                
-                // Crée un map pour un accès rapide
-                const resultMap = new Map();
                 if (dimensionResults) {
                     dimensionResults.forEach(row => {
-                        resultMap.set(row.value, {
+                        dimMap.set(row.value, {
                             name: dimensionName,
                             value: row.value,
                             label: row.label
                         });
                     });
                 }
-                
-                // Ajoute les résultats dans l'ordre des paramètres originaux
-                values.forEach(value => {
-                    const found = resultMap.get(value);
-                    if (found) {
-                        results.push(found);
-                    } else {
-                        results.push({
-                            name: dimensionName,
-                            value: value,
-                            label: value
-                        });
-                    }
-                });
-            } catch (error) {
-                // En cas d'erreur, ajoute les valeurs brutes
-                values.forEach(value => {
-                    results.push({
-                        name: dimensionName,
-                        value: value,
-                        label: value
-                    });
-                });
+            } catch {
+                // En cas d'erreur, les valeurs brutes seront retournées par défaut ci-dessous
             }
-        }
-        
-        // Retourne les résultats dans l'ordre des paramètres originaux
+        }));
+
+        // Retourne les résultats dans l'ordre des paramètres originaux — O(1) par lookup (B7)
         return params.map(param => {
-            return results.find(r => r.name === param.dimensionName && r.value === param.value);
+            const found = allResults.get(param.dimensionName)?.get(param.value);
+            return found ?? { name: param.dimensionName, value: param.value, label: param.value };
         });
     }
 }

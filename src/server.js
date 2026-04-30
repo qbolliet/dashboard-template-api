@@ -137,6 +137,79 @@ async function startServer() {
     // Configuration des routes d'invalidation de cache
     createCacheInvalidationRoutes(app);
 
+    // Compteurs de métriques en mémoire (F8)
+    const metrics = {
+        startedAt: new Date().toISOString(),
+        requests: { total: 0, errors: 0 },
+        responseTimes: [],
+        maxStoredTimes: 1000
+    };
+
+    // GET /health — vérifie que le serveur répond
+    app.get('/health', (req, res) => {
+        res.json({
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            environment: config.ENVIRONMENT
+        });
+    });
+
+    // GET /ready — vérifie les dépendances (DB pool + Redis)
+    app.get('/ready', async (req, res) => {
+        const checks = {};
+        let allOk = true;
+
+        // Vérification du pool DuckDB
+        try {
+            const stats = databaseManager.getStatistics();
+            checks.database = { status: 'ok', pool: stats.sharedPool };
+        } catch (err) {
+            checks.database = { status: 'error', message: err.message };
+            allOk = false;
+        }
+
+        // Vérification Redis
+        try {
+            await redis.ping();
+            checks.redis = { status: 'ok' };
+        } catch (err) {
+            checks.redis = { status: 'error', message: err.message };
+            allOk = false;
+        }
+
+        res.status(allOk ? 200 : 503).json({
+            status: allOk ? 'ready' : 'not_ready',
+            timestamp: new Date().toISOString(),
+            checks
+        });
+    });
+
+    // GET /metrics — métriques opérationnelles légères
+    app.get('/metrics', (req, res) => {
+        const times = metrics.responseTimes;
+        const avg = times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
+        const sorted = [...times].sort((a, b) => a - b);
+        const p95 = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.95)] : 0;
+        const p99 = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.99)] : 0;
+        const dbStats = databaseManager.getStatistics();
+
+        res.json({
+            startedAt: metrics.startedAt,
+            uptime: process.uptime(),
+            requests: {
+                total: metrics.requests.total,
+                errors: metrics.requests.errors,
+                errorRate: metrics.requests.total > 0
+                    ? (metrics.requests.errors / metrics.requests.total).toFixed(4)
+                    : '0'
+            },
+            responseTime: { avg, p95, p99, samples: times.length },
+            database: dbStats.sharedPool,
+            memory: process.memoryUsage()
+        });
+    });
+
     // Création du SecurityManager
     const securityManager = initializeSecurityManager(config.SECURITY);
 
@@ -194,6 +267,7 @@ async function startServer() {
                         operationName: request.operationName
                     });
 
+                    metrics.requests.total++;
                     return {
                         // Validation de la requête avant son analyse
                         async didResolveOperation({ operation }) {
@@ -212,6 +286,12 @@ async function startServer() {
                                 duration,
                                 errors: errors?.length || 0
                             });
+                            // Mise à jour des métriques
+                            if (errors?.length > 0) metrics.requests.errors++;
+                            metrics.responseTimes.push(duration);
+                            if (metrics.responseTimes.length > metrics.maxStoredTimes) {
+                                metrics.responseTimes.shift();
+                            }
 
                             // Formattage de l'erreur en production
                             if (errors && config.ENVIRONMENT === 'production') {

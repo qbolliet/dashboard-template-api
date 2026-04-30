@@ -1020,11 +1020,17 @@ query TestCompareFacts {
     limit: 10
     offset: 0
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1038,11 +1044,17 @@ query TestCompareFactsSorted {
     offset: 0
     sort: [{ field: "delta", order: DESC }]
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1056,11 +1068,17 @@ query TestCompareFactsMultiJoin {
     limit: 10
     offset: 0
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1075,11 +1093,17 @@ query TestCompareAggregatedFacts {
     limit: 10
     offset: 0
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1093,11 +1117,17 @@ query TestCompareAggregatedFactsByIndicator {
     limit: 10
     offset: 0
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1111,11 +1141,17 @@ query TestCompareAggregatedFactsOtherPair {
     limit: 10
     offset: 0
   ) {
-    key
-    valueA
-    valueB
-    delta
-    deltaPercent
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+    hasNextPage
+    currentPage
+    totalPages
   }
 }
 
@@ -1128,9 +1164,12 @@ query TestCrossDatabaseDisabled {
     joinFields: ["country"]
     limit: 5
   ) {
-    key
-    valueA
-    valueB
+    data {
+      key
+      valueA
+      valueB
+    }
+    total
   }
 }
 
