@@ -1,11 +1,16 @@
 // Environment setup for tests - runs before Jest globals are injected
 // This file sets up the environment variables and Node.js configuration
 
-// Force test environment
-process.env.NODE_ENV = 'test';
+// Force test environment (config-loader treats "test" like "development")
+process.env.NODE_ENV = 'development';
 
-// Test database configuration
+// Test database configuration — point catalog paths to test DuckLake files
 process.env.DB_PATH = 'test-data/test-database.db';
+process.env.DEFAULT_CATALOG_PATH = 'data/test-default.ducklake';
+process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
+process.env.DEFAULT_READ_ONLY = 'true';
+// Restrict to default catalog only in tests (macroeconomics/public_finance don't exist)
+process.env.ALLOWED_DATABASES = '["default"]';
 
 // Redis configuration for tests
 process.env.REDIS_HOST = 'localhost';

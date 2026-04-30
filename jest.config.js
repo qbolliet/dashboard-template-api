@@ -55,10 +55,13 @@ export default {
   // Clear mocks between tests
   clearMocks: true,
   restoreMocks: true,
-  
+
   // Verbose output for debugging
   verbose: true,
-  
-  // Enable experimental VM modules
-  injectGlobals: false
+
+  // Run tests sequentially to avoid DB connection races across resolver test files
+  maxWorkers: 1,
+
+  // Force exit after all tests to cleanly close persistent connections
+  forceExit: true
 };
