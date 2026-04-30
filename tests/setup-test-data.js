@@ -1,4 +1,8 @@
-// Script pour créer une base de données de test DuckLake indépendante
+// Creates (or resets) the test DuckLake catalog.
+// Must be run as a separate process (npm run test:setup) BEFORE npm test,
+// because DuckLake allows only one write connection at a time on Windows.
+// During tests the pool opens the catalog in READ_ONLY mode (set via DEFAULT_READ_ONLY=true
+// in setup-env.js), allowing all Jest VM contexts to share the same file concurrently.
 import { DuckDBInstance } from '@duckdb/node-api';
 import path from 'path';
 import fs from 'fs';
@@ -7,76 +11,62 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/**
- * Crée un catalogue DuckLake de test avec des données fictives.
- * Ce catalogue est totalement indépendant de la base de production.
- * Il est attaché en mode READ_ONLY=false pour permettre les insertions.
- */
 async function setupTestData() {
     const dataDir = path.resolve(__dirname, '../data');
-
-    // Création du dossier de données si nécessaire
     if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
     }
 
-    // Chemins du catalogue DuckLake de test (catalogue "main" du test config)
-    const catalogPath = path.resolve(dataDir, 'test-main.ducklake');
-    const dataPath = path.resolve(dataDir, 'test-main_data');
+    const catalogPath = path.resolve(dataDir, 'test-default.ducklake');
+    const dataPath = path.resolve(dataDir, 'test-default_data');
 
-    // Suppression de l'ancienne base de test si elle existe
+    // Delete old catalog so we start from a clean state.
     if (fs.existsSync(catalogPath)) {
         fs.unlinkSync(catalogPath);
-        console.log('Ancienne base de test supprimée');
     }
     if (fs.existsSync(dataPath)) {
         fs.rmSync(dataPath, { recursive: true, force: true });
-        console.log('Anciens fichiers Parquet supprimés');
     }
-
-    // Création du répertoire de données Parquet
     fs.mkdirSync(dataPath, { recursive: true });
 
     const instance = await DuckDBInstance.create(':memory:');
     const conn = await instance.connect();
 
     try {
-        console.log('Installation de l\'extension DuckLake...');
-        await conn.run("INSTALL ducklake FROM community; LOAD ducklake;");
+        try {
+            await conn.run("LOAD ducklake;");
+        } catch (_) {
+            await conn.run("FORCE INSTALL ducklake FROM community; LOAD ducklake;");
+        }
 
-        // Attachement du catalogue DuckLake de test (alias "main")
         await conn.run(
-            `ATTACH 'ducklake:${catalogPath}' AS main (DATA_PATH '${dataPath}/')`
+            `ATTACH 'ducklake:${catalogPath}' AS "default" (DATA_PATH '${dataPath}/')`
         );
-        console.log(`Catalogue DuckLake attaché : ${catalogPath}`);
 
-        // Création de la table metadata
+        // Create tables (DuckLake doesn't support PRIMARY KEY / UNIQUE).
         await conn.run(`
-            CREATE TABLE main.main.metadata (
-                name VARCHAR PRIMARY KEY,
+            CREATE TABLE "default".main.metadata (
+                name VARCHAR,
                 label VARCHAR,
                 python_type VARCHAR,
                 sql_type VARCHAR,
-                is_categorical BOOLEAN
+                is_categorical BOOLEAN,
+                is_primary_key BOOLEAN
             )
         `);
-        console.log('Table metadata créée');
 
-        // Création des tables de dimension
         const dimensions = ['country', 'indicator', 'kind', 'model', 'training'];
         for (const dim of dimensions) {
             await conn.run(`
-                CREATE TABLE main.main.dim_${dim} (
-                    value BIGINT PRIMARY KEY,
+                CREATE TABLE "default".main.dim_${dim} (
+                    value BIGINT,
                     label VARCHAR
                 )
             `);
-            console.log(`Table dim_${dim} créée`);
         }
 
-        // Création de la table des faits
         await conn.run(`
-            CREATE TABLE main.main.fact_table (
+            CREATE TABLE "default".main.fact_table (
                 indicator BIGINT,
                 country BIGINT,
                 date TIMESTAMP_NS,
@@ -88,30 +78,27 @@ async function setupTestData() {
                 training DOUBLE
             )
         `);
-        console.log('Table fact_table créée');
 
-        // Insertion des métadonnées
-        const metadataInserts = [
-            ['indicator', 'Economic Indicator', 'int', 'BIGINT', true],
-            ['country', 'Country', 'int', 'BIGINT', true],
-            ['date', 'Date', 'datetime', 'TIMESTAMP_NS', false],
-            ['value', 'Measurement Value', 'float', 'DOUBLE', false],
-            ['kind', 'Data Kind', 'int', 'BIGINT', true],
-            ['horizon', 'Forecast Horizon', 'float', 'DOUBLE', false],
-            ['week', 'Week Number', 'float', 'DOUBLE', false],
-            ['model', 'Model Type', 'float', 'DOUBLE', true],
-            ['training', 'Training Set', 'float', 'DOUBLE', true]
+        // Insert metadata.
+        const metadataRows = [
+            ['indicator', 'Economic Indicator', 'int', 'BIGINT', true, true],
+            ['country', 'Country', 'int', 'BIGINT', true, true],
+            ['date', 'Date', 'datetime', 'TIMESTAMP_NS', false, false],
+            ['value', 'Measurement Value', 'float', 'DOUBLE', false, false],
+            ['kind', 'Data Kind', 'int', 'BIGINT', true, false],
+            ['horizon', 'Forecast Horizon', 'float', 'DOUBLE', false, false],
+            ['week', 'Week Number', 'float', 'DOUBLE', false, false],
+            ['model', 'Model Type', 'float', 'DOUBLE', true, false],
+            ['training', 'Training Set', 'float', 'DOUBLE', true, false]
         ];
-
-        for (const meta of metadataInserts) {
+        for (const meta of metadataRows) {
             await conn.run(
-                'INSERT INTO main.main.metadata (name, label, python_type, sql_type, is_categorical) VALUES (?, ?, ?, ?, ?)',
+                'INSERT INTO "default".main.metadata (name, label, python_type, sql_type, is_categorical, is_primary_key) VALUES (?, ?, ?, ?, ?, ?)',
                 meta
             );
         }
-        console.log('Métadonnées insérées');
 
-        // Données de dimension
+        // Dimension data.
         const dimensionData = {
             country: [
                 { value: 1, label: 'France' },
@@ -152,28 +139,24 @@ async function setupTestData() {
             ]
         };
 
-        for (const [dimName, data] of Object.entries(dimensionData)) {
-            for (const row of data) {
+        for (const [dimName, rows] of Object.entries(dimensionData)) {
+            for (const row of rows) {
                 await conn.run(
-                    `INSERT INTO main.main.dim_${dimName} (value, label) VALUES (?, ?)`,
+                    `INSERT INTO "default".main.dim_${dimName} (value, label) VALUES (?, ?)`,
                     [row.value, row.label]
                 );
             }
-            console.log(`Dimension dim_${dimName} remplie avec ${data.length} enregistrements`);
         }
 
-        // Génération des données de fait
+        // Generate fact rows.
         const startDate = new Date('2022-01-01');
         const endDate = new Date('2024-12-31');
         let insertCount = 0;
-
-        console.log('Génération des données de fait...');
 
         const generateValue = (indicator, country, date, kind) => {
             let baseValue;
             const monthVariation = Math.sin(date.getMonth() * Math.PI / 6) * 0.1;
             const randomVariation = (Math.random() - 0.5) * 0.2;
-
             switch (indicator.value) {
                 case 1: baseValue = 2.5 + (country.value % 3) * 0.5; break;
                 case 2: baseValue = 2.0 + (country.value % 4) * 0.3; break;
@@ -183,10 +166,8 @@ async function setupTestData() {
                 case 6: baseValue = 100 + (country.value % 4) * 5; break;
                 default: baseValue = 50;
             }
-
             if (kind.value === 2) baseValue *= 1.1;
             else if (kind.value === 3) baseValue *= 0.95;
-
             return baseValue + monthVariation + randomVariation;
         };
 
@@ -194,7 +175,6 @@ async function setupTestData() {
             for (const indicator of dimensionData.indicator.slice(0, 4)) {
                 for (const kind of dimensionData.kind.slice(0, 2)) {
                     const currentDate = new Date(startDate);
-
                     while (currentDate <= endDate) {
                         const value = generateValue(indicator, country, currentDate, kind);
                         const horizon = kind.value === 2 ? Math.floor(Math.random() * 12) + 1 : 0;
@@ -203,7 +183,7 @@ async function setupTestData() {
                         const training = dimensionData.training[Math.floor(Math.random() * dimensionData.training.length)].value;
 
                         await conn.run(
-                            `INSERT INTO main.main.fact_table
+                            `INSERT INTO "default".main.fact_table
                              (indicator, country, date, value, kind, horizon, week, model, training)
                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                             [indicator.value, country.value, currentDate.toISOString(),
@@ -212,35 +192,32 @@ async function setupTestData() {
 
                         insertCount++;
                         if (insertCount % 100 === 0) {
-                            process.stdout.write(`\r  ${insertCount} enregistrements insérés...`);
+                            process.stdout.write(`\r  ${insertCount} records inserted...`);
                         }
-
                         currentDate.setMonth(currentDate.getMonth() + 1);
                     }
                 }
             }
         }
 
-        console.log(`\n${insertCount} enregistrements insérés dans fact_table`);
-        console.log(`Catalogue DuckLake de test créé : ${catalogPath}`);
+        console.log(`\n${insertCount} records inserted into fact_table`);
 
-    } catch (error) {
-        console.error('Erreur lors de la création de la base de test :', error);
-        throw error;
     } finally {
-        if (conn) await conn.close();
+        // closeSync exists but does NOT release the Windows file lock on DuckLake's SQLite
+        // metadata file. This is intentional when run as a standalone setup process — the
+        // process exits immediately after, which releases all file handles.
+        instance.closeSync();
     }
 }
 
-// Exécuter si appelé directement
 if (import.meta.url === `file://${process.argv[1]}`) {
     setupTestData()
         .then(() => {
-            console.log('\nBase de données de test DuckLake créée avec succès !');
+            console.log('Test DuckLake catalog ready.');
             process.exit(0);
         })
         .catch((error) => {
-            console.error('\nÉchec de la création de la base de test :', error);
+            console.error('Failed to set up test data:', error);
             process.exit(1);
         });
 }
