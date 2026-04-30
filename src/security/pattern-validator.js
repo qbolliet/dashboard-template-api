@@ -37,7 +37,7 @@ class PatternValidator {
 
 
             // Logging
-            this.logger.security('Patterns loaded', {
+            this.logger.operation('Patterns loaded', {
                 environment: env,
                 blockedCount: patterns.blocked.length,
                 allowedCount: patterns.allowed.length
@@ -134,7 +134,7 @@ class PatternValidator {
     reload() {
         this.patterns = this.loadPatterns();
         this.compiledPatterns = this.compilePatterns();
-        this.logger.info('Pattern validator reloaded');
+        this.logger.operation('Pattern validator reloaded');
     }
 }
 
