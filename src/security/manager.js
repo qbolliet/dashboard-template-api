@@ -26,7 +26,7 @@ class SecurityManager {
         this.patternValidator = new PatternValidator();
         
         // Logging
-        this.logger.security('SecurityManager initialized', {
+        this.logger.operation('SecurityManager initialized', {
             modules: ['rateLimiter', 'complexityAnalyzer', 'inputSanitizer', 'patternValidator']
         });
     }
