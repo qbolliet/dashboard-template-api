@@ -1,7 +1,7 @@
 import { ApolloServer } from '@apollo/server';
-import { schema } from '../../src/schema/index.js';
-import { createLoaders } from '../../src/loaders/index.js';
-import { databaseManager } from '../../src/db/index.js';
+import { schema } from '../../../src/schema/index.js';
+import { createLoaders } from '../../../src/loaders/index.js';
+import { databaseManager } from '../../../src/db/index.js';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
@@ -15,7 +15,7 @@ let _server = null;
 // Tests cannot write to the catalog (READ_ONLY=true in setup-env.js) to allow
 // multiple Jest VM contexts to open the same DuckLake file simultaneously.
 export const ensureSetup = async () => {
-  const catalogPath = path.resolve(__dirname, '../../data/test-default.ducklake');
+  const catalogPath = path.resolve(__dirname, '../../../data/test-default.ducklake');
   if (!fs.existsSync(catalogPath)) {
     throw new Error(
       `Test catalog not found: ${catalogPath}\n` +

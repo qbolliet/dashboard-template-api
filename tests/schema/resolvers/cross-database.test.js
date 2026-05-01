@@ -1,5 +1,5 @@
 import { ensureSetup, getServer, execute } from './helpers.js';
-import { databaseManager } from '../../src/db/index.js';
+import { databaseManager } from '../../../src/db/index.js';
 
 // Cross-database integration tests require ALLOW_CROSS_DATABASE_QUERIES=true AND
 // at least two databases with actual data. Run with:

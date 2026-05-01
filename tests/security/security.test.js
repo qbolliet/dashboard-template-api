@@ -7,10 +7,10 @@ import {
   QueryComplexityAnalyzer,
   InputSanitizer,
   PatternValidator
-} from '../src/security/index.js';
+} from '../../src/security/index.js';
 
 // Mock dependencies
-jest.mock('../src/utils/config-loader.js', () => ({
+jest.mock('../../src/utils/config-loader.js', () => ({
   config: {
     SECURITY: {
       RATE_LIMIT: {
@@ -53,7 +53,7 @@ jest.mock('../src/utils/config-loader.js', () => ({
   }
 }));
 
-jest.mock('../src/utils/logger.js', () => ({
+jest.mock('../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     security: jest.fn(),
     operation: jest.fn(),

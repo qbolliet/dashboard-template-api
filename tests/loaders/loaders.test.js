@@ -1,12 +1,12 @@
 // Unit tests for data loaders
 import { jest } from '@jest/globals';
-import { createLoaders, createLoadersForRequest } from '../src/loaders/index.js';
-import { BaseQueryLoader } from '../src/loaders/base-loader.js';
-import { createMetadataLoader } from '../src/loaders/metadata.js';
-import { createDimensionLoader, createDimensionValueLoader } from '../src/loaders/dimension.js';
-import { createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } from '../src/loaders/fact.js';
-import { createAggregatedFactsLoader, createAggregatedFactsWithMetadataLoader, createAggregatedFactsWithCountLoader } from '../src/loaders/aggregated-facts.js';
-import { createSelectOptionsLoader } from '../src/loaders/select-options.js';
+import { createLoaders, createLoadersForRequest } from '../../src/loaders/index.js';
+import { BaseQueryLoader } from '../../src/loaders/base-loader.js';
+import { createMetadataLoader } from '../../src/loaders/metadata.js';
+import { createDimensionLoader, createDimensionValueLoader } from '../../src/loaders/dimension.js';
+import { createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } from '../../src/loaders/fact.js';
+import { createAggregatedFactsLoader, createAggregatedFactsWithMetadataLoader, createAggregatedFactsWithCountLoader } from '../../src/loaders/aggregated-facts.js';
+import { createSelectOptionsLoader } from '../../src/loaders/select-options.js';
 
 // Mock dependencies
 const mockPool = {
@@ -25,17 +25,17 @@ const mockDatabaseManager = {
   getPool: jest.fn().mockReturnValue(mockPool)
 };
 
-jest.mock('../src/db/index.js', () => ({
+jest.mock('../../src/db/index.js', () => ({
   databaseManager: mockDatabaseManager
 }));
 
-jest.mock('../src/utils/cache.js', () => ({
+jest.mock('../../src/utils/cache.js', () => ({
   withCache: jest.fn().mockImplementation(async (key, loader) => await loader())
 }));
 
-import { withCache } from '../src/utils/cache.js';
+import { withCache } from '../../src/utils/cache.js';
 
-jest.mock('../src/utils/logger.js', () => ({
+jest.mock('../../src/utils/logger.js', () => ({
   logger: {
     error: jest.fn(),
     info: jest.fn(),
@@ -43,7 +43,7 @@ jest.mock('../src/utils/logger.js', () => ({
   }
 }));
 
-jest.mock('../src/utils/config-loader.js', () => ({
+jest.mock('../../src/utils/config-loader.js', () => ({
   config: {
     API: {
       LOADERS: {
@@ -68,28 +68,28 @@ jest.mock('dataloader', () => {
 });
 
 // Mock individual loader creation functions
-jest.mock('../src/loaders/metadata.js', () => ({
+jest.mock('../../src/loaders/metadata.js', () => ({
   createMetadataLoader: jest.fn(() => mockDataLoader)
 }));
 
-jest.mock('../src/loaders/dimension.js', () => ({
+jest.mock('../../src/loaders/dimension.js', () => ({
   createDimensionLoader: jest.fn(() => mockDataLoader),
   createDimensionValueLoader: jest.fn(() => mockDataLoader)
 }));
 
-jest.mock('../src/loaders/fact.js', () => ({
+jest.mock('../../src/loaders/fact.js', () => ({
   createFactLoader: jest.fn(() => mockDataLoader),
   createFactWithCountLoader: jest.fn(() => mockDataLoader),
   createFactWithMetadataLoader: jest.fn(() => mockDataLoader)
 }));
 
-jest.mock('../src/loaders/aggregated-facts.js', () => ({
+jest.mock('../../src/loaders/aggregated-facts.js', () => ({
   createAggregatedFactsLoader: jest.fn(() => mockDataLoader),
   createAggregatedFactsWithMetadataLoader: jest.fn(() => mockDataLoader),
   createAggregatedFactsWithCountLoader: jest.fn(() => mockDataLoader)
 }));
 
-jest.mock('../src/loaders/select-options.js', () => ({
+jest.mock('../../src/loaders/select-options.js', () => ({
   createSelectOptionsLoader: jest.fn(() => mockDataLoader)
 }));
 
