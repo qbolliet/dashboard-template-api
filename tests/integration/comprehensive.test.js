@@ -1,6 +1,6 @@
 // Comprehensive test suite that demonstrates all the functionality working together
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import { createTestContainer } from './utils/di-container.js';
+import { createTestContainer } from '../di-container.js';
 
 describe('Comprehensive API Unit Tests', () => {
   let container;

@@ -1,9 +1,9 @@
 // Unit tests for DatabaseManager using dependency injection
 import { jest } from '@jest/globals';
 import fs from 'fs';
-import { InjectableDatabaseManager } from './utils/database-manager-injectable.js';
-import { createTestContainer } from './utils/di-container.js';
-import { testConfig } from './test-config-loader.js';
+import { InjectableDatabaseManager } from '../database-manager-injectable.js';
+import { createTestContainer } from '../di-container.js';
+import { testConfig } from '../test-config-loader.js';
 
 // Mock external dependencies
 jest.mock('fs', () => ({
@@ -14,7 +14,7 @@ jest.mock('fs', () => ({
   })
 }));
 
-jest.mock('../src/db/pool.js', () => ({
+jest.mock('../../src/db/pool.js', () => ({
   DuckDBPool: jest.fn().mockImplementation((config) => ({
     config,
     close: jest.fn().mockResolvedValue(),
@@ -27,7 +27,7 @@ jest.mock('../src/db/pool.js', () => ({
   }))
 }));
 
-import { DuckDBPool } from '../src/db/pool.js';
+import { DuckDBPool } from '../../src/db/pool.js';
 
 describe('Injectable DatabaseManager', () => {
   let container;

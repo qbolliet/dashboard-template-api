@@ -1,8 +1,8 @@
 // Unit tests for caching system - Redis client and cache invalidation
 import { jest } from '@jest/globals';
 import Redis from 'ioredis';
-import { createRedisClient } from '../src/cache/redis.js';
-import { CacheInvalidationManager, cacheInvalidationManager } from '../src/cache/cache-invalidation.js';
+import { createRedisClient } from '../../src/cache/redis.js';
+import { CacheInvalidationManager, cacheInvalidationManager } from '../../src/cache/cache-invalidation.js';
 
 // Mock Redis
 const mockRedis = {
@@ -25,7 +25,7 @@ jest.mock('ioredis', () => {
 });
 
 // Mock config
-jest.mock('../src/utils/config-loader.js', () => ({
+jest.mock('../../src/utils/config-loader.js', () => ({
   config: {
     CACHE: {
       REDIS: {
@@ -55,7 +55,7 @@ jest.mock('../src/utils/config-loader.js', () => ({
 }));
 
 // Mock logger
-jest.mock('../src/utils/logger.js', () => ({
+jest.mock('../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     cache: jest.fn(),
     info: jest.fn(),
@@ -87,7 +87,7 @@ describe('Redis Client', () => {
 
     test('should create cluster client when enabled', () => {
       // Mock cluster configuration
-      jest.doMock('../src/utils/config-loader.js', () => ({
+      jest.doMock('../../src/utils/config-loader.js', () => ({
         config: {
           CACHE: {
             REDIS: {
@@ -164,7 +164,7 @@ describe('CacheInvalidationManager', () => {
     };
 
     // Mock the redis instance
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: mockRedisInstance
     }));
 
@@ -357,7 +357,7 @@ describe('Cache Integration Tests', () => {
       del: jest.fn().mockResolvedValue(2)
     };
 
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: mockRedisInstance
     }));
 
@@ -377,7 +377,7 @@ describe('Cache Integration Tests', () => {
       del: jest.fn().mockRejectedValue(new Error('Connection lost'))
     };
 
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: failingRedis
     }));
 
@@ -395,7 +395,7 @@ describe('Cache Integration Tests', () => {
       del: jest.fn().mockResolvedValue(10000)
     };
 
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: mockRedisInstance
     }));
 
@@ -419,7 +419,7 @@ describe('Cache Error Recovery', () => {
       del: jest.fn().mockResolvedValue(2)
     };
 
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: mockRedisInstance
     }));
 
@@ -452,7 +452,7 @@ describe('Cache Performance', () => {
       del: jest.fn().mockResolvedValue(batchSize)
     };
 
-    jest.doMock('../src/cache/index.js', () => ({
+    jest.doMock('../../src/cache/index.js', () => ({
       redis: mockRedisInstance
     }));
 

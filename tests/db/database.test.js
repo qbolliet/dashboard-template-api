@@ -37,12 +37,12 @@ const mockConfig = {
   }
 };
 
-jest.mock('../src/utils/config-loader.js', () => ({
+jest.mock('../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
 // Mock logger
-jest.mock('../src/utils/logger.js', () => ({
+jest.mock('../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     database: jest.fn(),
     warn: jest.fn(),
@@ -51,7 +51,7 @@ jest.mock('../src/utils/logger.js', () => ({
 }));
 
 // Mock DuckDBPool — represents the single shared pool
-jest.mock('../src/db/pool.js', () => ({
+jest.mock('../../src/db/pool.js', () => ({
   DuckDBPool: jest.fn().mockImplementation((config) => ({
     config,
     catalogs: config.catalogs || [],
@@ -64,7 +64,7 @@ jest.mock('../src/db/pool.js', () => ({
 }));
 
 // Mock the database manager module to prevent singleton creation on import
-jest.mock('../src/db/database-manager.js', () => {
+jest.mock('../../src/db/database-manager.js', () => {
   const MockDatabaseManager = jest.fn().mockImplementation(function() {
     this.defaultDatabase = 'main';
     this.allowedDatabases = ['main', 'test', 'analytics'];
@@ -101,8 +101,8 @@ jest.mock('../src/db/database-manager.js', () => {
 });
 
 // Now import the modules after mocking dependencies
-import { DatabaseManager } from '../src/db/database-manager.js';
-import { DuckDBPool } from '../src/db/pool.js';
+import { DatabaseManager } from '../../src/db/database-manager.js';
+import { DuckDBPool } from '../../src/db/pool.js';
 
 let databaseManager;
 
