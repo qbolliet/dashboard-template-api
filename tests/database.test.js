@@ -1,10 +1,5 @@
 // Unit tests for database layer - DatabaseManager and DuckDBPool (DuckLake architecture)
 import { jest } from '@jest/globals';
-import fs from 'fs';
-import path from 'path';
-
-// Mock external dependencies first, before any imports
-jest.mock('fs');
 
 // Mock the configuration before importing DatabaseManager
 const mockConfig = {
@@ -106,20 +101,14 @@ jest.mock('../src/db/database-manager.js', () => {
 });
 
 // Now import the modules after mocking dependencies
-import { DatabaseManager, DuckDBPool } from '../src/db/index.js';
+import { DatabaseManager } from '../src/db/database-manager.js';
+import { DuckDBPool } from '../src/db/pool.js';
+
+let databaseManager;
 
 describe('DatabaseManager', () => {
-  let databaseManager;
-
   beforeEach(() => {
     jest.clearAllMocks();
-
-    fs.existsSync.mockReturnValue(true);
-    fs.statSync.mockReturnValue({
-      size: 1024000,
-      mtime: new Date('2023-01-01')
-    });
-
     databaseManager = new DatabaseManager();
   });
 

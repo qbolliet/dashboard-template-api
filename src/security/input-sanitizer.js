@@ -15,7 +15,7 @@ class InputSanitizer {
         this.config = {
             enableXSS: config.ENABLE_XSS !== false,
             enableSQL: config.ENABLE_SQL !== false,
-            maxStringLength: config.MAX_STRING_LENGTH || config.SECURITY.SECURITY_LIMITS.MAX_INPUT_LENGTH,
+            maxStringLength: config.MAX_STRING_LENGTH || 1000,
             allowedTags: config.ALLOWED_TAGS || [],
             customSanitizers: config.CUSTOM_SANITIZERS || {}
         };

@@ -1,5 +1,6 @@
 // Unit tests for DatabaseManager using dependency injection
 import { jest } from '@jest/globals';
+import fs from 'fs';
 import { InjectableDatabaseManager } from './utils/database-manager-injectable.js';
 import { createTestContainer } from './utils/di-container.js';
 import { testConfig } from './test-config-loader.js';
@@ -13,7 +14,7 @@ jest.mock('fs', () => ({
   })
 }));
 
-jest.mock('../../src/db/pool.js', () => ({
+jest.mock('../src/db/pool.js', () => ({
   DuckDBPool: jest.fn().mockImplementation((config) => ({
     config,
     close: jest.fn().mockResolvedValue(),
@@ -25,6 +26,8 @@ jest.mock('../../src/db/pool.js', () => ({
     release: jest.fn().mockResolvedValue()
   }))
 }));
+
+import { DuckDBPool } from '../src/db/pool.js';
 
 describe('Injectable DatabaseManager', () => {
   let container;
@@ -244,7 +247,6 @@ describe('Injectable DatabaseManager', () => {
   describe('Multiple Database Scenarios', () => {
     test('should handle different pool configurations', () => {
       const databaseManager = new InjectableDatabaseManager(mockConfig, mockLogger);
-      const { DuckDBPool } = require('../../src/db/pool.js');
 
       // Verify each database was initialized with correct configuration
       expect(DuckDBPool).toHaveBeenCalledWith(expect.objectContaining({
@@ -261,8 +263,6 @@ describe('Injectable DatabaseManager', () => {
     });
 
     test('should handle partial initialization failures', () => {
-      const { DuckDBPool } = require('../../src/db/pool.js');
-      
       // Mock one database to fail
       DuckDBPool.mockImplementationOnce(() => {
         throw new Error('Database initialization failed');
@@ -314,7 +314,6 @@ describe('Injectable DatabaseManager', () => {
 
   describe('Error Handling and Edge Cases', () => {
     test('should handle missing database files gracefully', () => {
-      const fs = require('fs');
       fs.existsSync.mockReturnValue(false);
 
       expect(() => {

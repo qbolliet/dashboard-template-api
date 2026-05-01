@@ -3,13 +3,6 @@ import { jest } from '@jest/globals';
 import path from 'path';
 import fs from 'fs';
 
-// Mock fs and yaml modules
-jest.mock('fs');
-jest.mock('yaml', () => ({
-  parse: jest.fn()
-}));
-
-// Import after mocking
 import yaml from 'yaml';
 
 // Mock ConfigLoader class since we can't import it directly due to file path issues
@@ -142,7 +135,8 @@ class ConfigLoader {
   }
 
   has(path) {
-    return this.get(path, Symbol('not-found')) !== Symbol('not-found');
+    const sentinel = Symbol('not-found');
+    return this.get(path, sentinel) !== sentinel;
   }
 
   reload() {
@@ -158,14 +152,14 @@ describe('ConfigLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     configLoader = new ConfigLoader();
-    
+
     // Save original environment
     originalEnv = { ...process.env };
-    
-    // Reset fs mocks
-    fs.existsSync.mockReturnValue(true);
-    fs.readFileSync.mockReturnValue('test: value');
-    yaml.parse.mockReturnValue({ test: 'value' });
+
+    // Spy on fs and yaml methods for this test
+    jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    jest.spyOn(fs, 'readFileSync').mockReturnValue('test: value');
+    jest.spyOn(yaml, 'parse').mockReturnValue({ test: 'value', DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } });
   });
 
   afterEach(() => {
@@ -182,11 +176,11 @@ describe('ConfigLoader', () => {
 
   describe('loadConfig', () => {
     test('should return cached config on second call', () => {
-      yaml.parse.mockReturnValue({ cached: 'config' });
-      
+      yaml.parse.mockReturnValue({ cached: 'config', DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } });
+
       const config1 = configLoader.loadConfig();
       const config2 = configLoader.loadConfig();
-      
+
       expect(config1).toBe(config2);
       expect(yaml.parse).toHaveBeenCalledTimes(7); // Once for each config file
     });
@@ -229,7 +223,7 @@ describe('ConfigLoader', () => {
 
     test('should merge multiple config files', () => {
       yaml.parse
-        .mockReturnValueOnce({ database: { host: 'localhost' } })
+        .mockReturnValueOnce({ database: { host: 'localhost' }, DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } })
         .mockReturnValueOnce({ database: { port: 5432 }, api: { version: 1 } })
         .mockReturnValue({});
 
@@ -546,13 +540,13 @@ describe('ConfigLoader', () => {
 
   describe('reload', () => {
     test('should clear cached config and reload', () => {
-      yaml.parse.mockReturnValue({ initial: 'config' });
-      
+      yaml.parse.mockReturnValue({ initial: 'config', DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } });
+
       configLoader.loadConfig();
       expect(configLoader.config.initial).toBe('config');
 
-      yaml.parse.mockReturnValue({ updated: 'config' });
-      
+      yaml.parse.mockReturnValue({ updated: 'config', DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } });
+
       const reloadedConfig = configLoader.reload();
       expect(reloadedConfig.updated).toBe('config');
       expect(reloadedConfig.initial).toBeUndefined();
@@ -561,21 +555,33 @@ describe('ConfigLoader', () => {
 });
 
 describe('Configuration Integration Tests', () => {
+  let originalEnv;
+
+  beforeEach(() => {
+    originalEnv = { ...process.env };
+    jest.spyOn(fs, 'existsSync').mockReturnValue(true);
+    jest.spyOn(fs, 'readFileSync').mockReturnValue('test: value');
+    jest.spyOn(yaml, 'parse').mockReturnValue({ DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' } });
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
   test('should handle complete configuration loading process', () => {
     const configLoader = new ConfigLoader();
-    
-    // Mock multiple config files
+
     yaml.parse
-      .mockReturnValueOnce({ 
+      .mockReturnValueOnce({
         app: { name: 'test-app' },
+        DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' },
         production_overrides: { app: { debug: false } }
       })
-      .mockReturnValueOnce({ 
-        database: { host: '${DB_HOST:-localhost}', port: '${DB_PORT:-5432}' } 
+      .mockReturnValueOnce({
+        database: { host: '${DB_HOST:-localhost}', port: '${DB_PORT:-5432}' }
       })
       .mockReturnValue({});
 
-    // Set environment
     process.env.NODE_ENV = 'production';
     process.env.DB_HOST = 'prod.server.com';
     process.env.DB_PORT = '3306';
@@ -588,12 +594,11 @@ describe('Configuration Integration Tests', () => {
     expect(config.database.port).toBe(3306); // Resolved from env and converted to number
   });
 
-  test('should handle error scenarios gracefully', () => {
+  test('should throw when no config files exist and DATABASE_ROUTING is missing', () => {
     fs.existsSync.mockReturnValue(false); // No config files exist
-    
-    const configLoader = new ConfigLoader();
-    const config = configLoader.loadConfig();
 
-    expect(config).toEqual({}); // Should return empty config, not throw
+    const configLoader = new ConfigLoader();
+
+    expect(() => configLoader.loadConfig()).toThrow('DATABASE_ROUTING configuration is required');
   });
 });

@@ -1,5 +1,6 @@
 // Unit tests for caching system - Redis client and cache invalidation
 import { jest } from '@jest/globals';
+import Redis from 'ioredis';
 import { createRedisClient } from '../src/cache/redis.js';
 import { CacheInvalidationManager, cacheInvalidationManager } from '../src/cache/cache-invalidation.js';
 
@@ -70,7 +71,6 @@ describe('Redis Client', () => {
 
   describe('createRedisClient', () => {
     test('should create standalone Redis client by default', () => {
-      const Redis = require('ioredis');
       const client = createRedisClient();
 
       expect(Redis).toHaveBeenCalledWith(expect.objectContaining({
@@ -86,8 +86,6 @@ describe('Redis Client', () => {
     });
 
     test('should create cluster client when enabled', () => {
-      const Redis = require('ioredis');
-      
       // Mock cluster configuration
       jest.doMock('../src/utils/config-loader.js', () => ({
         config: {
@@ -132,7 +130,6 @@ describe('Redis Client', () => {
     });
 
     test('should configure retry strategy', () => {
-      const Redis = require('ioredis');
       createRedisClient();
 
       const config = Redis.mock.calls[0][0];
@@ -144,7 +141,6 @@ describe('Redis Client', () => {
     });
 
     test('should cap retry delay at maximum', () => {
-      const Redis = require('ioredis');
       createRedisClient();
 
       const config = Redis.mock.calls[0][0];

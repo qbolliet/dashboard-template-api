@@ -3,7 +3,7 @@ import DataLoader from 'dataloader';
 import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
-import { config } from '../utils/config-loader.js';
+import { config as globalConfig } from '../utils/config-loader.js';
 
 // Classe de base pour la requête d'une base de données
 /**
@@ -25,7 +25,7 @@ class BaseQueryLoader {
         this.batchSize = config.batchSize || 5;
         this.cachePrefix = config.cachePrefix || 'default';
         this.cacheEnabled = config.cache !== false;
-        this.cacheTimeout = config.cacheTimeout || config.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
+        this.cacheTimeout = config.cacheTimeout || globalConfig.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
         this.databaseId = config.databaseId || null; // null means use default database
     }
 
