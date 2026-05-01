@@ -2,6 +2,11 @@
 import { jest } from '@jest/globals';
 import { createLoaders, createLoadersForRequest } from '../src/loaders/index.js';
 import { BaseQueryLoader } from '../src/loaders/base-loader.js';
+import { createMetadataLoader } from '../src/loaders/metadata.js';
+import { createDimensionLoader, createDimensionValueLoader } from '../src/loaders/dimension.js';
+import { createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } from '../src/loaders/fact.js';
+import { createAggregatedFactsLoader, createAggregatedFactsWithMetadataLoader, createAggregatedFactsWithCountLoader } from '../src/loaders/aggregated-facts.js';
+import { createSelectOptionsLoader } from '../src/loaders/select-options.js';
 
 // Mock dependencies
 const mockPool = {
@@ -27,6 +32,8 @@ jest.mock('../src/db/index.js', () => ({
 jest.mock('../src/utils/cache.js', () => ({
   withCache: jest.fn().mockImplementation(async (key, loader) => await loader())
 }));
+
+import { withCache } from '../src/utils/cache.js';
 
 jest.mock('../src/utils/logger.js', () => ({
   logger: {
@@ -170,8 +177,6 @@ describe('BaseQueryLoader', () => {
   });
 
   describe('loadWithCache', () => {
-    const { withCache } = require('../src/utils/cache.js');
-
     test('should use cache when enabled', async () => {
       const loader = jest.fn().mockResolvedValue('cached result');
       withCache.mockImplementation(async (key, loaderFn) => await loaderFn());
@@ -236,19 +241,6 @@ describe('BaseQueryLoader', () => {
 });
 
 describe('Loader Factory Functions', () => {
-  const {
-    createMetadataLoader,
-    createDimensionLoader,
-    createDimensionValueLoader,
-    createFactLoader,
-    createFactWithCountLoader,
-    createFactWithMetadataLoader,
-    createAggregatedFactsLoader,
-    createAggregatedFactsWithMetadataLoader,
-    createAggregatedFactsWithCountLoader,
-    createSelectOptionsLoader
-  } = require('../src/loaders/metadata.js');
-
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -277,16 +269,16 @@ describe('Loader Factory Functions', () => {
 
       // Verify all loader creation functions were called with the database ID
       const mockLoaderCreators = [
-        require('../src/loaders/metadata.js').createMetadataLoader,
-        require('../src/loaders/dimension.js').createDimensionLoader,
-        require('../src/loaders/dimension.js').createDimensionValueLoader,
-        require('../src/loaders/fact.js').createFactLoader,
-        require('../src/loaders/fact.js').createFactWithCountLoader,
-        require('../src/loaders/fact.js').createFactWithMetadataLoader,
-        require('../src/loaders/aggregated-facts.js').createAggregatedFactsLoader,
-        require('../src/loaders/aggregated-facts.js').createAggregatedFactsWithMetadataLoader,
-        require('../src/loaders/aggregated-facts.js').createAggregatedFactsWithCountLoader,
-        require('../src/loaders/select-options.js').createSelectOptionsLoader
+        createMetadataLoader,
+        createDimensionLoader,
+        createDimensionValueLoader,
+        createFactLoader,
+        createFactWithCountLoader,
+        createFactWithMetadataLoader,
+        createAggregatedFactsLoader,
+        createAggregatedFactsWithMetadataLoader,
+        createAggregatedFactsWithCountLoader,
+        createSelectOptionsLoader
       ];
 
       mockLoaderCreators.forEach(mockCreator => {
@@ -342,8 +334,7 @@ describe('Loader Factory Functions', () => {
       createLoadersForRequest('test-db');
 
       // Should call createLoaders with the same database ID
-      expect(require('../src/loaders/metadata.js').createMetadataLoader)
-        .toHaveBeenCalledWith('test-db');
+      expect(createMetadataLoader).toHaveBeenCalledWith('test-db');
     });
   });
 });
@@ -407,8 +398,7 @@ describe('Loader Performance Tests', () => {
 
   test('should handle cache operations efficiently', async () => {
     const loader = new BaseQueryLoader({ cache: true });
-    const { withCache } = require('../src/utils/cache.js');
-    
+
     const fastLoader = jest.fn().mockResolvedValue('cached');
     withCache.mockImplementation(async (key, loaderFn, timeout) => {
       // Simulate cache hit after first call

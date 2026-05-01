@@ -18,7 +18,7 @@ class RateLimiter {
             maxBurstRequests: config.MAX_BURST_REQUESTS || 20,
             burstWindowMs: config.BURST_WINDOW_MS || 60 * 1000, // 1 minute
             skipFailedRequests: config.SKIP_FAILED_REQUESTS || false,
-            keyGenerator: config.KEY_GENERATOR || this.defaultKeyGenerator,
+            keyGenerator: config.KEY_GENERATOR || this.defaultKeyGenerator.bind(this),
             skip: config.SKIP || (() => false),
             // Liste des IPs de proxy de confiance (ex: '127.0.0.1', '10.0.0.0/8')
             // Seules ces IPs sont autorisées à transmettre x-forwarded-for
@@ -164,7 +164,7 @@ class RateLimiter {
         }
 
         if (cleaned > 0) {
-            this.logger.debug(`Rate limiter cleanup: removed ${cleaned} expired entries`);
+            this.logger.operation(`Rate limiter cleanup: removed ${cleaned} expired entries`);
         }
     }
 
