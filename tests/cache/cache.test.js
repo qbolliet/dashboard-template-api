@@ -1,467 +1,641 @@
-// Unit tests for caching system - Redis client and cache invalidation
+// Unit tests for caching system - redis.js and cache-invalidation.js
+// Uses jest.unstable_mockModule + dynamic imports because transform:{} disables Babel hoisting.
 import { jest } from '@jest/globals';
-import Redis from 'ioredis';
-import { createRedisClient } from '../../src/cache/redis.js';
-import { CacheInvalidationManager, cacheInvalidationManager } from '../../src/cache/cache-invalidation.js';
 
-// Mock Redis
-const mockRedis = {
-  connect: jest.fn().mockResolvedValue(),
-  quit: jest.fn().mockResolvedValue(),
+// ---------------------------------------------------------------------------
+// Shared mutable mock objects (declared before mock registration)
+// ---------------------------------------------------------------------------
+
+const mockIoRedisInstance = {
   on: jest.fn(),
   emit: jest.fn(),
+  scan: jest.fn(),
+  del: jest.fn(),
   get: jest.fn(),
   set: jest.fn(),
-  del: jest.fn(),
-  keys: jest.fn(),
-  status: 'ready'
 };
 
-// Mock ioredis
-jest.mock('ioredis', () => {
-  const MockRedis = jest.fn().mockImplementation(() => mockRedis);
-  MockRedis.Cluster = jest.fn().mockImplementation(() => mockRedis);
-  return MockRedis;
+const mockRedis = {
+  scan: jest.fn(),
+  del: jest.fn(),
+};
+
+const mockConfig = {
+  CACHE: {
+    REDIS: {
+      HOST: 'localhost',
+      PORT: 6379,
+      PASSWORD: null,
+      KEY_PREFIX: 'test:',
+      OPTIONS: {
+        RETRY_STRATEGY: { BASE_DELAY: 50, MAX_DELAY: 2000 },
+        MAX_RETRIES_PER_REQUEST: 3,
+        ENABLE_READY_CHECK: true,
+        CONNECT_TIMEOUT: 10000,
+      },
+      CLUSTER: { ENABLED: false, NODES: [] },
+    },
+  },
+  DATABASE_ROUTING: {
+    ALLOWED_DATABASES: ['main', 'test', 'analytics'],
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Register mocks BEFORE any dynamic import of the mocked modules
+// ---------------------------------------------------------------------------
+
+jest.unstable_mockModule('ioredis', () => {
+  const MockRedis = jest.fn().mockImplementation(() => mockIoRedisInstance);
+  MockRedis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
+  return { default: MockRedis };
 });
 
-// Mock config
-jest.mock('../../src/utils/config-loader.js', () => ({
-  config: {
-    CACHE: {
-      REDIS: {
-        HOST: 'localhost',
-        PORT: 6379,
-        PASSWORD: null,
-        KEY_PREFIX: 'test:',
-        OPTIONS: {
-          RETRY_STRATEGY: {
-            BASE_DELAY: 50,
-            MAX_DELAY: 2000
-          },
-          MAX_RETRIES_PER_REQUEST: 3,
-          ENABLE_READY_CHECK: true,
-          CONNECT_TIMEOUT: 10000
-        },
-        CLUSTER: {
-          ENABLED: false,
-          NODES: []
-        }
-      }
-    },
-    DATABASE_ROUTING: {
-      ALLOWED_DATABASES: ['main', 'test', 'analytics']
-    }
-  }
+jest.unstable_mockModule('../../src/cache/index.js', () => ({
+  redis: mockRedis,
+  createRedisClient: jest.fn(),
 }));
 
-// Mock logger
-jest.mock('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+  config: mockConfig,
+}));
+
+jest.unstable_mockModule('../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     cache: jest.fn(),
     info: jest.fn(),
     warn: jest.fn(),
-    error: jest.fn()
-  })
+    error: jest.fn(),
+  }),
 }));
 
-describe('Redis Client', () => {
+// ---------------------------------------------------------------------------
+// Dynamic imports — loaded after mocks are registered
+// ---------------------------------------------------------------------------
+
+let Redis;
+let createRedisClient;
+let CacheInvalidationManager;
+let cacheInvalidationManager;
+let createCacheInvalidationRoutes;
+
+beforeAll(async () => {
+  const ioredisModule = await import('ioredis');
+  Redis = ioredisModule.default;
+
+  const redisModule = await import('../../src/cache/redis.js');
+  createRedisClient = redisModule.createRedisClient;
+
+  const cacheModule = await import('../../src/cache/cache-invalidation.js');
+  CacheInvalidationManager = cacheModule.CacheInvalidationManager;
+  cacheInvalidationManager = cacheModule.cacheInvalidationManager;
+  createCacheInvalidationRoutes = cacheModule.createCacheInvalidationRoutes;
+});
+
+// ---------------------------------------------------------------------------
+// Redis Client (redis.js)
+// ---------------------------------------------------------------------------
+
+describe('Redis Client (redis.js)', () => {
   beforeEach(() => {
-    jest.clearAllMocks();
+    jest.resetAllMocks();
+    // Re-register ioredis implementations after resetAllMocks clears them
+    Redis.mockImplementation(() => mockIoRedisInstance);
+    Redis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
+    // Reset cluster config
+    mockConfig.CACHE.REDIS.CLUSTER.ENABLED = false;
+    mockConfig.CACHE.REDIS.CLUSTER.NODES = [];
   });
 
-  describe('createRedisClient', () => {
-    test('should create standalone Redis client by default', () => {
-      const client = createRedisClient();
+  test('creates a standalone client with the config options', () => {
+    const client = createRedisClient();
 
-      expect(Redis).toHaveBeenCalledWith(expect.objectContaining({
+    expect(Redis).toHaveBeenCalledWith(
+      expect.objectContaining({
         host: 'localhost',
         port: 6379,
         keyPrefix: 'test:',
         maxRetriesPerRequest: 3,
         enableReadyCheck: true,
-        connectTimeout: 10000
-      }));
+        connectTimeout: 10000,
+      })
+    );
+    expect(client).toBe(mockIoRedisInstance);
+  });
 
-      expect(client).toBe(mockRedis);
-    });
+  test('creates a cluster client when CLUSTER.ENABLED is true', () => {
+    mockConfig.CACHE.REDIS.CLUSTER.ENABLED = true;
+    mockConfig.CACHE.REDIS.CLUSTER.NODES = [
+      { host: 'node1', port: 6379 },
+      { host: 'node2', port: 6379 },
+    ];
 
-    test('should create cluster client when enabled', () => {
-      // Mock cluster configuration
-      jest.doMock('../../src/utils/config-loader.js', () => ({
-        config: {
-          CACHE: {
-            REDIS: {
-              HOST: 'localhost',
-              PORT: 6379,
-              CLUSTER: {
-                ENABLED: true,
-                NODES: [
-                  { host: 'node1', port: 6379 },
-                  { host: 'node2', port: 6379 }
-                ]
-              },
-              OPTIONS: {
-                RETRY_STRATEGY: {
-                  BASE_DELAY: 50,
-                  MAX_DELAY: 2000
-                },
-                MAX_RETRIES_PER_REQUEST: 3,
-                ENABLE_READY_CHECK: true,
-                CONNECT_TIMEOUT: 10000
-              }
-            }
-          }
-        }
-      }));
+    const client = createRedisClient();
 
-      const client = createRedisClient();
-      
-      expect(Redis.Cluster).toHaveBeenCalled();
-      expect(client).toBe(mockRedis);
-    });
+    expect(Redis.Cluster).toHaveBeenCalledWith(
+      [{ host: 'node1', port: 6379 }, { host: 'node2', port: 6379 }],
+      expect.any(Object)
+    );
+    expect(client).toBe(mockIoRedisInstance);
+  });
 
-    test('should configure event listeners', () => {
-      const client = createRedisClient();
+  test('registers error, connect, ready and close event listeners', () => {
+    const client = createRedisClient();
 
-      expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
-      expect(client.on).toHaveBeenCalledWith('connect', expect.any(Function));
-      expect(client.on).toHaveBeenCalledWith('ready', expect.any(Function));
-      expect(client.on).toHaveBeenCalledWith('close', expect.any(Function));
-    });
+    expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith('connect', expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith('ready', expect.any(Function));
+    expect(client.on).toHaveBeenCalledWith('close', expect.any(Function));
+  });
 
-    test('should configure retry strategy', () => {
-      createRedisClient();
+  test('retry strategy applies exponential backoff', () => {
+    createRedisClient();
+    const { retryStrategy } = Redis.mock.calls[0][0];
+    expect(retryStrategy).toBeInstanceOf(Function);
+    expect(retryStrategy(3)).toBe(150); // 3 * BASE_DELAY(50)
+  });
 
-      const config = Redis.mock.calls[0][0];
-      expect(config.retryStrategy).toBeInstanceOf(Function);
-
-      // Test retry strategy function
-      const delay = config.retryStrategy(3);
-      expect(delay).toBe(150); // 3 * 50 = 150
-    });
-
-    test('should cap retry delay at maximum', () => {
-      createRedisClient();
-
-      const config = Redis.mock.calls[0][0];
-      const delay = config.retryStrategy(100); // Very high retry count
-      expect(delay).toBe(2000); // Should be capped at MAX_DELAY
-    });
+  test('retry strategy is capped at MAX_DELAY', () => {
+    createRedisClient();
+    const { retryStrategy } = Redis.mock.calls[0][0];
+    expect(retryStrategy(1000)).toBe(2000); // capped at 2000
   });
 });
 
+// ---------------------------------------------------------------------------
+// CacheInvalidationManager
+// ---------------------------------------------------------------------------
+
 describe('CacheInvalidationManager', () => {
   let manager;
-  let mockRedisInstance;
 
   beforeEach(() => {
-    jest.clearAllMocks();
-    
-    mockRedisInstance = {
-      keys: jest.fn(),
-      del: jest.fn(),
-      quit: jest.fn().mockResolvedValue()
-    };
-
-    // Mock the redis instance
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: mockRedisInstance
-    }));
-
+    jest.resetAllMocks();
     manager = new CacheInvalidationManager();
   });
 
-  describe('Constructor', () => {
-    test('should initialize with correct key patterns', () => {
-      expect(manager.keyPatterns).toBeDefined();
-      expect(manager.keyPatterns.metadata).toBeInstanceOf(Function);
-      expect(manager.keyPatterns.dimension).toBeInstanceOf(Function);
-      expect(manager.keyPatterns.facts).toBeInstanceOf(Function);
-      expect(manager.keyPatterns.allDatabase).toBeInstanceOf(Function);
+  // ---- Constructor ----
+
+  describe('constructor', () => {
+    test('exposes key-pattern functions for all cache types', () => {
+      const expected = [
+        'metadata', 'dimension', 'dimensionValue', 'facts',
+        'aggregatedFacts', 'selectOptions', 'allDatabase',
+      ];
+      for (const type of expected) {
+        expect(manager.keyPatterns[type]).toBeInstanceOf(Function);
+      }
     });
 
-    test('should generate correct key patterns', () => {
+    test('generates correct patterns with a database ID', () => {
       expect(manager.keyPatterns.metadata('main')).toBe('metadata:main:*');
       expect(manager.keyPatterns.dimension('test')).toBe('dimension:test:*');
+      expect(manager.keyPatterns.dimensionValue('main')).toBe('dimension-value:main:*');
+      expect(manager.keyPatterns.facts('analytics')).toBe('facts:analytics:*');
+      expect(manager.keyPatterns.aggregatedFacts('main')).toBe('aggregated-facts:main:*');
+      expect(manager.keyPatterns.selectOptions('main')).toBe('select-options:main:*');
+      expect(manager.keyPatterns.allDatabase('main')).toBe('*:main:*');
+    });
+
+    test('falls back to "default" when database ID is falsy', () => {
       expect(manager.keyPatterns.facts()).toBe('facts:default:*');
-      expect(manager.keyPatterns.allDatabase('analytics')).toBe('*:analytics:*');
+      expect(manager.keyPatterns.metadata(null)).toBe('metadata:default:*');
+      expect(manager.keyPatterns.metadata(undefined)).toBe('metadata:default:*');
+      expect(manager.keyPatterns.metadata('')).toBe('metadata:default:*');
     });
   });
 
+  // ---- scanKeys ----
+
+  describe('scanKeys', () => {
+    test('returns keys from a single-page scan', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', ['key1', 'key2', 'key3']]);
+
+      const keys = await manager.scanKeys('metadata:main:*');
+
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'metadata:main:*', 'COUNT', 100);
+      expect(keys).toEqual(['key1', 'key2', 'key3']);
+    });
+
+    test('accumulates keys across multiple scan pages', async () => {
+      mockRedis.scan
+        .mockResolvedValueOnce(['42', ['key1', 'key2']])
+        .mockResolvedValueOnce(['0', ['key3', 'key4']]);
+
+      const keys = await manager.scanKeys('*:main:*');
+
+      expect(mockRedis.scan).toHaveBeenCalledTimes(2);
+      expect(keys).toEqual(['key1', 'key2', 'key3', 'key4']);
+    });
+
+    test('returns empty array when no keys match', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
+
+      const keys = await manager.scanKeys('nonexistent:*');
+
+      expect(keys).toEqual([]);
+    });
+  });
+
+  // ---- invalidateDatabase ----
+
   describe('invalidateDatabase', () => {
-    test('should invalidate all cache entries for a database', async () => {
-      const mockKeys = ['key1:main:data', 'key2:main:data', 'key3:main:data'];
-      mockRedisInstance.keys.mockResolvedValue(mockKeys);
-      mockRedisInstance.del.mockResolvedValue(3);
+    test('deletes all keys matching the database pattern', async () => {
+      const keysToDelete = ['key1:main:a', 'key2:main:b'];
+      mockRedis.scan.mockResolvedValueOnce(['0', keysToDelete]);
+      mockRedis.del.mockResolvedValueOnce(2);
 
       await manager.invalidateDatabase('main');
 
-      expect(mockRedisInstance.keys).toHaveBeenCalledWith('*:main:*');
-      expect(mockRedisInstance.del).toHaveBeenCalledWith(mockKeys);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:*', 'COUNT', 100);
+      expect(mockRedis.del).toHaveBeenCalledWith(keysToDelete);
     });
 
-    test('should handle empty key list gracefully', async () => {
-      mockRedisInstance.keys.mockResolvedValue([]);
+    test('skips del when no keys are found', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
       await manager.invalidateDatabase('empty');
 
-      expect(mockRedisInstance.keys).toHaveBeenCalledWith('*:empty:*');
-      expect(mockRedisInstance.del).not.toHaveBeenCalled();
+      expect(mockRedis.del).not.toHaveBeenCalled();
     });
 
-    test('should use default database when none specified', async () => {
-      mockRedisInstance.keys.mockResolvedValue([]);
+    test('uses "default" when called without argument', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
       await manager.invalidateDatabase();
 
-      expect(mockRedisInstance.keys).toHaveBeenCalledWith('*:default:*');
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*', 'COUNT', 100);
     });
 
-    test('should handle Redis errors', async () => {
-      const error = new Error('Redis connection failed');
-      mockRedisInstance.keys.mockRejectedValue(error);
+    test('uses "default" when null is passed', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
+
+      await manager.invalidateDatabase(null);
+
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*', 'COUNT', 100);
+    });
+
+    test('propagates Redis scan errors', async () => {
+      mockRedis.scan.mockRejectedValueOnce(new Error('Redis connection failed'));
 
       await expect(manager.invalidateDatabase('main')).rejects.toThrow('Redis connection failed');
     });
   });
 
+  // ---- invalidateCacheType ----
+
   describe('invalidateCacheType', () => {
-    test('should invalidate specific cache type', async () => {
-      const mockKeys = ['metadata:main:field1', 'metadata:main:field2'];
-      mockRedisInstance.keys.mockResolvedValue(mockKeys);
-      mockRedisInstance.del.mockResolvedValue(2);
+    test('deletes keys for the specified cache type and database', async () => {
+      const keys = ['metadata:main:field1', 'metadata:main:field2'];
+      mockRedis.scan.mockResolvedValueOnce(['0', keys]);
+      mockRedis.del.mockResolvedValueOnce(2);
 
       await manager.invalidateCacheType('metadata', 'main');
 
-      expect(mockRedisInstance.keys).toHaveBeenCalledWith('metadata:main:*');
-      expect(mockRedisInstance.del).toHaveBeenCalledWith(mockKeys);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'metadata:main:*', 'COUNT', 100);
+      expect(mockRedis.del).toHaveBeenCalledWith(keys);
     });
 
-    test('should throw error for unknown cache type', async () => {
+    test('throws for an unknown cache type', async () => {
       await expect(manager.invalidateCacheType('unknown', 'main'))
         .rejects.toThrow('Unknown cache type: unknown');
     });
 
-    test('should use default database when none specified', async () => {
-      mockRedisInstance.keys.mockResolvedValue([]);
+    test('uses "default" when database is not specified', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
       await manager.invalidateCacheType('facts');
 
-      expect(mockRedisInstance.keys).toHaveBeenCalledWith('facts:default:*');
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'facts:default:*', 'COUNT', 100);
     });
 
-    test('should handle empty results gracefully', async () => {
-      mockRedisInstance.keys.mockResolvedValue([]);
+    test('skips del when no matching keys exist', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await expect(manager.invalidateCacheType('dimension', 'test'))
-        .resolves.not.toThrow();
-      
-      expect(mockRedisInstance.del).not.toHaveBeenCalled();
+      await manager.invalidateCacheType('dimension', 'test');
+
+      expect(mockRedis.del).not.toHaveBeenCalled();
+    });
+
+    test('handles all supported cache types without error', async () => {
+      const types = ['metadata', 'dimension', 'dimensionValue', 'facts', 'aggregatedFacts', 'selectOptions'];
+      for (const type of types) {
+        mockRedis.scan.mockResolvedValueOnce(['0', []]);
+        await expect(manager.invalidateCacheType(type, 'main')).resolves.not.toThrow();
+      }
+    });
+
+    test('propagates Redis errors', async () => {
+      mockRedis.scan.mockRejectedValueOnce(new Error('Scan failed'));
+
+      await expect(manager.invalidateCacheType('metadata', 'main')).rejects.toThrow('Scan failed');
     });
   });
 
-  describe('invalidateAllDatabases', () => {
-    test('should invalidate all databases', async () => {
-      const databases = ['main', 'test', 'analytics'];
-      mockRedisInstance.keys.mockResolvedValue(['key1', 'key2']);
-      mockRedisInstance.del.mockResolvedValue(2);
+  // ---- invalidateAllDatabases ----
 
-      // Mock successful invalidation for each database
-      manager.invalidateDatabase = jest.fn().mockResolvedValue();
+  describe('invalidateAllDatabases', () => {
+    test('calls invalidateDatabase for every configured database', async () => {
+      const spy = jest.spyOn(manager, 'invalidateDatabase').mockResolvedValue();
 
       await manager.invalidateAllDatabases();
 
-      expect(manager.invalidateDatabase).toHaveBeenCalledTimes(3);
-      expect(manager.invalidateDatabase).toHaveBeenCalledWith('main');
-      expect(manager.invalidateDatabase).toHaveBeenCalledWith('test');
-      expect(manager.invalidateDatabase).toHaveBeenCalledWith('analytics');
+      expect(spy).toHaveBeenCalledTimes(3);
+      expect(spy).toHaveBeenCalledWith('main');
+      expect(spy).toHaveBeenCalledWith('test');
+      expect(spy).toHaveBeenCalledWith('analytics');
     });
 
-    test('should handle partial failures gracefully', async () => {
-      manager.invalidateDatabase = jest.fn()
-        .mockResolvedValueOnce() // main succeeds
-        .mockRejectedValueOnce(new Error('test db failed')) // test fails
-        .mockResolvedValueOnce(); // analytics succeeds
+    test('does not throw when individual databases fail', async () => {
+      jest.spyOn(manager, 'invalidateDatabase')
+        .mockResolvedValueOnce()
+        .mockRejectedValueOnce(new Error('test db error'))
+        .mockResolvedValueOnce();
 
       await expect(manager.invalidateAllDatabases()).resolves.not.toThrow();
     });
+
+    test('propagates error when ALLOWED_DATABASES is not iterable', async () => {
+      const original = mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES;
+      mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES = null;
+
+      try {
+        await expect(manager.invalidateAllDatabases()).rejects.toThrow();
+      } finally {
+        mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES = original;
+      }
+    });
   });
 
+  // ---- getCacheStats ----
+
   describe('getCacheStats', () => {
-    test('should return cache statistics for all databases', async () => {
-      mockRedisInstance.keys
-        .mockResolvedValueOnce(['meta1', 'meta2']) // metadata:main
-        .mockResolvedValueOnce(['dim1']) // dimension:main
-        .mockResolvedValueOnce(['fact1', 'fact2', 'fact3']) // facts:main
-        .mockResolvedValueOnce([]) // aggregatedFacts:main
-        .mockResolvedValueOnce(['select1']) // selectOptions:main
-        .mockResolvedValueOnce(['meta3']) // metadata:test
-        .mockResolvedValueOnce([]) // dimension:test
-        .mockResolvedValueOnce(['fact4']) // facts:test
-        .mockResolvedValueOnce([]) // aggregatedFacts:test
-        .mockResolvedValueOnce([]) // selectOptions:test
-        .mockResolvedValueOnce([]) // metadata:analytics
-        .mockResolvedValueOnce([]) // dimension:analytics
-        .mockResolvedValueOnce([]) // facts:analytics
-        .mockResolvedValueOnce([]) // aggregatedFacts:analytics
-        .mockResolvedValueOnce([]); // selectOptions:analytics
+    test('returns key counts per type per database', async () => {
+      // 3 databases × 6 types (excl. allDatabase) = 18 scan calls
+      // Order follows Object.entries(keyPatterns): metadata, dimension, dimensionValue, facts, aggregatedFacts, selectOptions
+      const scanResults = [
+        // main: 2, 1, 0, 3, 0, 1
+        ['0', ['m1', 'm2']], ['0', ['d1']], ['0', []], ['0', ['f1', 'f2', 'f3']], ['0', []], ['0', ['s1']],
+        // test: 1, 0, 0, 1, 0, 0
+        ['0', ['m3']], ['0', []], ['0', []], ['0', ['f4']], ['0', []], ['0', []],
+        // analytics: all 0
+        ['0', []], ['0', []], ['0', []], ['0', []], ['0', []], ['0', []],
+      ];
+      for (const result of scanResults) {
+        mockRedis.scan.mockResolvedValueOnce(result);
+      }
 
       const stats = await manager.getCacheStats();
 
       expect(stats).toEqual({
-        main: {
-          metadata: 2,
-          dimension: 1,
-          dimensionValue: 0,
-          facts: 3,
-          aggregatedFacts: 0,
-          selectOptions: 1
-        },
-        test: {
-          metadata: 1,
-          dimension: 0,
-          dimensionValue: 0,
-          facts: 1,
-          aggregatedFacts: 0,
-          selectOptions: 0
-        },
-        analytics: {
-          metadata: 0,
-          dimension: 0,
-          dimensionValue: 0,
-          facts: 0,
-          aggregatedFacts: 0,
-          selectOptions: 0
-        }
+        main:      { metadata: 2, dimension: 1, dimensionValue: 0, facts: 3, aggregatedFacts: 0, selectOptions: 1 },
+        test:      { metadata: 1, dimension: 0, dimensionValue: 0, facts: 1, aggregatedFacts: 0, selectOptions: 0 },
+        analytics: { metadata: 0, dimension: 0, dimensionValue: 0, facts: 0, aggregatedFacts: 0, selectOptions: 0 },
       });
     });
 
-    test('should handle Redis errors during stats collection', async () => {
-      mockRedisInstance.keys.mockRejectedValue(new Error('Redis failed'));
+    test('propagates Redis errors during stats collection', async () => {
+      mockRedis.scan.mockRejectedValueOnce(new Error('Redis scan failed'));
 
-      await expect(manager.getCacheStats()).rejects.toThrow('Redis failed');
+      await expect(manager.getCacheStats()).rejects.toThrow('Redis scan failed');
     });
   });
 });
 
-describe('Cache Integration Tests', () => {
+// ---------------------------------------------------------------------------
+// requireAdminKey middleware (tested via route registration)
+// ---------------------------------------------------------------------------
+
+describe('requireAdminKey middleware', () => {
+  let adminMiddleware;
+  const next = jest.fn();
+
+  const makeReq = (headers = {}) => ({ headers, params: {} });
+  const makeRes = () => {
+    const res = { status: jest.fn(), json: jest.fn() };
+    res.status.mockReturnValue(res);
+    return res;
+  };
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    delete process.env.ADMIN_API_KEY;
+    const mockApp = { post: jest.fn(), get: jest.fn() };
+    createCacheInvalidationRoutes(mockApp);
+    adminMiddleware = mockApp.post.mock.calls[0][1];
+  });
+
+  afterEach(() => {
+    delete process.env.ADMIN_API_KEY;
+  });
+
+  test('returns 503 when ADMIN_API_KEY env var is not set', () => {
+    const res = makeRes();
+    adminMiddleware(makeReq(), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when x-admin-key header is absent', () => {
+    process.env.ADMIN_API_KEY = 'secret';
+    const res = makeRes();
+    adminMiddleware(makeReq({}), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when x-admin-key is wrong', () => {
+    process.env.ADMIN_API_KEY = 'secret';
+    const res = makeRes();
+    adminMiddleware(makeReq({ 'x-admin-key': 'wrong' }), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('calls next() when x-admin-key matches ADMIN_API_KEY', () => {
+    process.env.ADMIN_API_KEY = 'secret';
+    const res = makeRes();
+    adminMiddleware(makeReq({ 'x-admin-key': 'secret' }), res, next);
+
+    expect(next).toHaveBeenCalled();
+    expect(res.status).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createCacheInvalidationRoutes
+// ---------------------------------------------------------------------------
+
+describe('createCacheInvalidationRoutes', () => {
+  let mockApp;
+
+  const makeReq = (overrides = {}) => ({ params: {}, headers: {}, ...overrides });
+  const makeRes = () => {
+    const res = { status: jest.fn(), json: jest.fn() };
+    res.status.mockReturnValue(res);
+    return res;
+  };
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    mockApp = { post: jest.fn(), get: jest.fn() };
+    createCacheInvalidationRoutes(mockApp);
+  });
+
+  describe('route registration', () => {
+    test('registers POST /api/cache/invalidate/:database', () => {
+      const paths = mockApp.post.mock.calls.map(c => c[0]);
+      expect(paths).toContain('/api/cache/invalidate/:database');
+    });
+
+    test('registers POST /api/cache/invalidate-all', () => {
+      const paths = mockApp.post.mock.calls.map(c => c[0]);
+      expect(paths).toContain('/api/cache/invalidate-all');
+    });
+
+    test('registers GET /api/cache/stats', () => {
+      const paths = mockApp.get.mock.calls.map(c => c[0]);
+      expect(paths).toContain('/api/cache/stats');
+    });
+  });
+
+  describe('POST /api/cache/invalidate/:database handler', () => {
+    let handler;
+
+    beforeEach(() => {
+      const call = mockApp.post.mock.calls.find(c => c[0] === '/api/cache/invalidate/:database');
+      handler = call[2];
+    });
+
+    test('returns success with database name and timestamp', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateDatabase').mockResolvedValueOnce();
+      const res = makeRes();
+
+      await handler(makeReq({ params: { database: 'main' } }), res);
+
+      expect(cacheInvalidationManager.invalidateDatabase).toHaveBeenCalledWith('main');
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, database: 'main', timestamp: expect.any(String) })
+      );
+    });
+
+    test('returns 500 on invalidation error', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateDatabase').mockRejectedValueOnce(new Error('boom'));
+      const res = makeRes();
+
+      await handler(makeReq({ params: { database: 'main' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'boom' }));
+    });
+  });
+
+  describe('POST /api/cache/invalidate-all handler', () => {
+    let handler;
+
+    beforeEach(() => {
+      const call = mockApp.post.mock.calls.find(c => c[0] === '/api/cache/invalidate-all');
+      handler = call[2];
+    });
+
+    test('returns success with timestamp', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateAllDatabases').mockResolvedValueOnce();
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(cacheInvalidationManager.invalidateAllDatabases).toHaveBeenCalled();
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, timestamp: expect.any(String) })
+      );
+    });
+
+    test('returns 500 on global invalidation error', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateAllDatabases').mockRejectedValueOnce(new Error('fail'));
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+  });
+
+  describe('GET /api/cache/stats handler', () => {
+    let handler;
+
+    beforeEach(() => {
+      const call = mockApp.get.mock.calls.find(c => c[0] === '/api/cache/stats');
+      handler = call[2];
+    });
+
+    test('returns stats with timestamp', async () => {
+      const mockStats = { main: { metadata: 2, dimension: 0, dimensionValue: 0, facts: 5, aggregatedFacts: 1, selectOptions: 0 } };
+      jest.spyOn(cacheInvalidationManager, 'getCacheStats').mockResolvedValueOnce(mockStats);
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ stats: mockStats, timestamp: expect.any(String) })
+      );
+    });
+
+    test('returns 500 on stats collection error', async () => {
+      jest.spyOn(cacheInvalidationManager, 'getCacheStats').mockRejectedValueOnce(new Error('stats failed'));
+      const res = makeRes();
+
+      await handler(makeReq(), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additional scenarios
+// ---------------------------------------------------------------------------
+
+describe('CacheInvalidationManager — additional scenarios', () => {
   let manager;
 
   beforeEach(() => {
+    jest.resetAllMocks();
     manager = new CacheInvalidationManager();
   });
 
-  test('should handle concurrent invalidation operations', async () => {
-    const mockRedisInstance = {
-      keys: jest.fn().mockResolvedValue(['key1', 'key2']),
-      del: jest.fn().mockResolvedValue(2)
-    };
+  test('handles concurrent invalidation operations without interference', async () => {
+    mockRedis.scan.mockResolvedValue(['0', ['key1', 'key2']]);
+    mockRedis.del.mockResolvedValue(2);
 
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: mockRedisInstance
-    }));
-
-    // Run multiple invalidations concurrently
-    const operations = [
+    const ops = [
       manager.invalidateCacheType('metadata', 'main'),
       manager.invalidateCacheType('dimension', 'test'),
-      manager.invalidateCacheType('facts', 'analytics')
+      manager.invalidateCacheType('facts', 'analytics'),
     ];
 
-    await expect(Promise.all(operations)).resolves.not.toThrow();
+    await expect(Promise.all(ops)).resolves.not.toThrow();
   });
 
-  test('should handle cache operations without Redis connection', async () => {
-    const failingRedis = {
-      keys: jest.fn().mockRejectedValue(new Error('Connection lost')),
-      del: jest.fn().mockRejectedValue(new Error('Connection lost'))
-    };
-
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: failingRedis
-    }));
-
-    const manager = new CacheInvalidationManager();
-
-    await expect(manager.invalidateDatabase('main')).rejects.toThrow('Connection lost');
-    await expect(manager.getCacheStats()).rejects.toThrow('Connection lost');
-  });
-
-  test('should handle large number of keys efficiently', async () => {
-    const largeKeyList = Array.from({ length: 10000 }, (_, i) => `key${i}:main:data`);
-    
-    const mockRedisInstance = {
-      keys: jest.fn().mockResolvedValue(largeKeyList),
-      del: jest.fn().mockResolvedValue(10000)
-    };
-
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: mockRedisInstance
-    }));
-
-    const manager = new CacheInvalidationManager();
-    const startTime = Date.now();
+  test('issues a single batch del for a large key set', async () => {
+    const largeKeyList = Array.from({ length: 10_000 }, (_, i) => `key${i}:main:data`);
+    mockRedis.scan.mockResolvedValueOnce(['0', largeKeyList]);
+    mockRedis.del.mockResolvedValueOnce(10_000);
 
     await manager.invalidateDatabase('main');
 
-    const duration = Date.now() - startTime;
-    expect(duration).toBeLessThan(1000); // Should complete in reasonable time
-    expect(mockRedisInstance.del).toHaveBeenCalledWith(largeKeyList);
+    expect(mockRedis.del).toHaveBeenCalledTimes(1);
+    expect(mockRedis.del).toHaveBeenCalledWith(largeKeyList);
   });
-});
 
-describe('Cache Error Recovery', () => {
-  test('should retry operations on temporary failures', async () => {
-    const mockRedisInstance = {
-      keys: jest.fn()
-        .mockRejectedValueOnce(new Error('Temporary failure'))
-        .mockResolvedValue(['key1', 'key2']),
-      del: jest.fn().mockResolvedValue(2)
-    };
+  test('propagates first error then succeeds on subsequent call', async () => {
+    mockRedis.scan
+      .mockRejectedValueOnce(new Error('Temporary failure'))
+      .mockResolvedValueOnce(['0', []]);
 
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: mockRedisInstance
-    }));
-
-    const manager = new CacheInvalidationManager();
-    
-    // First call should fail, but the test demonstrates error handling
     await expect(manager.invalidateDatabase('main')).rejects.toThrow('Temporary failure');
-    
-    // Second call should succeed
     await expect(manager.invalidateDatabase('main')).resolves.not.toThrow();
-  });
-
-  test('should handle malformed key patterns', () => {
-    const manager = new CacheInvalidationManager();
-    
-    // Test with malformed database ID
-    expect(manager.keyPatterns.metadata('')).toBe('metadata::*');
-    expect(manager.keyPatterns.metadata(null)).toBe('metadata:default:*');
-    expect(manager.keyPatterns.metadata(undefined)).toBe('metadata:default:*');
-  });
-});
-
-describe('Cache Performance', () => {
-  test('should batch delete operations efficiently', async () => {
-    const batchSize = 1000;
-    const keys = Array.from({ length: batchSize }, (_, i) => `batch:key${i}`);
-
-    const mockRedisInstance = {
-      keys: jest.fn().mockResolvedValue(keys),
-      del: jest.fn().mockResolvedValue(batchSize)
-    };
-
-    jest.doMock('../../src/cache/index.js', () => ({
-      redis: mockRedisInstance
-    }));
-
-    const manager = new CacheInvalidationManager();
-    
-    await manager.invalidateDatabase('batch');
-
-    // Should call del once with all keys (batch operation)
-    expect(mockRedisInstance.del).toHaveBeenCalledTimes(1);
-    expect(mockRedisInstance.del).toHaveBeenCalledWith(keys);
   });
 });
