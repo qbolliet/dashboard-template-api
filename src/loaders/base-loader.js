@@ -198,11 +198,11 @@ class FactQueryLoader extends BaseQueryLoader {
      * @throws {Error} If parameters are invalid
      */
     validatePagination(limit, offset) {
-        if (limit > config.API.PAGINATION.MAX_LIMIT) {
-            throw new Error(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+        if (limit > globalConfig.API.PAGINATION.MAX_LIMIT) {
+            throw new Error(`Limit cannot exceed ${globalConfig.API.PAGINATION.MAX_LIMIT}`);
         }
-        if (offset > config.API.PAGINATION.MAX_OFFSET) {
-            throw new Error(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
+        if (offset > globalConfig.API.PAGINATION.MAX_OFFSET) {
+            throw new Error(`Offset cannot exceed ${globalConfig.API.PAGINATION.MAX_OFFSET}`);
         }
     }
 }
