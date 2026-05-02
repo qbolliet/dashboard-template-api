@@ -30,7 +30,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
         MAX: 'MAX',
         MIN: 'MIN',
         COUNT: 'COUNT',
-        MEDIAN: 'PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY value)',
+        MEDIAN: 'MEDIAN',
         MODE: 'MODE'
     };
 

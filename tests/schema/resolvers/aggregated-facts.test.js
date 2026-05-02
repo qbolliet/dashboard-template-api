@@ -173,7 +173,7 @@ describe('getAggregatedFacts', () => {
 
   test('handles query variables', async () => {
     const query = `
-      query TestAggVars($groupBy: String!, $aggregation: AggregationType!, $limit: Int!) {
+      query TestAggVars($groupBy: String!, $aggregation: Aggregation!, $limit: Int!) {
         getAggregatedFacts(groupBy: $groupBy, aggregation: $aggregation, limit: $limit, offset: 0) {
           key
           aggregatedValue
@@ -229,7 +229,7 @@ describe('getAggregatedFacts', () => {
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
-    expect(result.errors[0].message).toContain('Expected type AggregationType');
+    expect(result.errors[0].message).toContain('Aggregation');
   });
 });
 
