@@ -2,6 +2,7 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { enrichFactsWithDimensions } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
+import { GraphQLError } from 'graphql';
 
 // Construction de resolvers pour la table des données
 /**
@@ -12,6 +13,14 @@ const factResolvers = {
     Query: {
         // Requête standard des faits avec pagination et comptage
         getFactTable: async (_, args, { loaders, getLoadersForDatabase }) => {
+            const { limit, offset } = args;
+            if (limit > config.API.PAGINATION.MAX_LIMIT) {
+                throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+            }
+            if (offset > config.API.PAGINATION.MAX_OFFSET) {
+                throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
+            }
+
             // Get appropriate loaders for the database
             const targetLoaders = getLoadersForDatabase(args.database);
             const factLoader = targetLoaders ? targetLoaders.factWithCount : loaders.factWithCount;
