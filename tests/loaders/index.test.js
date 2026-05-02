@@ -1,5 +1,6 @@
 // Unit tests for createLoaders and createLoadersForRequest (src/loaders/index.js)
 import { jest } from '@jest/globals';
+import { makeLoaderConfig, makeDatabaseManager } from '../helpers/mocks.js';
 
 // ─── Fabrique de mock loader unique par appel ─────────────────────────────────
 
@@ -13,26 +14,8 @@ const makeMockLoader = () => ({
 
 // ─── Config mock ──────────────────────────────────────────────────────────────
 
-const mockConfig = {
-    API: {
-        LOADERS: {
-            DEFAULT_CACHE_TIMEOUT: 300000,
-            BATCH_SIZE: 10,
-            METADATA_CACHE_TIMEOUT: 600000,
-            FACT_CACHE_TIMEOUT: 300000,
-            DIMENSION_CACHE_TIMEOUT: 600000,
-            SELECT_OPTIONS_CACHE_TIMEOUT: 600000,
-            MAX_BATCH_SIZE: 50
-        },
-        PAGINATION: { MAX_LIMIT: 1000, MAX_OFFSET: 10000 }
-    }
-};
-
-const mockDatabaseManager = {
-    getPool: jest.fn(),
-    defaultDatabase: 'main',
-    getSchema: jest.fn().mockReturnValue('main')
-};
+const mockConfig = makeLoaderConfig();
+const mockDatabaseManager = makeDatabaseManager();
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
