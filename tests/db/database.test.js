@@ -1,7 +1,9 @@
-// Unit tests for database layer - DatabaseManager and DuckDBPool (DuckLake architecture)
+// Unit tests for DatabaseManager (src/db/database-manager.js)
+// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
-// Mock the configuration before importing DatabaseManager
+// ─── Shared mutable mock state ───────────────────────────────────────────────
+
 const mockConfig = {
   DATABASE_ROUTING: {
     DEFAULT_DATABASE: 'main',
@@ -9,361 +11,370 @@ const mockConfig = {
     ALLOW_CROSS_DATABASE_QUERIES: true
   },
   CATALOGS: {
-    main: {
-      PATH: 'data/test-main.ducklake',
-      DATA_PATH: 'data/test-main_data/',
-      READ_ONLY: false
-    },
-    test: {
-      PATH: 'data/test-test.ducklake',
-      DATA_PATH: 'data/test-test_data/',
-      READ_ONLY: false
-    },
-    analytics: {
-      PATH: 'data/test-analytics.ducklake',
-      DATA_PATH: 'data/test-analytics_data/',
-      READ_ONLY: true
-    }
+    main:      { PATH: 'data/main.ducklake',      DATA_PATH: 'data/main_data/',      READ_ONLY: true  },
+    test:      { PATH: 'data/test.ducklake',      DATA_PATH: 'data/test_data/',      READ_ONLY: false },
+    analytics: { PATH: 'data/analytics.ducklake', DATA_PATH: 'data/analytics_data/', READ_ONLY: true  }
   },
   DATABASE: {
-    POOL: {
-      MAX_CONNECTIONS: 5,
-      ACQUIRE_TIMEOUT: 5000,
-      POOL_RETRY_DELAY: 100
-    }
+    POOL: { MAX_CONNECTIONS: 5, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 50 }
   },
-  S3: {
-    ENABLED: false
-  }
+  S3: { ENABLED: false }
 };
 
-jest.mock('../../src/utils/config-loader.js', () => ({
-  config: mockConfig
-}));
+const mockLogger = {
+  database: jest.fn(),
+  warn:     jest.fn(),
+  error:    jest.fn(),
+  info:     jest.fn()
+};
 
-// Mock logger
-jest.mock('../../src/utils/logger.js', () => ({
-  createContextLogger: () => ({
-    database: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn()
-  })
-}));
+const fsExists = jest.fn().mockReturnValue(true);
+const fsStat   = jest.fn().mockReturnValue({ size: 1024, mtime: new Date() });
 
-// Mock DuckDBPool — represents the single shared pool
-jest.mock('../../src/db/pool.js', () => ({
-  DuckDBPool: jest.fn().mockImplementation((config) => ({
-    config,
-    catalogs: config.catalogs || [],
-    pool: [],
-    maxConnections: config.maxConnections,
-    close: jest.fn().mockResolvedValue(),
-    acquire: jest.fn().mockResolvedValue({}),
-    release: jest.fn()
-  }))
-}));
-
-// Mock the database manager module to prevent singleton creation on import
-jest.mock('../../src/db/database-manager.js', () => {
-  const MockDatabaseManager = jest.fn().mockImplementation(function() {
-    this.defaultDatabase = 'main';
-    this.allowedDatabases = ['main', 'test', 'analytics'];
-    this.allowCrossDatabase = true;
-    this.sharedPool = {
-      pool: [],
-      maxConnections: 5,
-      catalogs: [
-        { alias: 'main' },
-        { alias: 'test' },
-        { alias: 'analytics' }
-      ],
-      close: jest.fn().mockResolvedValue(),
-      acquire: jest.fn().mockResolvedValue({}),
-      release: jest.fn()
-    };
-  });
-
-  MockDatabaseManager.prototype.initializeDatabases = jest.fn();
-  MockDatabaseManager.prototype.getPool = jest.fn();
-  MockDatabaseManager.prototype.isValidDatabase = jest.fn();
-  MockDatabaseManager.prototype.getAvailableDatabases = jest.fn();
-  MockDatabaseManager.prototype.getDefaultDatabase = jest.fn();
-  MockDatabaseManager.prototype.isCrossDatabaseAllowed = jest.fn();
-  MockDatabaseManager.prototype.validateDatabaseRouting = jest.fn();
-  MockDatabaseManager.prototype.close = jest.fn();
-  MockDatabaseManager.prototype.getStatistics = jest.fn();
-
-  return {
-    DatabaseManager: MockDatabaseManager,
-    databaseManager: new MockDatabaseManager(),
-    closeAllConnections: jest.fn()
-  };
+const makeMockPool = (cfg = {}) => ({
+  pool:           [],
+  maxConnections: cfg.maxConnections ?? 5,
+  catalogs:       cfg.catalogs ?? [],
+  close:          jest.fn().mockResolvedValue(undefined),
+  acquire:        jest.fn().mockResolvedValue({}),
+  release:        jest.fn()
 });
 
-// Now import the modules after mocking dependencies
-import { DatabaseManager } from '../../src/db/database-manager.js';
-import { DuckDBPool } from '../../src/db/pool.js';
+const MockDuckDBPool = jest.fn().mockImplementation(cfg => makeMockPool(cfg));
 
-let databaseManager;
+// ─── Mock registration (must precede any dynamic import) ─────────────────────
+
+jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({ config: mockConfig }));
+jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+  createContextLogger: () => mockLogger
+}));
+jest.unstable_mockModule('../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
+jest.unstable_mockModule('fs', () => ({
+  default:    { existsSync: fsExists, statSync: fsStat },
+  existsSync: fsExists,
+  statSync:   fsStat
+}));
+
+// ─── Dynamic import ───────────────────────────────────────────────────────────
+
+let DatabaseManager;
+
+beforeAll(async () => {
+  ({ DatabaseManager } = await import('../../src/db/database-manager.js'));
+});
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('DatabaseManager', () => {
+  let manager;
+
   beforeEach(() => {
     jest.clearAllMocks();
-    databaseManager = new DatabaseManager();
+    MockDuckDBPool.mockImplementation(cfg => makeMockPool(cfg));
+    fsExists.mockReturnValue(true);
+    fsStat.mockReturnValue({ size: 1024, mtime: new Date() });
+    manager = new DatabaseManager();
   });
 
-  describe('Constructor and Initialization', () => {
-    test('should initialize with correct configuration', () => {
-      expect(databaseManager.defaultDatabase).toBe('main');
-      expect(databaseManager.allowedDatabases).toEqual(['main', 'test', 'analytics']);
-      expect(databaseManager.allowCrossDatabase).toBe(true);
+  // ── Constructor & initialization ──────────────────────────────────────────
+
+  describe('Constructor and initialization', () => {
+    test('reads defaultDatabase from config', () => {
+      expect(manager.defaultDatabase).toBe('main');
     });
 
-    test('should create a single shared DuckDBPool with all catalogs', () => {
-      expect(DuckDBPool).toHaveBeenCalledTimes(1);
-      expect(DuckDBPool).toHaveBeenCalledWith(expect.objectContaining({
-        catalogs: expect.arrayContaining([
-          expect.objectContaining({ alias: 'main' }),
-          expect.objectContaining({ alias: 'test' }),
-          expect.objectContaining({ alias: 'analytics' })
-        ]),
-        maxConnections: 5,
-        acquireTimeout: 5000
-      }));
+    test('reads allowedDatabases from config', () => {
+      expect(manager.allowedDatabases).toEqual(['main', 'test', 'analytics']);
     });
 
-    test('should handle missing catalog files gracefully', () => {
-      fs.existsSync.mockReturnValue(false);
-
-      expect(() => {
-        new DatabaseManager();
-      }).not.toThrow();
+    test('reads allowCrossDatabase from config', () => {
+      expect(manager.allowCrossDatabase).toBe(true);
     });
 
-    test('should throw error if default catalog is not in CATALOGS config', () => {
-      // Temporarily override config to remove 'main' catalog
-      const originalCatalogs = mockConfig.CATALOGS;
+    test('creates a single shared DuckDBPool containing all catalog aliases', () => {
+      expect(MockDuckDBPool).toHaveBeenCalledTimes(1);
+      const [poolCfg] = MockDuckDBPool.mock.calls[0];
+      const aliases = poolCfg.catalogs.map(c => c.alias);
+      expect(aliases).toContain('main');
+      expect(aliases).toContain('test');
+      expect(aliases).toContain('analytics');
+    });
+
+    test('passes correct pool settings to DuckDBPool', () => {
+      const [poolCfg] = MockDuckDBPool.mock.calls[0];
+      expect(poolCfg.maxConnections).toBe(5);
+      expect(poolCfg.acquireTimeout).toBe(5000);
+    });
+
+    test('catalogs include readOnly and dataPath', () => {
+      const [poolCfg] = MockDuckDBPool.mock.calls[0];
+      const main = poolCfg.catalogs.find(c => c.alias === 'main');
+      expect(main.readOnly).toBe(true);
+      expect(main.dataPath).toMatch(/\/$/); // dataPath must end with /
+    });
+
+    test('logs a warning when a catalog file is missing', () => {
+      fsExists.mockReturnValue(false);
+      new DatabaseManager();
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    test('does not throw when catalog files are missing', () => {
+      fsExists.mockReturnValue(false);
+      expect(() => new DatabaseManager()).not.toThrow();
+    });
+
+    test('throws when default catalog is absent from CATALOGS', () => {
+      const savedCatalogs = mockConfig.CATALOGS;
       mockConfig.CATALOGS = {
         other: { PATH: 'other.ducklake', DATA_PATH: 'other_data/', READ_ONLY: true }
       };
+      try {
+        expect(() => new DatabaseManager())
+          .toThrow("Default database 'main' not found in CATALOGS config");
+      } finally {
+        mockConfig.CATALOGS = savedCatalogs;
+      }
+    });
 
-      expect(() => {
-        new DatabaseManager();
-      }).toThrow("Default database 'main' not found in CATALOGS config");
-
-      mockConfig.CATALOGS = originalCatalogs;
+    test('error lists available catalogs when default is absent', () => {
+      const savedCatalogs = mockConfig.CATALOGS;
+      mockConfig.CATALOGS = {
+        other: { PATH: 'other.ducklake', DATA_PATH: 'other_data/', READ_ONLY: true }
+      };
+      try {
+        expect(() => new DatabaseManager()).toThrow('Available: other');
+      } finally {
+        mockConfig.CATALOGS = savedCatalogs;
+      }
     });
   });
+
+  // ── getPool ───────────────────────────────────────────────────────────────
 
   describe('getPool', () => {
-    test('should return shared pool when no catalog ID specified', () => {
-      databaseManager.getPool.mockReturnValue(databaseManager.sharedPool);
-      const pool = databaseManager.getPool();
-      expect(pool).toBeDefined();
+    test('returns the shared pool when no catalogId is specified', () => {
+      expect(manager.getPool()).toBe(manager.sharedPool);
     });
 
-    test('should return shared pool for any valid catalog ID', () => {
-      databaseManager.getPool.mockReturnValue(databaseManager.sharedPool);
-      const pool = databaseManager.getPool('test');
-      expect(pool).toBe(databaseManager.sharedPool);
+    test('returns the same shared pool for any valid catalogId', () => {
+      expect(manager.getPool('main')).toBe(manager.sharedPool);
+      expect(manager.getPool('test')).toBe(manager.sharedPool);
+      expect(manager.getPool('analytics')).toBe(manager.sharedPool);
     });
 
-    test('should throw error for invalid catalog ID', () => {
-      databaseManager.getPool.mockImplementation((id) => {
-        if (!['main', 'test', 'analytics'].includes(id || 'main')) {
-          throw new Error(`Database '${id}' is not allowed or not configured`);
-        }
-        return databaseManager.sharedPool;
-      });
+    test('null catalogId falls back to default', () => {
+      expect(manager.getPool(null)).toBe(manager.sharedPool);
+    });
 
-      expect(() => {
-        databaseManager.getPool('nonexistent');
-      }).toThrow("Database 'nonexistent' is not allowed or not configured");
+    test('throws for an unknown catalogId', () => {
+      expect(() => manager.getPool('nonexistent'))
+        .toThrow("Database 'nonexistent' is not allowed or not configured");
     });
   });
+
+  // ── isValidDatabase ───────────────────────────────────────────────────────
 
   describe('isValidDatabase', () => {
-    test('should return true for allowed catalogs', () => {
-      databaseManager.isValidDatabase.mockImplementation(id =>
-        ['main', 'test', 'analytics'].includes(id)
-      );
-
-      expect(databaseManager.isValidDatabase('main')).toBe(true);
-      expect(databaseManager.isValidDatabase('test')).toBe(true);
-      expect(databaseManager.isValidDatabase('analytics')).toBe(true);
+    test('returns true for each configured catalog', () => {
+      expect(manager.isValidDatabase('main')).toBe(true);
+      expect(manager.isValidDatabase('test')).toBe(true);
+      expect(manager.isValidDatabase('analytics')).toBe(true);
     });
 
-    test('should return false for unknown catalogs', () => {
-      databaseManager.isValidDatabase.mockImplementation(id =>
-        ['main', 'test', 'analytics'].includes(id)
-      );
+    test('returns false for unknown catalog', () => {
+      expect(manager.isValidDatabase('unknown')).toBe(false);
+    });
 
-      expect(databaseManager.isValidDatabase('nonexistent')).toBe(false);
-      expect(databaseManager.isValidDatabase('')).toBe(false);
-      expect(databaseManager.isValidDatabase(null)).toBe(false);
+    test('returns false for empty string', () => {
+      expect(manager.isValidDatabase('')).toBe(false);
+    });
+
+    test('returns false for null', () => {
+      expect(manager.isValidDatabase(null)).toBe(false);
     });
   });
+
+  // ── getAvailableDatabases ─────────────────────────────────────────────────
 
   describe('getAvailableDatabases', () => {
-    test('should return array of allowed catalog IDs', () => {
-      databaseManager.getAvailableDatabases.mockReturnValue(['main', 'test', 'analytics']);
+    test('returns all allowed catalog IDs', () => {
+      expect(manager.getAvailableDatabases()).toEqual(['main', 'test', 'analytics']);
+    });
 
-      const databases = databaseManager.getAvailableDatabases();
-      expect(databases).toEqual(expect.arrayContaining(['main', 'test', 'analytics']));
-      expect(databases).toHaveLength(3);
+    test('returns a copy — mutations do not affect internal state', () => {
+      const dbs = manager.getAvailableDatabases();
+      dbs.push('extra');
+      expect(manager.getAvailableDatabases()).not.toContain('extra');
     });
   });
+
+  // ── getDefaultDatabase ────────────────────────────────────────────────────
 
   describe('getDefaultDatabase', () => {
-    test('should return correct default catalog', () => {
-      databaseManager.getDefaultDatabase.mockReturnValue('main');
-      expect(databaseManager.getDefaultDatabase()).toBe('main');
+    test('returns the configured default catalog', () => {
+      expect(manager.getDefaultDatabase()).toBe('main');
     });
   });
+
+  // ── getSchema ─────────────────────────────────────────────────────────────
+
+  describe('getSchema', () => {
+    test('returns "main" when no SCHEMA is configured for a catalog', () => {
+      expect(manager.getSchema('main')).toBe('main');
+    });
+
+    test('returns default schema for an unknown catalogId', () => {
+      expect(manager.getSchema('unknown')).toBe('main');
+    });
+
+    test('returns configured SCHEMA when present', () => {
+      const savedCatalogs = mockConfig.CATALOGS;
+      mockConfig.CATALOGS = {
+        main: { PATH: 'main.ducklake', DATA_PATH: 'main_data/', READ_ONLY: true, SCHEMA: 'custom_schema' }
+      };
+      const m = new DatabaseManager();
+      expect(m.getSchema('main')).toBe('custom_schema');
+      mockConfig.CATALOGS = savedCatalogs;
+    });
+  });
+
+  // ── isCrossDatabaseAllowed ────────────────────────────────────────────────
 
   describe('isCrossDatabaseAllowed', () => {
-    test('should return correct cross-catalog setting', () => {
-      databaseManager.isCrossDatabaseAllowed.mockReturnValue(true);
-      expect(databaseManager.isCrossDatabaseAllowed()).toBe(true);
+    test('returns the configured ALLOW_CROSS_DATABASE_QUERIES value', () => {
+      expect(manager.isCrossDatabaseAllowed()).toBe(true);
     });
   });
+
+  // ── validateDatabaseRouting ───────────────────────────────────────────────
 
   describe('validateDatabaseRouting', () => {
-    beforeEach(() => {
-      databaseManager.validateDatabaseRouting.mockImplementation((requested, context) => {
-        const target = requested || context || 'main';
-        if (!['main', 'test', 'analytics'].includes(target)) {
-          throw new Error(
-            `Database '${target}' is not available. Available databases: main, test, analytics`
-          );
-        }
-        return target;
-      });
+    test('returns requested catalog when valid', () => {
+      expect(manager.validateDatabaseRouting('test')).toBe('test');
     });
 
-    test('should return requested catalog if valid', () => {
-      expect(databaseManager.validateDatabaseRouting('test')).toBe('test');
+    test('falls back to context catalog when no explicit request', () => {
+      expect(manager.validateDatabaseRouting(null, 'analytics')).toBe('analytics');
     });
 
-    test('should return context catalog if no requested catalog', () => {
-      expect(databaseManager.validateDatabaseRouting(null, 'analytics')).toBe('analytics');
+    test('falls back to default when neither is specified', () => {
+      expect(manager.validateDatabaseRouting()).toBe('main');
     });
 
-    test('should return default catalog if neither requested nor context specified', () => {
-      expect(databaseManager.validateDatabaseRouting()).toBe('main');
+    test('explicit request takes priority over context', () => {
+      expect(manager.validateDatabaseRouting('test', 'analytics')).toBe('test');
     });
 
-    test('should prioritize requested over context catalog', () => {
-      expect(databaseManager.validateDatabaseRouting('test', 'analytics')).toBe('test');
+    test('throws for an invalid catalog', () => {
+      expect(() => manager.validateDatabaseRouting('invalid'))
+        .toThrow("Database 'invalid' is not available");
     });
 
-    test('should throw error for invalid catalog', () => {
-      expect(() => {
-        databaseManager.validateDatabaseRouting('invalid');
-      }).toThrow("Database 'invalid' is not available");
-    });
-
-    test('should include available catalogs in error message', () => {
-      expect(() => {
-        databaseManager.validateDatabaseRouting('invalid');
-      }).toThrow('Available databases: main, test, analytics');
+    test('error message lists available databases', () => {
+      expect(() => manager.validateDatabaseRouting('invalid'))
+        .toThrow('Available databases: main, test, analytics');
     });
   });
 
+  // ── getStatistics ─────────────────────────────────────────────────────────
+
   describe('getStatistics', () => {
-    test('should return statistics for the shared pool', () => {
-      databaseManager.getStatistics.mockReturnValue({
-        sharedPool: {
-          available: 5,
-          using: 0,
-          total: 0,
-          maxConnections: 5,
-          attachedCatalogs: ['main', 'test', 'analytics']
-        },
-        defaultDatabase: 'main',
-        allowedDatabases: ['main', 'test', 'analytics'],
-        allowCrossDatabase: true
-      });
-
-      const stats = databaseManager.getStatistics();
-
-      expect(stats.sharedPool).toBeDefined();
-      expect(stats.sharedPool.attachedCatalogs).toEqual(
-        expect.arrayContaining(['main', 'test', 'analytics'])
-      );
+    test('returns routing configuration fields', () => {
+      const stats = manager.getStatistics();
       expect(stats.defaultDatabase).toBe('main');
       expect(stats.allowedDatabases).toEqual(['main', 'test', 'analytics']);
       expect(stats.allowCrossDatabase).toBe(true);
     });
 
-    test('should return null sharedPool if not initialized', () => {
-      databaseManager.getStatistics.mockReturnValue({
-        sharedPool: null,
-        defaultDatabase: 'main',
-        allowedDatabases: ['main', 'test', 'analytics'],
-        allowCrossDatabase: true
-      });
+    test('returns pool stats with attachedCatalogs', () => {
+      const { sharedPool } = manager.getStatistics();
+      expect(sharedPool).toBeDefined();
+      expect(sharedPool.attachedCatalogs).toEqual(
+        expect.arrayContaining(['main', 'test', 'analytics'])
+      );
+    });
 
-      const stats = databaseManager.getStatistics();
-      expect(stats.sharedPool).toBeNull();
+    test('sharedPool stats include available/using/total/maxConnections', () => {
+      const { sharedPool } = manager.getStatistics();
+      expect(sharedPool).toHaveProperty('available');
+      expect(sharedPool).toHaveProperty('using');
+      expect(sharedPool).toHaveProperty('total');
+      expect(sharedPool).toHaveProperty('maxConnections');
+    });
+
+    test('returns null sharedPool when pool is not initialized', () => {
+      manager.sharedPool = null;
+      expect(manager.getStatistics().sharedPool).toBeNull();
     });
   });
+
+  // ── close ─────────────────────────────────────────────────────────────────
 
   describe('close', () => {
-    test('should close the shared pool', async () => {
-      databaseManager.close.mockImplementation(async () => {
-        await databaseManager.sharedPool.close();
-        databaseManager.sharedPool = null;
-      });
-
-      await databaseManager.close();
-
-      expect(databaseManager.sharedPool.close).toHaveBeenCalled();
-      expect(databaseManager.sharedPool).toBeNull();
+    test('delegates to pool.close()', async () => {
+      const pool = manager.sharedPool;
+      await manager.close();
+      expect(pool.close).toHaveBeenCalledTimes(1);
     });
 
-    test('should handle errors during pool closure', async () => {
-      databaseManager.close.mockRejectedValueOnce(new Error('Close failed'));
+    test('sets sharedPool to null after closing', async () => {
+      await manager.close();
+      expect(manager.sharedPool).toBeNull();
+    });
 
-      await expect(databaseManager.close()).rejects.toThrow('Close failed');
+    test('propagates pool close errors', async () => {
+      manager.sharedPool.close.mockRejectedValueOnce(new Error('Pool close failed'));
+      await expect(manager.close()).rejects.toThrow('Pool close failed');
+    });
+
+    test('resolves without error when sharedPool is already null', async () => {
+      manager.sharedPool = null;
+      await expect(manager.close()).resolves.toBeUndefined();
     });
   });
 });
 
-describe('DuckDBPool Integration', () => {
-  test('should create pool with catalog configuration', () => {
-    const poolConfig = {
-      catalogs: [
-        { alias: 'main', path: '/abs/main.ducklake', dataPath: '/abs/data/', readOnly: true }
-      ],
-      maxConnections: 10,
-      acquireTimeout: 5000,
-      retryDelay: 50
-    };
+// ── Concurrent operations ─────────────────────────────────────────────────────
 
-    new DuckDBPool(poolConfig);
+describe('DatabaseManager — concurrent operations', () => {
+  let manager;
 
-    expect(DuckDBPool).toHaveBeenCalledWith(poolConfig);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    MockDuckDBPool.mockImplementation(cfg => makeMockPool(cfg));
+    fsExists.mockReturnValue(true);
+    fsStat.mockReturnValue({ size: 1024, mtime: new Date() });
+    manager = new DatabaseManager();
   });
-});
 
-describe('Database Manager Error Scenarios', () => {
-  test('should handle concurrent catalog operations', async () => {
-    const operations = [
-      () => databaseManager.getPool('main'),
-      () => databaseManager.getPool('test'),
-      () => databaseManager.getStatistics(),
-      () => databaseManager.validateDatabaseRouting('analytics'),
-      () => databaseManager.isValidDatabase('main')
-    ];
+  test('concurrent getPool calls all return the same shared pool', async () => {
+    const results = await Promise.all([
+      Promise.resolve(manager.getPool('main')),
+      Promise.resolve(manager.getPool('test')),
+      Promise.resolve(manager.getPool('analytics'))
+    ]);
+    expect(results[0]).toBe(results[1]);
+    expect(results[1]).toBe(results[2]);
+  });
 
-    databaseManager.getPool.mockReturnValue(databaseManager.sharedPool);
-    databaseManager.getStatistics.mockReturnValue({ sharedPool: null, defaultDatabase: 'main' });
-    databaseManager.validateDatabaseRouting.mockReturnValue('analytics');
-    databaseManager.isValidDatabase.mockReturnValue(true);
+  test('concurrent validateDatabaseRouting calls all succeed', async () => {
+    const results = await Promise.all(
+      ['main', 'test', 'analytics'].map(db =>
+        Promise.resolve(manager.validateDatabaseRouting(db))
+      )
+    );
+    expect(results).toEqual(['main', 'test', 'analytics']);
+  });
 
-    const results = await Promise.all(operations.map(op => Promise.resolve(op())));
-    expect(results).toHaveLength(5);
-    results.forEach(result => expect(result).toBeDefined());
+  test('mix of operations runs without interference', async () => {
+    const results = await Promise.all([
+      Promise.resolve(manager.getPool('main')),
+      Promise.resolve(manager.getStatistics()),
+      Promise.resolve(manager.isValidDatabase('test')),
+      Promise.resolve(manager.validateDatabaseRouting('analytics'))
+    ]);
+    expect(results).toHaveLength(4);
+    results.forEach(r => expect(r).toBeDefined());
   });
 });
