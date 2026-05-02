@@ -1,43 +1,14 @@
 // Unit tests for BaseQueryLoader and FactQueryLoader (src/loaders/base-loader.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
+import { makeLoaderConfig, makePool, makeExtendedConnection, makeDatabaseManager } from '../helpers/mocks.js';
 
 // ─── Shared mock state ────────────────────────────────────────────────────────
 
-const mockPool = {
-    acquire: jest.fn(),
-    release: jest.fn()
-};
-
-const mockConnection = {
-    all: jest.fn(),
-    getAsJsonArray: jest.fn(),
-    getWithMetadata: jest.fn()
-};
-
-const mockDatabaseManager = {
-    getPool: jest.fn().mockReturnValue(mockPool),
-    defaultDatabase: 'main',
-    getSchema: jest.fn().mockReturnValue('main')
-};
-
-const mockConfig = {
-    API: {
-        LOADERS: {
-            DEFAULT_CACHE_TIMEOUT: 300000,
-            BATCH_SIZE: 10,
-            METADATA_CACHE_TIMEOUT: 600000,
-            FACT_CACHE_TIMEOUT: 300000,
-            DIMENSION_CACHE_TIMEOUT: 600000,
-            SELECT_OPTIONS_CACHE_TIMEOUT: 600000,
-            MAX_BATCH_SIZE: 50
-        },
-        PAGINATION: {
-            MAX_LIMIT: 1000,
-            MAX_OFFSET: 10000
-        }
-    }
-};
+const mockPool = makePool();
+const mockConnection = makeExtendedConnection();
+const mockDatabaseManager = makeDatabaseManager(mockPool);
+const mockConfig = makeLoaderConfig();
 
 const mockWithCache = jest.fn();
 const mockLogger = {
