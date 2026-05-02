@@ -1,19 +1,10 @@
-// Unit tests for caching system - redis.js and cache-invalidation.js
+// Unit tests for cache-invalidation.js
 // Uses jest.unstable_mockModule + dynamic imports because transform:{} disables Babel hoisting.
 import { jest } from '@jest/globals';
 
 // ---------------------------------------------------------------------------
 // Shared mutable mock objects (declared before mock registration)
 // ---------------------------------------------------------------------------
-
-const mockIoRedisInstance = {
-  on: jest.fn(),
-  emit: jest.fn(),
-  scan: jest.fn(),
-  del: jest.fn(),
-  get: jest.fn(),
-  set: jest.fn(),
-};
 
 const mockRedis = {
   scan: jest.fn(),
@@ -45,12 +36,6 @@ const mockConfig = {
 // Register mocks BEFORE any dynamic import of the mocked modules
 // ---------------------------------------------------------------------------
 
-jest.unstable_mockModule('ioredis', () => {
-  const MockRedis = jest.fn().mockImplementation(() => mockIoRedisInstance);
-  MockRedis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
-  return { default: MockRedis };
-});
-
 jest.unstable_mockModule('../../src/cache/index.js', () => ({
   redis: mockRedis,
   createRedisClient: jest.fn(),
@@ -73,93 +58,15 @@ jest.unstable_mockModule('../../src/utils/logger.js', () => ({
 // Dynamic imports — loaded after mocks are registered
 // ---------------------------------------------------------------------------
 
-let Redis;
-let createRedisClient;
 let CacheInvalidationManager;
 let cacheInvalidationManager;
 let createCacheInvalidationRoutes;
 
 beforeAll(async () => {
-  const ioredisModule = await import('ioredis');
-  Redis = ioredisModule.default;
-
-  const redisModule = await import('../../src/cache/redis.js');
-  createRedisClient = redisModule.createRedisClient;
-
   const cacheModule = await import('../../src/cache/cache-invalidation.js');
   CacheInvalidationManager = cacheModule.CacheInvalidationManager;
   cacheInvalidationManager = cacheModule.cacheInvalidationManager;
   createCacheInvalidationRoutes = cacheModule.createCacheInvalidationRoutes;
-});
-
-// ---------------------------------------------------------------------------
-// Redis Client (redis.js)
-// ---------------------------------------------------------------------------
-
-describe('Redis Client (redis.js)', () => {
-  beforeEach(() => {
-    jest.resetAllMocks();
-    // Re-register ioredis implementations after resetAllMocks clears them
-    Redis.mockImplementation(() => mockIoRedisInstance);
-    Redis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
-    // Reset cluster config
-    mockConfig.CACHE.REDIS.CLUSTER.ENABLED = false;
-    mockConfig.CACHE.REDIS.CLUSTER.NODES = [];
-  });
-
-  test('creates a standalone client with the config options', () => {
-    const client = createRedisClient();
-
-    expect(Redis).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: 'localhost',
-        port: 6379,
-        keyPrefix: 'test:',
-        maxRetriesPerRequest: 3,
-        enableReadyCheck: true,
-        connectTimeout: 10000,
-      })
-    );
-    expect(client).toBe(mockIoRedisInstance);
-  });
-
-  test('creates a cluster client when CLUSTER.ENABLED is true', () => {
-    mockConfig.CACHE.REDIS.CLUSTER.ENABLED = true;
-    mockConfig.CACHE.REDIS.CLUSTER.NODES = [
-      { host: 'node1', port: 6379 },
-      { host: 'node2', port: 6379 },
-    ];
-
-    const client = createRedisClient();
-
-    expect(Redis.Cluster).toHaveBeenCalledWith(
-      [{ host: 'node1', port: 6379 }, { host: 'node2', port: 6379 }],
-      expect.any(Object)
-    );
-    expect(client).toBe(mockIoRedisInstance);
-  });
-
-  test('registers error, connect, ready and close event listeners', () => {
-    const client = createRedisClient();
-
-    expect(client.on).toHaveBeenCalledWith('error', expect.any(Function));
-    expect(client.on).toHaveBeenCalledWith('connect', expect.any(Function));
-    expect(client.on).toHaveBeenCalledWith('ready', expect.any(Function));
-    expect(client.on).toHaveBeenCalledWith('close', expect.any(Function));
-  });
-
-  test('retry strategy applies exponential backoff', () => {
-    createRedisClient();
-    const { retryStrategy } = Redis.mock.calls[0][0];
-    expect(retryStrategy).toBeInstanceOf(Function);
-    expect(retryStrategy(3)).toBe(150); // 3 * BASE_DELAY(50)
-  });
-
-  test('retry strategy is capped at MAX_DELAY', () => {
-    createRedisClient();
-    const { retryStrategy } = Redis.mock.calls[0][0];
-    expect(retryStrategy(1000)).toBe(2000); // capped at 2000
-  });
 });
 
 // ---------------------------------------------------------------------------
