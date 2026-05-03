@@ -208,7 +208,7 @@ describeCrossDB('compareFacts (enabled)', () => {
       expect(row).toHaveProperty('valueB');
       expect(row).toHaveProperty('delta');
       if (row.valueA !== null && row.valueB !== null) {
-        expect(Math.abs(row.delta - (row.valueA - row.valueB))).toBeLessThan(0.0001);
+        expect(Math.abs(row.delta - (row.valueB - row.valueA))).toBeLessThan(0.0001);
       }
     }
   });
