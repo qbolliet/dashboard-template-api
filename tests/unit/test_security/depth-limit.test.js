@@ -1,4 +1,4 @@
-// Unit tests for src/security/depth-limit.js
+﻿// Unit tests for src/security/depth-limit.js
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
@@ -14,7 +14,7 @@ const mockConfig = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
@@ -24,7 +24,7 @@ let createDepthLimitRule, createSimpleDepthLimitRule;
 
 beforeAll(async () => {
   ({ createDepthLimitRule, createSimpleDepthLimitRule } =
-    await import('../../src/security/depth-limit.js'));
+    await import('../../../src/security/depth-limit.js'));
 });
 
 // ─── createDepthLimitRule ─────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// Unit tests for src/security/manager.js
+﻿// Unit tests for src/security/manager.js
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
@@ -47,11 +47,11 @@ const mockConfig = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     security: jest.fn(),
     operation: jest.fn(),
@@ -74,7 +74,7 @@ beforeAll(async () => {
     QueryComplexityAnalyzer,
     InputSanitizer,
     PatternValidator
-  } = await import('../../src/security/index.js'));
+  } = await import('../../../src/security/index.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// Unit tests for logger and createContextLogger (src/utils/logger.js)
+﻿// Unit tests for logger and createContextLogger (src/utils/logger.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -40,7 +40,7 @@ mockFormatCreator.simple    = jest.fn().mockReturnValue(mockFormatObj);
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
 }));
 
@@ -61,7 +61,7 @@ jest.unstable_mockModule('winston-daily-rotate-file', () => ({
 let logger, createContextLogger;
 
 beforeAll(async () => {
-  ({ logger, createContextLogger } = await import('../../src/utils/logger.js'));
+  ({ logger, createContextLogger } = await import('../../../src/utils/logger.js'));
 });
 
 beforeEach(() => {

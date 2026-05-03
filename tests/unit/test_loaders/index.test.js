@@ -1,6 +1,6 @@
-// Unit tests for createLoaders and createLoadersForRequest (src/loaders/index.js)
+﻿// Unit tests for createLoaders and createLoadersForRequest (src/loaders/index.js)
 import { jest } from '@jest/globals';
-import { makeLoaderConfig, makeDatabaseManager } from '../helpers/mocks.js';
+import { makeLoaderConfig, makeDatabaseManager } from '../../helpers/mocks.js';
 
 // ─── Fabrique de mock loader unique par appel ─────────────────────────────────
 
@@ -19,45 +19,45 @@ const mockDatabaseManager = makeDatabaseManager();
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({ config: mockConfig }));
-jest.unstable_mockModule('../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
-jest.unstable_mockModule('../../src/utils/cache.js', () => ({ withCache: jest.fn() }));
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
+jest.unstable_mockModule('../../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
+jest.unstable_mockModule('../../../src/utils/cache.js', () => ({ withCache: jest.fn() }));
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
     logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() }
 }));
 
 // Chaque factory retourne une instance unique avec ses propres jest.fn()
-jest.unstable_mockModule('../../src/loaders/metadata.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/metadata.js', () => ({
     createMetadataLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/dimension.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/dimension.js', () => ({
     createDimensionLoader: jest.fn(() => makeMockLoader()),
     createDimensionValueLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/fact.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/fact.js', () => ({
     createFactLoader: jest.fn(() => makeMockLoader()),
     createFactWithCountLoader: jest.fn(() => makeMockLoader()),
     createFactWithMetadataLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/aggregated-facts.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/aggregated-facts.js', () => ({
     createAggregatedFactsLoader: jest.fn(() => makeMockLoader()),
     createAggregatedFactsWithMetadataLoader: jest.fn(() => makeMockLoader()),
     createAggregatedFactsWithCountLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/select-options.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/select-options.js', () => ({
     createSelectOptionsLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/catalog.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/catalog.js', () => ({
     createCatalogMetadataLoader: jest.fn(() => makeMockLoader()),
     createCatalogDimensionNamesLoader: jest.fn(() => makeMockLoader())
 }));
 
-jest.unstable_mockModule('../../src/loaders/cross-database.js', () => ({
+jest.unstable_mockModule('../../../src/loaders/cross-database.js', () => ({
     createCompareFacts: jest.fn(() => makeMockLoader()),
     createCompareAggregatedFacts: jest.fn(() => makeMockLoader()),
     createCrossDatabaseSelectOptions: jest.fn(() => makeMockLoader())
@@ -74,19 +74,19 @@ let createCatalogMetadataLoader, createCatalogDimensionNamesLoader;
 let createCompareFacts, createCompareAggregatedFacts, createCrossDatabaseSelectOptions;
 
 beforeAll(async () => {
-    ({ createLoaders, createLoadersForRequest } = await import('../../src/loaders/index.js'));
-    ({ createMetadataLoader } = await import('../../src/loaders/metadata.js'));
-    ({ createDimensionLoader, createDimensionValueLoader } = await import('../../src/loaders/dimension.js'));
-    ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } = await import('../../src/loaders/fact.js'));
+    ({ createLoaders, createLoadersForRequest } = await import('../../../src/loaders/index.js'));
+    ({ createMetadataLoader } = await import('../../../src/loaders/metadata.js'));
+    ({ createDimensionLoader, createDimensionValueLoader } = await import('../../../src/loaders/dimension.js'));
+    ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } = await import('../../../src/loaders/fact.js'));
     ({
         createAggregatedFactsLoader,
         createAggregatedFactsWithMetadataLoader,
         createAggregatedFactsWithCountLoader
-    } = await import('../../src/loaders/aggregated-facts.js'));
-    ({ createSelectOptionsLoader } = await import('../../src/loaders/select-options.js'));
-    ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } = await import('../../src/loaders/catalog.js'));
+    } = await import('../../../src/loaders/aggregated-facts.js'));
+    ({ createSelectOptionsLoader } = await import('../../../src/loaders/select-options.js'));
+    ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } = await import('../../../src/loaders/catalog.js'));
     ({ createCompareFacts, createCompareAggregatedFacts, createCrossDatabaseSelectOptions } =
-        await import('../../src/loaders/cross-database.js'));
+        await import('../../../src/loaders/cross-database.js'));
 });
 
 // Clés de tous les loaders dans l'objet retourné par createLoaders

@@ -1,8 +1,8 @@
-// Injectable version of DatabaseManager for better testability
+﻿// Injectable version of DatabaseManager for better testability
 import path, { dirname, resolve } from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { DuckDBPool } from '../src/db/pool.js';
+import { DuckDBPool } from '../../src/db/pool.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

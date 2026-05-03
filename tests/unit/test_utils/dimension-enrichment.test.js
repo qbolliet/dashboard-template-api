@@ -1,9 +1,9 @@
-// Unit tests for dimension enrichment utilities (src/utils/dimension-enrichment.js)
+﻿// Unit tests for dimension enrichment utilities (src/utils/dimension-enrichment.js)
 import { jest } from '@jest/globals';
 import {
   enrichFactsWithDimensions,
   enrichAggregatedFactsWithLabels,
-} from '../../src/utils/dimension-enrichment.js';
+} from '../../../src/utils/dimension-enrichment.js';
 
 // ─── Mock loader factory ───────────────────────────────────────────────────────
 

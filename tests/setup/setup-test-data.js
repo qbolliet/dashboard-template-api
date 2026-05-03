@@ -182,7 +182,7 @@ async function createCatalog(conn, alias, catalogPath, dataPath, valueMultiplier
 }
 
 async function setupTestData() {
-    const dataDir = path.resolve(__dirname, '../data');
+    const dataDir = path.resolve(__dirname, '../../data');
     if (!fs.existsSync(dataDir)) {
         fs.mkdirSync(dataDir, { recursive: true });
     }

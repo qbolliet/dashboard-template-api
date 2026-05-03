@@ -1,14 +1,14 @@
-// Unit tests for src/security/rate-limiter.js
+﻿// Unit tests for src/security/rate-limiter.js
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: {}
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     security: jest.fn(),
     operation: jest.fn(),
@@ -22,7 +22,7 @@ jest.unstable_mockModule('../../src/utils/logger.js', () => ({
 let RateLimiter;
 
 beforeAll(async () => {
-  ({ RateLimiter } = await import('../../src/security/rate-limiter.js'));
+  ({ RateLimiter } = await import('../../../src/security/rate-limiter.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

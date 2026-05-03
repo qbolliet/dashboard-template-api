@@ -1,4 +1,4 @@
-// Unit tests for connection.js (src/db/connection.js)
+﻿// Unit tests for connection.js (src/db/connection.js)
 // Verifies the compatibility layer that wraps databaseManager.
 import { jest } from '@jest/globals';
 
@@ -26,13 +26,13 @@ const mockDatabaseManager = {
 
 const mockCloseAllConnections = jest.fn().mockResolvedValue(undefined);
 
-jest.unstable_mockModule('../../src/db/database-manager.js', () => ({
+jest.unstable_mockModule('../../../src/db/database-manager.js', () => ({
   databaseManager:      mockDatabaseManager,
   closeAllConnections:  mockCloseAllConnections,
   DatabaseManager:      jest.fn()
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     database: jest.fn(),
     warn:     jest.fn(),
@@ -55,7 +55,7 @@ beforeAll(async () => {
     getDefaultPool,
     databaseManager,
     closeAllConnections
-  } = await import('../../src/db/connection.js'));
+  } = await import('../../../src/db/connection.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

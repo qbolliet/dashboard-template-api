@@ -1,4 +1,4 @@
-// Configuration de Jest pour les tests
+﻿// Configuration de Jest pour les tests
 
 export default {
   // Utiliser le testEnvironment node pour les tests backend
@@ -49,8 +49,8 @@ export default {
   },
   
   // Setup des tests
-  setupFiles: ['<rootDir>/tests/setup-env.js'],
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+  setupFiles: ['<rootDir>/tests/setup/setup-env.js'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.js'],
   
   // Clear mocks between tests
   clearMocks: true,

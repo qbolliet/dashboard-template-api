@@ -1,6 +1,6 @@
-// Comprehensive integration test suite — validates cross-component interactions
+﻿// Comprehensive integration test suite — validates cross-component interactions
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import { createTestContainer } from '../di-container.js';
+import { createTestContainer } from '../setup/di-container.js';
 
 describe('Comprehensive API Integration Tests', () => {
   let container;

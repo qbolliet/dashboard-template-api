@@ -1,4 +1,4 @@
-// Unit tests for src/security/complexity-analyzer.js
+﻿// Unit tests for src/security/complexity-analyzer.js
 import { jest } from '@jest/globals';
 
 // ─── Mock config ──────────────────────────────────────────────────────────────
@@ -11,11 +11,11 @@ const mockConfig = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     security: jest.fn(),
     operation: jest.fn(),
@@ -30,7 +30,7 @@ let QueryComplexityAnalyzer;
 
 beforeAll(async () => {
   ({ QueryComplexityAnalyzer } =
-    await import('../../src/security/complexity-analyzer.js'));
+    await import('../../../src/security/complexity-analyzer.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

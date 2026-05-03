@@ -1,4 +1,4 @@
-// Unit tests for ConfigLoader (src/utils/config-loader.js)
+﻿// Unit tests for ConfigLoader (src/utils/config-loader.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -40,7 +40,7 @@ jest.unstable_mockModule('yaml', () => ({
 let configLoader, config;
 
 beforeAll(async () => {
-  ({ configLoader, config } = await import('../../src/utils/config-loader.js'));
+  ({ configLoader, config } = await import('../../../src/utils/config-loader.js'));
 });
 
 // ─── Module-level load ────────────────────────────────────────────────────────

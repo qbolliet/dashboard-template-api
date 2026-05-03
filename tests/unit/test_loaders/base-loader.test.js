@@ -1,7 +1,7 @@
-// Unit tests for BaseQueryLoader and FactQueryLoader (src/loaders/base-loader.js)
+﻿// Unit tests for BaseQueryLoader and FactQueryLoader (src/loaders/base-loader.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
-import { makeLoaderConfig, makePool, makeExtendedConnection, makeDatabaseManager } from '../helpers/mocks.js';
+import { makeLoaderConfig, makePool, makeExtendedConnection, makeDatabaseManager } from '../../helpers/mocks.js';
 
 // ─── Shared mock state ────────────────────────────────────────────────────────
 
@@ -19,19 +19,19 @@ const mockLogger = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/db/index.js', () => ({
+jest.unstable_mockModule('../../../src/db/index.js', () => ({
     databaseManager: mockDatabaseManager
 }));
 
-jest.unstable_mockModule('../../src/utils/cache.js', () => ({
+jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
     withCache: mockWithCache
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
     logger: mockLogger
 }));
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
     config: mockConfig
 }));
 
@@ -40,7 +40,7 @@ jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
 let BaseQueryLoader, FactQueryLoader;
 
 beforeAll(async () => {
-    ({ BaseQueryLoader, FactQueryLoader } = await import('../../src/loaders/base-loader.js'));
+    ({ BaseQueryLoader, FactQueryLoader } = await import('../../../src/loaders/base-loader.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

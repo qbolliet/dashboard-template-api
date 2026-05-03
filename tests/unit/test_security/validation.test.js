@@ -1,4 +1,4 @@
-// Unit tests for src/security/validation.js
+﻿// Unit tests for src/security/validation.js
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
@@ -14,7 +14,7 @@ const mockConfig = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
@@ -24,7 +24,7 @@ let validateInput, ValidationRules;
 
 beforeAll(async () => {
   ({ validateInput, ValidationRules } =
-    await import('../../src/security/validation.js'));
+    await import('../../../src/security/validation.js'));
 });
 
 // ─── ValidationRules ─────────────────────────────────────────────────────────

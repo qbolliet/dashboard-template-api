@@ -1,4 +1,4 @@
-// Unit tests for DatabaseManager (src/db/database-manager.js)
+﻿// Unit tests for DatabaseManager (src/db/database-manager.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -44,11 +44,11 @@ const MockDuckDBPool = jest.fn().mockImplementation(cfg => makeMockPool(cfg));
 
 // ─── Mock registration (must precede any dynamic import) ─────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({ config: mockConfig }));
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => mockLogger
 }));
-jest.unstable_mockModule('../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
+jest.unstable_mockModule('../../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
 jest.unstable_mockModule('fs', () => ({
   default:    { existsSync: fsExists, statSync: fsStat },
   existsSync: fsExists,
@@ -60,7 +60,7 @@ jest.unstable_mockModule('fs', () => ({
 let DatabaseManager;
 
 beforeAll(async () => {
-  ({ DatabaseManager } = await import('../../src/db/database-manager.js'));
+  ({ DatabaseManager } = await import('../../../src/db/database-manager.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
