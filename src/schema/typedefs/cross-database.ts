@@ -1,6 +1,18 @@
+// Importation des modules
 import { gql } from 'graphql-tag';
+import type { DocumentNode } from 'graphql';
 
-const crossDatabaseTypeDefs = gql`
+// ─── Définition des types pour les comparaisons cross-catalogue ───────────────
+
+/**
+ * GraphQL type definitions for cross-database comparison queries.
+ *
+ * Declares ComparedFact (single comparison row with delta values),
+ * PaginatedComparedFacts (paginated result set), and three Query entry
+ * points for comparing raw facts, aggregated facts, and select options
+ * across two catalogs.
+ */
+const crossDatabaseTypeDefs: DocumentNode = gql`
     "Comparaison d'une valeur entre deux catalogues sur une clé commune"
     type ComparedFact {
         "Valeur de la clé commune (dimension de jointure)"
