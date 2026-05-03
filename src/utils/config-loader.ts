@@ -33,6 +33,81 @@ interface ErrorTransportConfig {
     filename: string;
 }
 
+/** Entrée brute d'un pattern de sécurité (liste bloquée). */
+interface SecurityPatternEntry {
+    pattern: string;
+    message: string;
+    flags?: string;
+}
+
+/** Configuration du rate limiter. */
+interface RateLimitConfig {
+    MAX_REQUESTS: number;
+    WINDOW_MS: number;
+    MAX_BURST_REQUESTS: number;
+    BURST_WINDOW_MS: number;
+    SKIP_FAILED_REQUESTS: boolean;
+    TRUSTED_PROXIES: string[];
+}
+
+/** Configuration de l'analyse de complexité des requêtes. */
+interface ComplexityConfig {
+    MAX_ALLOWED: number;
+    SCALAR_COST: number;
+    OBJECT_COST: number;
+    LIST_FACTOR: number;
+    DEPTH_FACTOR: number;
+    INTROSPECTION_COST: number;
+    CUSTOM_SCORES: Record<string, number>;
+}
+
+/** Configuration de la sanitisation des entrées utilisateur. */
+interface SanitizationConfig {
+    ENABLE_XSS: boolean;
+    ENABLE_SQL: boolean;
+    MAX_STRING_LENGTH: number;
+    ALLOWED_TAGS: string[];
+    CUSTOM_SANITIZERS: Record<string, (value: unknown) => unknown>;
+}
+
+/** Configuration du monitoring de sécurité. */
+interface SecurityMonitoringConfig {
+    SLOW_QUERY_THRESHOLD: number;
+    LOG_ALL_METRICS: boolean;
+}
+
+/** Configuration de sécurité complète (section SECURITY du YAML). */
+interface SecurityConfig {
+    MAX_QUERY_DEPTH: number;
+    RATE_LIMIT: RateLimitConfig;
+    COMPLEXITY: ComplexityConfig;
+    SANITIZATION: SanitizationConfig;
+    MONITORING: SecurityMonitoringConfig;
+}
+
+/** Limites globales de sécurité (section SECURITY_LIMITS du YAML). */
+interface SecurityLimitsConfig {
+    DEFAULT_DEPTH_LIMIT: number;
+    MAX_INPUT_LENGTH: number;
+    COMPLEXITY_LIST_FACTOR: number;
+    COMPLEXITY_DEPTH_FACTOR: number;
+    COMPLEXITY_CALCULATION_FACTOR: number;
+}
+
+/** Patterns de validation des requêtes (section SECURITY_PATTERNS du YAML). */
+interface SecurityPatternsConfig {
+    blocked: SecurityPatternEntry[];
+    allowed: string[];
+}
+
+/** Seuils de sécurité exposés dans la section API du YAML. */
+interface SecurityThresholdsConfig {
+    HSTS_MAX_AGE: number;
+    VALIDATION_MAX_LENGTH: number;
+    ERROR_TRUNCATION_LENGTH: number;
+    QUERY_SNIPPET_LENGTH: number;
+}
+
 /** Configuration complète de l'application chargée depuis les fichiers YAML. */
 interface AppConfig {
     ENVIRONMENT: string;
@@ -41,6 +116,7 @@ interface AppConfig {
         TIMEOUTS: {
             CACHE_DEFAULT: number;
         };
+        SECURITY_THRESHOLDS: SecurityThresholdsConfig;
     };
     DATABASE: {
         POOL: {
@@ -52,11 +128,9 @@ interface AppConfig {
         ALLOWED_DATABASES: string[];
     };
     CATALOGS: Record<string, unknown>;
-    SECURITY: {
-        RATE_LIMIT: {
-            MAX_REQUESTS: number;
-        };
-    };
+    SECURITY: SecurityConfig;
+    SECURITY_LIMITS: SecurityLimitsConfig;
+    SECURITY_PATTERNS: SecurityPatternsConfig;
     LOGGING: {
         LEVEL: string;
         FORMAT: string;
@@ -437,4 +511,16 @@ const configLoader = new ConfigLoader();
 const config = configLoader.loadConfig();
 
 export { configLoader, config };
-export type { AppConfig, ConfigRecord };
+export type {
+    AppConfig,
+    ConfigRecord,
+    SecurityConfig,
+    SecurityLimitsConfig,
+    SecurityPatternsConfig,
+    SecurityPatternEntry,
+    SecurityThresholdsConfig,
+    RateLimitConfig,
+    ComplexityConfig,
+    SanitizationConfig,
+    SecurityMonitoringConfig
+};

@@ -1,13 +1,12 @@
-// Importation des modules du dossier
+// Ré-exportation centralisée de tous les modules du dossier security
 import { SecurityManager, initializeSecurityManager, getSecurityManager } from './manager.js';
-import { RateLimiter } from './rate-limiter.js';
-import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
-import { InputSanitizer } from './input-sanitizer.js';
-import { PatternValidator } from './pattern-validator.js';
+import { RateLimiter }              from './rate-limiter.js';
+import { QueryComplexityAnalyzer }  from './complexity-analyzer.js';
+import { InputSanitizer }           from './input-sanitizer.js';
+import { PatternValidator }         from './pattern-validator.js';
 import { createDepthLimitRule, createSimpleDepthLimitRule } from './depth-limit.js';
 
-// Ré-exportation des modules d'intérêt
-export { 
+export {
     SecurityManager,
     initializeSecurityManager,
     getSecurityManager,
