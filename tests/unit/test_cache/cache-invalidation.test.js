@@ -155,7 +155,7 @@ describe('CacheInvalidationManager', () => {
       await manager.invalidateDatabase('main');
 
       expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:*', 'COUNT', 100);
-      expect(mockRedis.del).toHaveBeenCalledWith(keysToDelete);
+      expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
     });
 
     test('skips del when no keys are found', async () => {
@@ -200,7 +200,7 @@ describe('CacheInvalidationManager', () => {
       await manager.invalidateCacheType('metadata', 'main');
 
       expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'metadata:main:*', 'COUNT', 100);
-      expect(mockRedis.del).toHaveBeenCalledWith(keys);
+      expect(mockRedis.del).toHaveBeenCalledWith(...keys);
     });
 
     test('throws for an unknown cache type', async () => {
@@ -534,7 +534,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
     await manager.invalidateDatabase('main');
 
     expect(mockRedis.del).toHaveBeenCalledTimes(1);
-    expect(mockRedis.del).toHaveBeenCalledWith(largeKeyList);
+    expect(mockRedis.del).toHaveBeenCalledWith(...largeKeyList);
   });
 
   test('propagates first error then succeeds on subsequent call', async () => {

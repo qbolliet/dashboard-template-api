@@ -38,9 +38,10 @@ const mockConfig = {
 // ---------------------------------------------------------------------------
 
 jest.unstable_mockModule('ioredis', () => {
+  const MockCluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
   const MockRedis = jest.fn().mockImplementation(() => mockIoRedisInstance);
-  MockRedis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
-  return { default: MockRedis };
+  MockRedis.Cluster = MockCluster;
+  return { default: MockRedis, Redis: MockRedis, Cluster: MockCluster };
 });
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -61,11 +62,13 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 // ---------------------------------------------------------------------------
 
 let Redis;
+let Cluster;
 let createRedisClient;
 
 beforeAll(async () => {
   const ioredisModule = await import('ioredis');
-  Redis = ioredisModule.default;
+  Redis = ioredisModule.Redis;
+  Cluster = ioredisModule.Cluster;
 
   const redisModule = await import('../../../src/cache/redis.js');
   createRedisClient = redisModule.createRedisClient;
@@ -78,10 +81,10 @@ beforeAll(async () => {
 describe('Redis Client (redis.js)', () => {
   beforeEach(() => {
     jest.resetAllMocks();
-    // Re-register ioredis implementations after resetAllMocks clears them
+    // Réenregistrement des implémentations ioredis après resetAllMocks
     Redis.mockImplementation(() => mockIoRedisInstance);
-    Redis.Cluster = jest.fn().mockImplementation(() => mockIoRedisInstance);
-    // Reset cluster config
+    Cluster.mockImplementation(() => mockIoRedisInstance);
+    // Réinitialisation de la configuration cluster
     mockConfig.CACHE.REDIS.CLUSTER.ENABLED = false;
     mockConfig.CACHE.REDIS.CLUSTER.NODES = [];
   });
@@ -111,7 +114,7 @@ describe('Redis Client (redis.js)', () => {
 
     const client = createRedisClient();
 
-    expect(Redis.Cluster).toHaveBeenCalledWith(
+    expect(Cluster).toHaveBeenCalledWith(
       [{ host: 'node1', port: 6379 }, { host: 'node2', port: 6379 }],
       expect.any(Object)
     );
