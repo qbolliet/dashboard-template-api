@@ -203,6 +203,13 @@ interface AppConfig {
     API: {
         PORT: number;
         TIMEOUTS: {
+            FACT_SIMPLE: number;
+            FACT_COMPLEX: number;
+            AGGREGATED_SIMPLE: number;
+            AGGREGATED_COMPLEX: number;
+            DIMENSION: number;
+            METADATA: number;
+            SELECT_OPTIONS: number;
             CACHE_DEFAULT: number;
         };
         SECURITY_THRESHOLDS: SecurityThresholdsConfig;

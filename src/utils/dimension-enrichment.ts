@@ -9,7 +9,7 @@ interface DimensionDetail {
 
 /** Métadonnées d'un champ issues du loader de métadonnées. */
 interface FieldMetadata {
-    is_categorical: boolean;
+    is_categorical?: boolean;
     [key: string]: unknown;
 }
 
