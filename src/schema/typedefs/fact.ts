@@ -1,12 +1,18 @@
 // Importation des modules
 import { gql } from 'graphql-tag';
+import type { DocumentNode } from 'graphql';
 
-// Définition des types pour la requête des données
+// ─── Définition des types pour les données de faits ──────────────────────────
+
 /**
- * GraphQL type definitions for fact data queries
- * Includes specialized types for D3 visualization format
+ * GraphQL type definitions for fact table queries.
+ *
+ * Declares all types used by fact queries: Fact, DimensionDetail,
+ * pagination wrappers (PaginatedFacts), D3-optimized dataset types
+ * (DatasetWithMetadata, AggregatedFactsWithMetadata), the JSON scalar,
+ * the DataFormat enum, and four Query entry points.
  */
-const factTypeDefs = gql`
+const factTypeDefs: DocumentNode = gql`
     "Details about a dimension including its label"
     type DimensionDetail {
         "Name of the dimension"
@@ -34,7 +40,7 @@ const factTypeDefs = gql`
         "Number of records in this group"
         count: Int
     }
-    
+
     "Paginated response for fact queries"
     type PaginatedFacts {
         "Array of fact records"
@@ -48,7 +54,7 @@ const factTypeDefs = gql`
         "Total number of pages"
         totalPages: Int
     }
-    
+
     "Metadata about a dataset, useful for visualization"
     type DatasetMetadata {
         "Number of records in current page"
@@ -66,7 +72,7 @@ const factTypeDefs = gql`
         "ISO 8601 timestamp of when this query was executed"
         generatedAt: String!
     }
-    
+
     "D3-optimized data format with metadata"
     type DatasetWithMetadata {
         "Column names in the dataset"
@@ -84,7 +90,7 @@ const factTypeDefs = gql`
         stdDev: Float
         quartiles: [Float]
     }
-    
+
     "Metadata for aggregated facts optimized for D3"
     type AggregatedFactsMetadata {
         count: Int!
@@ -95,13 +101,13 @@ const factTypeDefs = gql`
         "ISO 8601 timestamp of when this query was executed"
         generatedAt: String!
     }
-    
+
     "Aggregated facts with D3-optimized metadata"
     type AggregatedFactsWithMetadata {
         data: [AggregatedFact!]!
         metadata: AggregatedFactsMetadata!
     }
-    
+
     "Custom scalar type for JSON objects"
     scalar JSON
 
@@ -137,7 +143,7 @@ const factTypeDefs = gql`
             "Format de sérialisation des données : OBJECTS (défaut) ou ARRAYS (tableau de tableaux)"
             format: DataFormat = OBJECTS
         ): DatasetWithMetadata
-        
+
         "Get aggregated facts for charts and summaries"
         getAggregatedFacts(
             fields: [String!]
