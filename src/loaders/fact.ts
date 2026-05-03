@@ -15,7 +15,7 @@ interface FactQueryParams {
     limit: number;
     offset: number;
     sort?: SortItem[];
-    format?: 'default' | 'metadata' | 'json' | 'with-count';
+    format?: 'default' | 'metadata' | 'json' | 'with-count' | 'ARRAYS';
     includeCount?: boolean;
 }
 
