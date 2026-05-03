@@ -1,28 +1,42 @@
-﻿// Configuration de Jest pour les tests
+// Configuration de Jest pour les tests
 
 export default {
   // Utiliser le testEnvironment node pour les tests backend
   testEnvironment: 'node',
-  
-  // Support des modules ES6
+
+  // Modules ES avec support TypeScript
+  extensionsToTreatAsEsm: ['.ts'],
+
+  // Mapping des modules — résout les imports .js vers .ts pendant la migration
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@tests/(.*)$': '<rootDir>/tests/$1'
   },
-  
-  // Transformation des modules - disable transforms for ES modules
-  transform: {},
+
+  // Transformation : ts-jest pour les fichiers TypeScript, pas de transform pour les .js (ESM natif)
+  transform: {
+    '^.+\\.tsx?$': ['ts-jest', {
+      useESM: true,
+      tsconfig: {
+        // Configuration ts-jest spécifique aux tests — hérite de tsconfig.json
+        allowJs: true,
+        checkJs: false
+      }
+    }]
+  },
   transformIgnorePatterns: [
     'node_modules/(?!(chalk|graphql-request|other-esm-modules)/)'
   ],
-  
-  // Patterns des fichiers de test
+
+  // Patterns des fichiers de test — JS pendant la migration, TS après conversion
   testMatch: [
     '**/tests/**/*.test.js',
-    '**/__tests__/**/*.js'
+    '**/tests/**/*.test.ts',
+    '**/__tests__/**/*.js',
+    '**/__tests__/**/*.ts'
   ],
-  
+
   // Ignorer ces dossiers
   testPathIgnorePatterns: [
     '/node_modules/',
@@ -30,29 +44,30 @@ export default {
     '/build/',
     '/test-data/'
   ],
-  
-  // Coverage
+
+  // Coverage — inclut les fichiers .ts au fur et à mesure de la conversion
   collectCoverageFrom: [
     'src/**/*.js',
-    '!src/index.js',
-    '!src/server.js'
+    'src/**/*.ts',
+    '!src/index.{js,ts}',
+    '!src/server.{js,ts}'
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
-  
+
   // Timeout pour les tests (utile pour les tests de base de données)
   testTimeout: 30000,
-  
+
   // Variables d'environnement pour les tests
   testEnvironmentOptions: {
     NODE_ENV: 'test'
   },
-  
+
   // Setup des tests
   globalSetup: '<rootDir>/tests/setup/setup-test-data.js',
   setupFiles: ['<rootDir>/tests/setup/setup-env.js'],
   setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.js'],
-  
+
   // Clear mocks between tests
   clearMocks: true,
   restoreMocks: true,

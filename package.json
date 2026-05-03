@@ -5,10 +5,13 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "start": "tsx src/index.js",
+    "start:prod": "node dist/index.js",
+    "dev": "tsx watch src/index.js",
+    "build": "tsc",
+    "type:check": "tsc --noEmit",
     "lint": "eslint src/",
-    "format": "prettier --write 'src/**/*.js'",
+    "format": "prettier --write 'src/**/*.{js,ts}'",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
@@ -52,10 +55,19 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.3.0",
+    "@types/compression": "^1.7.5",
+    "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.0.0",
+    "@types/sqlstring": "^2.3.2",
+    "@types/uuid": "^10.0.0",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.1",
     "graphql-request": "^7.2.0",
-    "jest": "^30.3.0"
+    "jest": "^30.3.0",
+    "ts-jest": "^29.4.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
   }
 }
