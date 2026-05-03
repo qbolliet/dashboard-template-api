@@ -108,6 +108,25 @@ interface SecurityThresholdsConfig {
     QUERY_SNIPPET_LENGTH: number;
 }
 
+/** Configuration des DataLoaders (taille de batch et timeouts de cache). */
+interface LoadersConfig {
+    BATCH_SIZE: number;
+    MAX_BATCH_SIZE: number;
+    DEFAULT_CACHE_TIMEOUT: number;
+    FACT_CACHE_TIMEOUT: number;
+    DIMENSION_CACHE_TIMEOUT: number;
+    METADATA_CACHE_TIMEOUT: number;
+    SELECT_OPTIONS_CACHE_TIMEOUT: number;
+}
+
+/** Limites de pagination appliquées aux requêtes GraphQL. */
+interface PaginationConfig {
+    DEFAULT_LIMIT: number;
+    MAX_LIMIT: number;
+    MAX_OFFSET: number;
+    SELECT_OPTIONS_LIMIT: number;
+}
+
 /** Configuration Redis — stratégie de reconnexion. */
 interface CacheRetryStrategyConfig {
     BASE_DELAY: number;
@@ -187,6 +206,8 @@ interface AppConfig {
             CACHE_DEFAULT: number;
         };
         SECURITY_THRESHOLDS: SecurityThresholdsConfig;
+        LOADERS: LoadersConfig;
+        PAGINATION: PaginationConfig;
     };
     DATABASE: {
         POOL: {
@@ -585,6 +606,8 @@ export { configLoader, config };
 export type {
     AppConfig,
     ConfigRecord,
+    LoadersConfig,
+    PaginationConfig,
     CacheConfig,
     CacheRedisConfig,
     CacheRedisOptionsConfig,
