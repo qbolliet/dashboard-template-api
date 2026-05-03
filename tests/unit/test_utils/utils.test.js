@@ -1,5 +1,5 @@
-// Unit tests for validateIdentifier and buildWhereClause (src/utils/utils.js)
-import { validateIdentifier, buildWhereClause } from '../../src/utils/utils.js';
+﻿// Unit tests for validateIdentifier and buildWhereClause (src/utils/utils.js)
+import { validateIdentifier, buildWhereClause } from '../../../src/utils/utils.js';
 
 describe('validateIdentifier', () => {
   test('accepts valid identifiers', () => {

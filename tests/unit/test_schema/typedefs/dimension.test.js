@@ -1,4 +1,4 @@
-import { schema } from '../../../src/schema/index.js';
+﻿import { schema } from '../../../../src/schema/index.js';
 import { assertObjectType } from 'graphql';
 
 describe('Object types — dimension', () => {

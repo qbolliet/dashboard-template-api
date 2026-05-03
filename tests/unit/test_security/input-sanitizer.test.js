@@ -1,14 +1,14 @@
-// Unit tests for src/security/input-sanitizer.js
+﻿// Unit tests for src/security/input-sanitizer.js
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: {}
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     security: jest.fn(),
     operation: jest.fn(),
@@ -22,7 +22,7 @@ jest.unstable_mockModule('../../src/utils/logger.js', () => ({
 let InputSanitizer;
 
 beforeAll(async () => {
-  ({ InputSanitizer } = await import('../../src/security/input-sanitizer.js'));
+  ({ InputSanitizer } = await import('../../../src/security/input-sanitizer.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

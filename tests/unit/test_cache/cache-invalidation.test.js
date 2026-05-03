@@ -1,4 +1,4 @@
-// Unit tests for cache-invalidation.js
+﻿// Unit tests for cache-invalidation.js
 // Uses jest.unstable_mockModule + dynamic imports because transform:{} disables Babel hoisting.
 import { jest } from '@jest/globals';
 
@@ -36,16 +36,16 @@ const mockConfig = {
 // Register mocks BEFORE any dynamic import of the mocked modules
 // ---------------------------------------------------------------------------
 
-jest.unstable_mockModule('../../src/cache/index.js', () => ({
+jest.unstable_mockModule('../../../src/cache/index.js', () => ({
   redis: mockRedis,
   createRedisClient: jest.fn(),
 }));
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     cache: jest.fn(),
     info: jest.fn(),
@@ -63,7 +63,7 @@ let cacheInvalidationManager;
 let createCacheInvalidationRoutes;
 
 beforeAll(async () => {
-  const cacheModule = await import('../../src/cache/cache-invalidation.js');
+  const cacheModule = await import('../../../src/cache/cache-invalidation.js');
   CacheInvalidationManager = cacheModule.CacheInvalidationManager;
   cacheInvalidationManager = cacheModule.cacheInvalidationManager;
   createCacheInvalidationRoutes = cacheModule.createCacheInvalidationRoutes;

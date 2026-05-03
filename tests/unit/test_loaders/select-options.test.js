@@ -1,6 +1,6 @@
-// Unit tests for SelectOptionsLoader (src/loaders/select-options.js)
+﻿// Unit tests for SelectOptionsLoader (src/loaders/select-options.js)
 import { jest } from '@jest/globals';
-import { makeLoaderConfig, makePool, makeConnection, makeDatabaseManager } from '../helpers/mocks.js';
+import { makeLoaderConfig, makePool, makeConnection, makeDatabaseManager } from '../../helpers/mocks.js';
 
 // ─── Shared mock state ────────────────────────────────────────────────────────
 
@@ -11,17 +11,17 @@ const mockConfig = makeLoaderConfig();
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
-jest.unstable_mockModule('../../src/utils/cache.js', () => ({ withCache: jest.fn().mockImplementation(async (k, fn) => fn()) }));
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({ logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({ config: mockConfig }));
+jest.unstable_mockModule('../../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
+jest.unstable_mockModule('../../../src/utils/cache.js', () => ({ withCache: jest.fn().mockImplementation(async (k, fn) => fn()) }));
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({ logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
 
 // ─── Dynamic import ───────────────────────────────────────────────────────────
 
 let createSelectOptionsLoader;
 
 beforeAll(async () => {
-    ({ createSelectOptionsLoader } = await import('../../src/loaders/select-options.js'));
+    ({ createSelectOptionsLoader } = await import('../../../src/loaders/select-options.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

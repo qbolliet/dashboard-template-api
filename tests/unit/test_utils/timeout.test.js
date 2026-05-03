@@ -1,5 +1,5 @@
-// Unit tests for withTimeout (src/utils/timeout.js)
-import { withTimeout } from '../../src/utils/timeout.js';
+﻿// Unit tests for withTimeout (src/utils/timeout.js)
+import { withTimeout } from '../../../src/utils/timeout.js';
 
 describe('withTimeout', () => {
   test('resolves when promise completes within timeout', async () => {

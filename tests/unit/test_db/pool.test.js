@@ -1,4 +1,4 @@
-// Unit tests for DuckDBPool (src/db/pool.js)
+﻿// Unit tests for DuckDBPool (src/db/pool.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -25,11 +25,11 @@ jest.unstable_mockModule('@duckdb/node-api', () => ({
   DuckDBInstance: { create: jest.fn().mockResolvedValue(mockInstance) }
 }));
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: { S3: { ENABLED: false } }
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({ database: jest.fn(), error: jest.fn(), warn: jest.fn() })
 }));
 
@@ -39,7 +39,7 @@ let DuckDBPool;
 let DuckDBInstance;
 
 beforeAll(async () => {
-  ({ DuckDBPool }      = await import('../../src/db/pool.js'));
+  ({ DuckDBPool }      = await import('../../../src/db/pool.js'));
   ({ DuckDBInstance }  = await import('@duckdb/node-api'));
 });
 

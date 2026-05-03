@@ -1,4 +1,4 @@
-// Unit tests for withCache (src/utils/cache.js)
+﻿// Unit tests for withCache (src/utils/cache.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -17,11 +17,11 @@ const mockConfig = {
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/cache/index.js', () => ({
+jest.unstable_mockModule('../../../src/cache/index.js', () => ({
   redis: mockRedis,
 }));
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
 }));
 
@@ -30,7 +30,7 @@ jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
 let withCache;
 
 beforeAll(async () => {
-  ({ withCache } = await import('../../src/utils/cache.js'));
+  ({ withCache } = await import('../../../src/utils/cache.js'));
 });
 
 beforeEach(() => {
@@ -91,7 +91,7 @@ describe('withCache', () => {
 
   describe('redis unavailable', () => {
     test('calls loader directly when redis has no get method', async () => {
-      const { redis } = await import('../../src/cache/index.js');
+      const { redis } = await import('../../../src/cache/index.js');
       const originalGet = redis.get;
       delete redis.get;
 

@@ -1,6 +1,6 @@
-// Unit tests for FactLoader (src/loaders/fact.js)
+﻿// Unit tests for FactLoader (src/loaders/fact.js)
 import { jest } from '@jest/globals';
-import { makeLoaderConfig, makePool, makeExtendedConnection, makeDatabaseManager } from '../helpers/mocks.js';
+import { makeLoaderConfig, makePool, makeExtendedConnection, makeDatabaseManager } from '../../helpers/mocks.js';
 
 // ─── Shared mock state ────────────────────────────────────────────────────────
 
@@ -11,10 +11,10 @@ const mockConfig = makeLoaderConfig();
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
-jest.unstable_mockModule('../../src/utils/cache.js', () => ({ withCache: jest.fn().mockImplementation(async (k, fn) => fn()) }));
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({ logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({ config: mockConfig }));
+jest.unstable_mockModule('../../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
+jest.unstable_mockModule('../../../src/utils/cache.js', () => ({ withCache: jest.fn().mockImplementation(async (k, fn) => fn()) }));
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({ logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
 
 // ─── Dynamic import ───────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ let createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader, F
 
 beforeAll(async () => {
     ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader, FactLoader } =
-        await import('../../src/loaders/fact.js'));
+        await import('../../../src/loaders/fact.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

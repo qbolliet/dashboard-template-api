@@ -1,4 +1,4 @@
-// Unit tests for redis.js
+﻿// Unit tests for redis.js
 // Uses jest.unstable_mockModule + dynamic imports because transform:{} disables Babel hoisting.
 import { jest } from '@jest/globals';
 
@@ -43,11 +43,11 @@ jest.unstable_mockModule('ioredis', () => {
   return { default: MockRedis };
 });
 
-jest.unstable_mockModule('../../src/utils/config-loader.js', () => ({
+jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
 }));
 
-jest.unstable_mockModule('../../src/utils/logger.js', () => ({
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     cache: jest.fn(),
     info: jest.fn(),
@@ -67,7 +67,7 @@ beforeAll(async () => {
   const ioredisModule = await import('ioredis');
   Redis = ioredisModule.default;
 
-  const redisModule = await import('../../src/cache/redis.js');
+  const redisModule = await import('../../../src/cache/redis.js');
   createRedisClient = redisModule.createRedisClient;
 });
 

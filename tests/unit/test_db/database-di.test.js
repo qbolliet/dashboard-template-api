@@ -1,4 +1,4 @@
-// Unit tests for InjectableDatabaseManager (tests/database-manager-injectable.js)
+﻿// Unit tests for InjectableDatabaseManager (tests/database-manager-injectable.js)
 // Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
 import { jest } from '@jest/globals';
 
@@ -22,7 +22,7 @@ const MockDuckDBPool = jest.fn().mockImplementation(cfg => makeMockPool(cfg));
 
 // ─── Mock registration ────────────────────────────────────────────────────────
 
-jest.unstable_mockModule('../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
+jest.unstable_mockModule('../../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
 jest.unstable_mockModule('fs', () => ({
   default:    { existsSync: fsExists, statSync: fsStat },
   existsSync: fsExists,
@@ -36,9 +36,9 @@ let createTestContainer;
 let DuckDBPool;
 
 beforeAll(async () => {
-  ({ InjectableDatabaseManager } = await import('../database-manager-injectable.js'));
-  ({ createTestContainer }       = await import('../di-container.js'));
-  ({ DuckDBPool }                = await import('../../src/db/pool.js'));
+  ({ InjectableDatabaseManager } = await import('../../setup/database-manager-injectable.js'));
+  ({ createTestContainer }       = await import('../../setup/di-container.js'));
+  ({ DuckDBPool }                = await import('../../../src/db/pool.js'));
 });
 
 // ─── Config factory ───────────────────────────────────────────────────────────
