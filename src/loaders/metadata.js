@@ -28,7 +28,7 @@ class MetadataLoader extends BaseQueryLoader {
      */
     async loadSingle(connection, name) {
         // Paramétrisation de la requête
-        const query = "SELECT * FROM metadata WHERE name = ?";
+        const query = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
         
         // Exécution de la requête
         const result = await connection.all(query, [name]);
@@ -42,6 +42,9 @@ class MetadataLoader extends BaseQueryLoader {
         const metadata = result[0];
         if (metadata && 'is_categorical' in metadata) {
             metadata.is_categorical = Boolean(metadata.is_categorical);
+        }
+        if (metadata && 'is_primary_key' in metadata) {
+            metadata.is_primary_key = Boolean(metadata.is_primary_key);
         }
         
         return metadata;

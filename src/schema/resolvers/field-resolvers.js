@@ -60,6 +60,11 @@ const fieldResolvers = {
          * @returns {Promise<String>} Label for the key
          */
         keyLabel: async (parent, args, { loaders }) => {
+            // Retourner la valeur pré-chargée si l'enrichissement bulk a déjà eu lieu
+            if (parent.keyLabel !== undefined) {
+                return parent.keyLabel;
+            }
+
             // Cette fonction nécessite de connaître le champ de regroupement
             // qui devrait être passé dans le contexte ou stocké dans le parent
             if (!parent._groupByField) {

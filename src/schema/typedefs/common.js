@@ -1,5 +1,5 @@
 // Importation des modules
-import { gql } from 'apollo-server';
+import { gql } from 'graphql-tag';
 
 // Définition des types communs à plusieurs resolvers
 const commonTypeDefs = gql`

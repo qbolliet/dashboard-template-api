@@ -3,7 +3,7 @@ import DataLoader from 'dataloader';
 import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
-import { config } from '../utils/config-loader.js';
+import { config as globalConfig } from '../utils/config-loader.js';
 
 // Classe de base pour la requête d'une base de données
 /**
@@ -25,7 +25,7 @@ class BaseQueryLoader {
         this.batchSize = config.batchSize || 5;
         this.cachePrefix = config.cachePrefix || 'default';
         this.cacheEnabled = config.cache !== false;
-        this.cacheTimeout = config.cacheTimeout || config.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
+        this.cacheTimeout = config.cacheTimeout || globalConfig.API.LOADERS.DEFAULT_CACHE_TIMEOUT; // 5 minutes par défaut
         this.databaseId = config.databaseId || null; // null means use default database
     }
 
@@ -55,6 +55,21 @@ class BaseQueryLoader {
                 pool.release(connection);
             }
         }
+    }
+
+    // Méthode de qualification d'un nom de table avec le catalogue DuckLake courant
+    /**
+     * Returns a fully qualified table name for the current catalog.
+     * With DuckLake multi-catalog setup, all table names must be prefixed:
+     *   {catalogId}.main.{tableName}
+     *
+     * @param {string} tableName - Bare table name (e.g. 'fact_table', 'dim_country').
+     * @returns {string} Fully qualified table name.
+     */
+    qualifyTable(tableName) {
+        const catalog = this.databaseId || databaseManager.defaultDatabase;
+        const schema = databaseManager.getSchema(catalog);
+        return `"${catalog}".${schema}.${tableName}`;
     }
 
     // Méthode de chargement de données avec mise en cache
@@ -183,11 +198,11 @@ class FactQueryLoader extends BaseQueryLoader {
      * @throws {Error} If parameters are invalid
      */
     validatePagination(limit, offset) {
-        if (limit > config.API.PAGINATION.MAX_LIMIT) {
-            throw new Error(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+        if (limit > globalConfig.API.PAGINATION.MAX_LIMIT) {
+            throw new Error(`Limit cannot exceed ${globalConfig.API.PAGINATION.MAX_LIMIT}`);
         }
-        if (offset > config.API.PAGINATION.MAX_OFFSET) {
-            throw new Error(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
+        if (offset > globalConfig.API.PAGINATION.MAX_OFFSET) {
+            throw new Error(`Offset cannot exceed ${globalConfig.API.PAGINATION.MAX_OFFSET}`);
         }
     }
 }
