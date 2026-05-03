@@ -108,6 +108,76 @@ interface SecurityThresholdsConfig {
     QUERY_SNIPPET_LENGTH: number;
 }
 
+/** Configuration Redis — stratégie de reconnexion. */
+interface CacheRetryStrategyConfig {
+    BASE_DELAY: number;
+    MAX_DELAY:  number;
+}
+
+/** Configuration Redis — options avancées de connexion. */
+interface CacheRedisOptionsConfig {
+    RETRY_STRATEGY:          CacheRetryStrategyConfig;
+    MAX_RETRIES_PER_REQUEST: number;
+    ENABLE_READY_CHECK:      boolean;
+    CONNECT_TIMEOUT:         number;
+}
+
+/** Configuration Redis — nœud de cluster. */
+interface CacheClusterNodeConfig {
+    host: string;
+    port: number;
+}
+
+/** Configuration Redis — mode cluster. */
+interface CacheClusterConfig {
+    ENABLED: boolean;
+    NODES:   CacheClusterNodeConfig[];
+}
+
+/** Configuration du client Redis. */
+interface CacheRedisConfig {
+    HOST:       string;
+    PORT:       number;
+    PASSWORD?:  string;
+    KEY_PREFIX?: string;
+    DB?:        number;
+    OPTIONS:    CacheRedisOptionsConfig;
+    CLUSTER?:   CacheClusterConfig;
+}
+
+/** Durées de vie des entrées Redis par type de données (en secondes). */
+interface CacheTTLConfig {
+    DEFAULT:          number;
+    METADATA:         number;
+    DIMENSIONS:       number;
+    FACTS:            number;
+    AGGREGATED_FACTS: number;
+    SELECT_OPTIONS:   number;
+    COUNT_QUERIES:    number;
+}
+
+/** Paramètres d'invalidation automatique du cache. */
+interface CacheInvalidationConfig {
+    GRACE_PERIOD:    number;
+    AUTO_INVALIDATE: boolean;
+    BATCH_SIZE:      number;
+    TIMEOUT:         number;
+}
+
+/** Configuration du cache HTTP (en-têtes de contrôle). */
+interface CacheHttpConfig {
+    PUBLIC_PATHS:    string[];
+    VARY_BY_HEADERS: string[];
+}
+
+/** Configuration complète du cache Redis et HTTP. */
+interface CacheConfig {
+    REDIS:        CacheRedisConfig;
+    TTL:          CacheTTLConfig;
+    INVALIDATION: CacheInvalidationConfig;
+    HTTP_CACHE:   CacheHttpConfig;
+}
+
 /** Configuration complète de l'application chargée depuis les fichiers YAML. */
 interface AppConfig {
     ENVIRONMENT: string;
@@ -127,6 +197,7 @@ interface AppConfig {
         DEFAULT_DATABASE: string;
         ALLOWED_DATABASES: string[];
     };
+    CACHE:   CacheConfig;
     CATALOGS: Record<string, unknown>;
     SECURITY: SecurityConfig;
     SECURITY_LIMITS: SecurityLimitsConfig;
@@ -514,6 +585,15 @@ export { configLoader, config };
 export type {
     AppConfig,
     ConfigRecord,
+    CacheConfig,
+    CacheRedisConfig,
+    CacheRedisOptionsConfig,
+    CacheRetryStrategyConfig,
+    CacheClusterConfig,
+    CacheClusterNodeConfig,
+    CacheTTLConfig,
+    CacheInvalidationConfig,
+    CacheHttpConfig,
     SecurityConfig,
     SecurityLimitsConfig,
     SecurityPatternsConfig,
