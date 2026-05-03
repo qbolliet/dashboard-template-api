@@ -49,6 +49,7 @@ export default {
   },
   
   // Setup des tests
+  globalSetup: '<rootDir>/tests/setup/setup-test-data.js',
   setupFiles: ['<rootDir>/tests/setup/setup-env.js'],
   setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.js'],
   
