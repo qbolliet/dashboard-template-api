@@ -37,7 +37,7 @@ class PatternValidator {
 
 
             // Logging
-            this.logger.security('Patterns loaded', {
+            this.logger.operation('Patterns loaded', {
                 environment: env,
                 blockedCount: patterns.blocked.length,
                 allowedCount: patterns.allowed.length
@@ -102,7 +102,7 @@ class PatternValidator {
         // Vérification des patterns autorisés
         for (const allowed of this.compiledPatterns.allowed) {
             if (query.includes(allowed)) {
-                this.logger.security('Query contains allowed pattern', { pattern: allowed });
+                this.logger.operation('Query contains allowed pattern', { component: 'security', module: 'patterns', pattern: allowed });
                 return; // Pattern autorisé, pas de vérification supplémentaire
             }
         }
@@ -134,7 +134,7 @@ class PatternValidator {
     reload() {
         this.patterns = this.loadPatterns();
         this.compiledPatterns = this.compilePatterns();
-        this.logger.info('Pattern validator reloaded');
+        this.logger.operation('Pattern validator reloaded');
     }
 }
 

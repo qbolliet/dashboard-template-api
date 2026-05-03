@@ -1,3 +1,11 @@
+// Valide qu'un nom de champ SQL est un identifiant sûr (lettres, chiffres, underscores)
+const validateIdentifier = (name, context = 'field') => {
+    if (typeof name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+        throw new Error(`Invalid ${context} name: "${name}". Only alphanumeric characters and underscores are allowed.`);
+    }
+    return name;
+};
+
 // Définition de la condition "WHERE" du filtre
 const buildWhereClause = (filters, structuredFilters) => {
     let whereClause = '';
@@ -8,7 +16,8 @@ const buildWhereClause = (filters, structuredFilters) => {
       const structuredClause = structuredFilters
         .map((filter) => {
           const { key, operator, value, values } = filter;
-          
+          validateIdentifier(key, 'filter key');
+
           // Gestion des opérateurs IN et NOT IN avec des arrays
           if ((operator === 'IN' || operator === 'NOT IN') && values && values.length > 0) {
             // Formatage des valeurs pour les opérateurs IN/NOT IN
@@ -54,4 +63,4 @@ const buildWhereClause = (filters, structuredFilters) => {
     return whereClause ? `WHERE ${whereClause}` : '';
 };
   
-export { buildWhereClause };  
+export { buildWhereClause, validateIdentifier };

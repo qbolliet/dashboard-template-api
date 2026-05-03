@@ -13,6 +13,18 @@ const cacheLogger = createContextLogger({
  * Cache invalidation manager for handling database updates
  */
 class CacheInvalidationManager {
+    // SCAN itératif non-bloquant
+    async scanKeys(pattern) {
+        const keys = [];
+        let cursor = '0';
+        do {
+            const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+            keys.push(...batch);
+            cursor = nextCursor;
+        } while (cursor !== '0');
+        return keys;
+    }
+
     constructor() {
         // Définition des motifs de clés pour chaque type de cache
         // Permet de cibler précisément les caches à invalider par base de données
@@ -43,7 +55,7 @@ class CacheInvalidationManager {
             const pattern = this.keyPatterns.allDatabase(dbId);
             
             // Récupération de toutes les clés correspondant au motif
-            const keys = await redis.keys(pattern);
+            const keys = await this.scanKeys(pattern);
             
             // Suppression des clés trouvées si elles existent
             if (keys.length > 0) {
@@ -86,7 +98,7 @@ class CacheInvalidationManager {
             const pattern = this.keyPatterns[cacheType](dbId);
             
             // Recherche des clés correspondant à ce type de cache
-            const keys = await redis.keys(pattern);
+            const keys = await this.scanKeys(pattern);
             
             // Suppression sélective des clés trouvées
             if (keys.length > 0) {
@@ -169,7 +181,7 @@ class CacheInvalidationManager {
                     
                     // Construction du motif et comptage des clés correspondantes
                     const pattern = patternFn(dbId);
-                    const keys = await redis.keys(pattern);
+                    const keys = await this.scanKeys(pattern);
                     dbStats[type] = keys.length;
                 }
                 
@@ -190,12 +202,29 @@ class CacheInvalidationManager {
 const cacheInvalidationManager = new CacheInvalidationManager();
 
 /**
+ * Middleware de vérification de la clé API admin
+ * La clé doit être fournie dans le header x-admin-key
+ */
+const requireAdminKey = (req, res, next) => {
+    const adminKey = process.env.ADMIN_API_KEY;
+    if (!adminKey) {
+        // Si aucune clé n'est configurée, refuser l'accès par défaut (fail-safe)
+        return res.status(503).json({ error: 'Admin endpoint not configured (ADMIN_API_KEY missing)' });
+    }
+    const provided = req.headers['x-admin-key'];
+    if (!provided || provided !== adminKey) {
+        return res.status(401).json({ error: 'Unauthorized: valid x-admin-key header required' });
+    }
+    next();
+};
+
+/**
  * Express middleware for cache invalidation endpoints
  */
 const createCacheInvalidationRoutes = (app) => {
     // Route pour invalider le cache d'une base de données spécifique
     // POST /api/cache/invalidate/:database
-    app.post('/api/cache/invalidate/:database', async (req, res) => {
+    app.post('/api/cache/invalidate/:database', requireAdminKey, async (req, res) => {
         try {
             // Extraction du paramètre de base de données depuis l'URL
             const { database } = req.params;
@@ -214,7 +243,7 @@ const createCacheInvalidationRoutes = (app) => {
 
     // Route pour invalider tous les caches de toutes les bases de données
     // POST /api/cache/invalidate-all
-    app.post('/api/cache/invalidate-all', async (req, res) => {
+    app.post('/api/cache/invalidate-all', requireAdminKey, async (req, res) => {
         try {
             // Invalidation globale de tous les caches
             await cacheInvalidationManager.invalidateAllDatabases();
@@ -230,7 +259,7 @@ const createCacheInvalidationRoutes = (app) => {
 
     // Route pour obtenir les statistiques de cache
     // GET /api/cache/stats
-    app.get('/api/cache/stats', async (req, res) => {
+    app.get('/api/cache/stats', requireAdminKey, async (req, res) => {
         try {
             // Collecte des statistiques de cache pour toutes les bases
             const stats = await cacheInvalidationManager.getCacheStats();

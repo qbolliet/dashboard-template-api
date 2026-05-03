@@ -1,4 +1,4 @@
-// Configuration de Jest pour les tests
+﻿// Configuration de Jest pour les tests
 
 export default {
   // Utiliser le testEnvironment node pour les tests backend
@@ -49,16 +49,20 @@ export default {
   },
   
   // Setup des tests
-  setupFiles: ['<rootDir>/tests/setup-env.js'],
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
+  globalSetup: '<rootDir>/tests/setup/setup-test-data.js',
+  setupFiles: ['<rootDir>/tests/setup/setup-env.js'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.js'],
   
   // Clear mocks between tests
   clearMocks: true,
   restoreMocks: true,
-  
+
   // Verbose output for debugging
   verbose: true,
-  
-  // Enable experimental VM modules
-  injectGlobals: false
+
+  // Run tests sequentially to avoid DB connection races across resolver test files
+  maxWorkers: 1,
+
+  // Force exit after all tests to cleanly close persistent connections
+  forceExit: true
 };

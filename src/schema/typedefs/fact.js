@@ -1,5 +1,5 @@
 // Importation des modules
-import { gql } from 'apollo-server';
+import { gql } from 'graphql-tag';
 
 // Définition des types pour la requête des données
 /**
@@ -63,6 +63,8 @@ const factTypeDefs = gql`
         currentPage: Int
         "Total number of pages"
         totalPages: Int
+        "ISO 8601 timestamp of when this query was executed"
+        generatedAt: String!
     }
     
     "D3-optimized data format with metadata"
@@ -90,6 +92,8 @@ const factTypeDefs = gql`
         valueExtent: [Float!]!
         statistics: AggregationStatistics
         groupByFieldInfo: Metadata
+        "ISO 8601 timestamp of when this query was executed"
+        generatedAt: String!
     }
     
     "Aggregated facts with D3-optimized metadata"
@@ -100,6 +104,14 @@ const factTypeDefs = gql`
     
     "Custom scalar type for JSON objects"
     scalar JSON
+
+    "Format de sérialisation des données pour getFactTableWithMetadata"
+    enum DataFormat {
+        "Tableau d'objets [{col: val, ...}] — format par défaut, compatible D3 et DataTable"
+        OBJECTS
+        "Tableau de tableaux [[val1, val2, ...]] — plus compact, optimisé pour AG Grid / TanStack"
+        ARRAYS
+    }
 
     extend type Query {
         "Get fact table data with pagination and filtering"
@@ -112,7 +124,7 @@ const factTypeDefs = gql`
             sort: [SortInput!]
             database: String
         ): PaginatedFacts
-        
+
         "Get fact data optimized for D3 visualization"
         getFactTableWithMetadata(
             fields: [String!]
@@ -122,6 +134,8 @@ const factTypeDefs = gql`
             offset: Int! = 0
             sort: [SortInput!]
             database: String
+            "Format de sérialisation des données : OBJECTS (défaut) ou ARRAYS (tableau de tableaux)"
+            format: DataFormat = OBJECTS
         ): DatasetWithMetadata
         
         "Get aggregated facts for charts and summaries"

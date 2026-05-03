@@ -1,6 +1,5 @@
 // Importation des modules
 import xss from 'xss';
-import sqlstring from 'sqlstring';
 import { GraphQLError } from 'graphql';
 import { createContextLogger } from '../utils/logger.js';
 
@@ -16,7 +15,7 @@ class InputSanitizer {
         this.config = {
             enableXSS: config.ENABLE_XSS !== false,
             enableSQL: config.ENABLE_SQL !== false,
-            maxStringLength: config.MAX_STRING_LENGTH || config.SECURITY.SECURITY_LIMITS.MAX_INPUT_LENGTH,
+            maxStringLength: config.MAX_STRING_LENGTH || 1000,
             allowedTags: config.ALLOWED_TAGS || [],
             customSanitizers: config.CUSTOM_SANITIZERS || {}
         };
@@ -139,33 +138,22 @@ class InputSanitizer {
     // Méthode de protection contre les injections SQL
     /**
      * Protection contre les injections SQL
+     * Détecte uniquement les séquences de commentaires SQL (-- et /*) qui ne peuvent pas
+     * apparaître légitimement dans des valeurs analytiques. La protection principale repose
+     * sur les prepared statements DuckDB (bindVarchar/bindInteger) dans pool.js.
      * @param {string} input - Chaîne à vérifier
-     * @returns {string} Chaîne sécurisée
+     * @returns {string} Chaîne inchangée si valide
      */
     sanitizeSQL(input) {
-        // Détection de patterns SQL dangereux
-        const dangerousPatterns = [
-            /(\b(union|select|insert|update|delete|drop|create|alter|exec|execute)\b)/i,
-            /(--|\/\*|\*\/|;)/,
-            /(\bor\b.*=.*)/i,
-            /(\band\b.*=.*)/i
-        ];
-
-        for (const pattern of dangerousPatterns) {
-            if (pattern.test(input)) {
-                this.logger.security('SQL injection attempt detected', {
-                    pattern: pattern.toString(),
-                    input: input.substring(0, config.API.SECURITY_THRESHOLDS.ERROR_TRUNCATION_LENGTH) + '...'
-                });
-                
-                throw new GraphQLError('Invalid input detected', {
-                    extensions: { code: 'SQL_INJECTION_PREVENTED' }
-                });
-            }
+        if (/--|\/\*/.test(input)) {
+            this.logger.security('SQL comment sequence detected in input', {
+                input: input.substring(0, 50) + '...'
+            });
+            throw new GraphQLError('Invalid input detected', {
+                extensions: { code: 'SQL_INJECTION_PREVENTED' }
+            });
         }
-
-        // Échappe les caractères spéciaux SQL
-        return sqlstring.escape(input).slice(1, -1); // Enleve les quotes ajoutées
+        return input;
     }
 
     // Méthode de sanitization des nombres

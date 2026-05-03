@@ -15,6 +15,9 @@ SECURITY:
     BURST_WINDOW_MS: ${RATE_LIMIT_BURST_WINDOW:-60000}
     # Ignorer les requêtes échouées dans le comptage
     SKIP_FAILED_REQUESTS: false
+    # IPs de proxy de confiance autorisées à transmettre x-forwarded-for
+    # Ex: ['127.0.0.1'] pour un reverse-proxy local, ['*'] pour faire confiance à tous (déconseillé)
+    TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
     
   # Configuration de la complexité
   COMPLEXITY:

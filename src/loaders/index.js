@@ -1,17 +1,23 @@
 // Importation des modules
 import { createMetadataLoader } from './metadata.js';
 import { createDimensionLoader, createDimensionValueLoader } from './dimension.js';
-import { 
-    createFactLoader, 
-    createFactWithCountLoader, 
-    createFactWithMetadataLoader 
+import {
+    createFactLoader,
+    createFactWithCountLoader,
+    createFactWithMetadataLoader
 } from './fact.js';
 import { createSelectOptionsLoader } from './select-options.js';
-import { 
-    createAggregatedFactsLoader, 
+import {
+    createAggregatedFactsLoader,
     createAggregatedFactsWithMetadataLoader,
-    createAggregatedFactsWithCountLoader 
+    createAggregatedFactsWithCountLoader
 } from './aggregated-facts.js';
+import { createCatalogMetadataLoader, createCatalogDimensionNamesLoader } from './catalog.js';
+import {
+    createCompareFacts,
+    createCompareAggregatedFacts,
+    createCrossDatabaseSelectOptions
+} from './cross-database.js';
 
 // Fonction de création des différents loaders
 /**
@@ -37,6 +43,13 @@ const createLoaders = (databaseId = null) => {
     
     const selectOptionsLoader = createSelectOptionsLoader(databaseId);
 
+    // Loaders catalog et cross-database (partagés, indépendants du databaseId)
+    const catalogMetadataLoader = createCatalogMetadataLoader();
+    const catalogDimensionNamesLoader = createCatalogDimensionNamesLoader();
+    const compareFactsLoader = createCompareFacts();
+    const compareAggregatedFactsLoader = createCompareAggregatedFacts();
+    const crossDatabaseSelectOptionsLoader = createCrossDatabaseSelectOptions();
+
     // Retourne un objet avec l'ensemble des loaders
     return {
         metadata: metadataLoader,
@@ -49,6 +62,11 @@ const createLoaders = (databaseId = null) => {
         aggregatedFactsWithMetadata: aggregatedFactsWithMetadataLoader,
         aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
         selectOptions: selectOptionsLoader,
+        catalogMetadata: catalogMetadataLoader,
+        catalogDimensionNames: catalogDimensionNamesLoader,
+        compareFacts: compareFactsLoader,
+        compareAggregatedFacts: compareAggregatedFactsLoader,
+        crossDatabaseSelectOptions: crossDatabaseSelectOptionsLoader,
 
         // Méthode pour nettoyer le cache de l'ensemble des loaders
         clearAll: () => {
@@ -62,6 +80,11 @@ const createLoaders = (databaseId = null) => {
             aggregatedFactsWithMetadataLoader.clearAll();
             aggregatedFactsWithCountLoader.clearAll();
             selectOptionsLoader.clearAll();
+            catalogMetadataLoader.clearAll();
+            catalogDimensionNamesLoader.clearAll();
+            compareFactsLoader.clearAll();
+            compareAggregatedFactsLoader.clearAll();
+            crossDatabaseSelectOptionsLoader.clearAll();
         },
 
         // Méthode d'amorçage de tous les loaders avec leurs données initiales

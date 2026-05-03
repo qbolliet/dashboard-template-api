@@ -1,5 +1,5 @@
 // Importation des modules
-import { gql } from 'apollo-server';
+import { gql } from 'graphql-tag';
 
 // Définition du type des méta-données
 const metadataTypeDefs = gql`
@@ -9,6 +9,7 @@ const metadataTypeDefs = gql`
     python_type: String
     sql_type: String
     is_categorical: Boolean
+    is_primary_key: Boolean
   }
 
   extend type Query {
