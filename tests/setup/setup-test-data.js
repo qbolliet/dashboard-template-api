@@ -242,3 +242,4 @@ if (import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
 }
 
 export { setupTestData };
+export default setupTestData;
