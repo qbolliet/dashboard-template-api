@@ -1,10 +1,50 @@
-﻿// Unit tests for src/security/validation.js
+/**
+ * Unit tests for validateInput and ValidationRules (src/security/validation.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks config-loader to control VALIDATION_MAX_LENGTH.
+ * Covers ValidationRules structure, null/undefined handling, type mismatch,
+ * string validation, number validation, and unknown-type passthrough.
+ */
+
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
-// ─── Mock config ──────────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
-const mockConfig = {
+/** Configuration mockée de la section API — seuil de longueur de validation. */
+interface MockConfig {
+  API: { SECURITY_THRESHOLDS: { VALIDATION_MAX_LENGTH: number } };
+}
+
+/** Règle de validation pour les chaînes de caractères. */
+interface StringValidationRule {
+  type:       'string';
+  minLength:  number;
+  maxLength:  number;
+  required?:  boolean;
+}
+
+/** Règle de validation pour les nombres. */
+interface NumberValidationRule {
+  type:      'number';
+  min:       number;
+  max:       number;
+  required?: boolean;
+}
+
+/** Union des règles de validation reconnues. */
+type ValidationRule = StringValidationRule | NumberValidationRule | { type: string; required?: boolean };
+
+/** Structure de l'objet ValidationRules exporté par le module. */
+interface ValidationRulesType {
+  STRING: StringValidationRule;
+  NUMBER: NumberValidationRule;
+}
+
+// ─── Configuration mockée ─────────────────────────────────────────────────────
+
+const mockConfig: MockConfig = {
   API: {
     SECURITY_THRESHOLDS: {
       VALIDATION_MAX_LENGTH: 10000
@@ -12,19 +52,24 @@ const mockConfig = {
   }
 };
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
-// ─── Dynamic imports ──────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let validateInput, ValidationRules;
+// Assertions d'assignation définitive — assignés dans beforeAll avant tout test.
+let validateInput!:   (input: unknown, rules?: ValidationRule) => unknown;
+let ValidationRules!: ValidationRulesType;
 
 beforeAll(async () => {
   ({ validateInput, ValidationRules } =
-    await import('../../../src/security/validation.js'));
+    await import('../../../src/security/validation.js') as {
+      validateInput:   (input: unknown, rules?: ValidationRule) => unknown;
+      ValidationRules: ValidationRulesType;
+    });
 });
 
 // ─── ValidationRules ─────────────────────────────────────────────────────────
@@ -43,6 +88,7 @@ describe('ValidationRules', () => {
   });
 
   test('STRING.maxLength comes from config mock (10000)', () => {
+    // Vérification de l'injection de la valeur depuis le mock de config
     expect(ValidationRules.STRING.maxLength).toBe(10000);
   });
 });
@@ -69,7 +115,7 @@ describe('validateInput', () => {
       try {
         validateInput(null, { ...ValidationRules.STRING, required: true });
       } catch (e) {
-        expect(e.extensions.code).toBe('REQUIRED_FIELD');
+        expect((e as GraphQLError).extensions.code).toBe('REQUIRED_FIELD');
       }
     });
   });
@@ -91,8 +137,9 @@ describe('validateInput', () => {
       try {
         validateInput(42, ValidationRules.STRING);
       } catch (e) {
-        expect(e.message).toContain('string');
-        expect(e.message).toContain('number');
+        // Message d'erreur — doit mentionner les deux types impliqués
+        expect((e as GraphQLError).message).toContain('string');
+        expect((e as GraphQLError).message).toContain('number');
       }
     });
   });
@@ -107,32 +154,33 @@ describe('validateInput', () => {
     });
 
     test('throws STRING_TOO_LONG when string exceeds maxLength', () => {
+      // Chaîne de 10001 caractères — dépasse la limite de 10000 du mock
       const longString = 'a'.repeat(10001);
       try {
         validateInput(longString, ValidationRules.STRING);
         throw new Error('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(GraphQLError);
-        expect(e.extensions.code).toBe('STRING_TOO_LONG');
+        expect((e as GraphQLError).extensions.code).toBe('STRING_TOO_LONG');
       }
     });
 
     test('throws STRING_TOO_SHORT when string is shorter than minLength', () => {
-      const strictRule = { type: 'string', minLength: 3, maxLength: 100 };
+      const strictRule: StringValidationRule = { type: 'string', minLength: 3, maxLength: 100 };
       expect(() => validateInput('ab', strictRule)).toThrow(GraphQLError);
     });
 
     test('STRING_TOO_SHORT error has correct extension code', () => {
-      const strictRule = { type: 'string', minLength: 5, maxLength: 100 };
+      const strictRule: StringValidationRule = { type: 'string', minLength: 5, maxLength: 100 };
       try {
         validateInput('hi', strictRule);
       } catch (e) {
-        expect(e.extensions.code).toBe('STRING_TOO_SHORT');
+        expect((e as GraphQLError).extensions.code).toBe('STRING_TOO_SHORT');
       }
     });
 
     test('accepts string exactly at maxLength', () => {
-      const rule = { type: 'string', minLength: 0, maxLength: 5 };
+      const rule: StringValidationRule = { type: 'string', minLength: 0, maxLength: 5 };
       expect(validateInput('hello', rule)).toBe('hello');
     });
   });
@@ -156,7 +204,7 @@ describe('validateInput', () => {
         throw new Error('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(GraphQLError);
-        expect(e.extensions.code).toBe('INVALID_NUMBER');
+        expect((e as GraphQLError).extensions.code).toBe('INVALID_NUMBER');
       }
     });
 
@@ -165,23 +213,24 @@ describe('validateInput', () => {
     });
 
     test('throws NUMBER_OUT_OF_RANGE when above max', () => {
-      const strictRule = { type: 'number', min: -10, max: 10 };
+      const strictRule: NumberValidationRule = { type: 'number', min: -10, max: 10 };
       try {
         validateInput(11, strictRule);
         throw new Error('should have thrown');
       } catch (e) {
         expect(e).toBeInstanceOf(GraphQLError);
-        expect(e.extensions.code).toBe('NUMBER_OUT_OF_RANGE');
+        expect((e as GraphQLError).extensions.code).toBe('NUMBER_OUT_OF_RANGE');
       }
     });
 
     test('throws NUMBER_OUT_OF_RANGE when below min', () => {
-      const strictRule = { type: 'number', min: 0, max: 100 };
+      const strictRule: NumberValidationRule = { type: 'number', min: 0, max: 100 };
       expect(() => validateInput(-1, strictRule)).toThrow(GraphQLError);
     });
 
     test('accepts number at boundary values', () => {
-      const rule = { type: 'number', min: 0, max: 100 };
+      // Valeurs limites incluses — ni en dessous du min ni au-dessus du max
+      const rule: NumberValidationRule = { type: 'number', min: 0, max: 100 };
       expect(validateInput(0, rule)).toBe(0);
       expect(validateInput(100, rule)).toBe(100);
     });
@@ -189,7 +238,8 @@ describe('validateInput', () => {
 
   describe('unknown type', () => {
     test('returns input unchanged for unknown rule type', () => {
-      const customRule = { type: 'boolean', required: false };
+      // Type non reconnu — passthrough sans transformation ni erreur
+      const customRule: ValidationRule = { type: 'boolean', required: false };
       expect(validateInput(true, customRule)).toBe(true);
     });
   });

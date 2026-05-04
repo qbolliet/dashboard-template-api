@@ -1,41 +1,86 @@
-﻿// Unit tests for src/security/input-sanitizer.js
+/**
+ * Unit tests for InputSanitizer (src/security/input-sanitizer.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks config-loader and logger to isolate the sanitizer logic.
+ * Covers sanitizeAll, sanitizeXSS, sanitizeSQL, sanitizeNumber,
+ * and sanitizeValue methods.
+ */
+
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
+/** Logger contextuel mocké — quatre méthodes de journalisation. */
+interface MockLogger {
+  security:  jest.Mock;
+  operation: jest.Mock;
+  warn:      jest.Mock;
+  error:     jest.Mock;
+}
+
+/** Configuration initiale passée au constructeur d'InputSanitizer. */
+interface InputSanitizerConfig {
+  ENABLE_XSS:        boolean;
+  ENABLE_SQL:        boolean;
+  MAX_STRING_LENGTH: number;
+  ALLOWED_TAGS:      string[];
+  CUSTOM_SANITIZERS: Record<string, (v: string) => string>;
+}
+
+/** Interface publique d'une instance d'InputSanitizer. */
+interface InputSanitizerInstance {
+  sanitizeAll:    (input: unknown, key?: string) => unknown;
+  sanitizeXSS:    (input: string) => string;
+  sanitizeSQL:    (input: string) => string;
+  sanitizeNumber: (input: number, field: string) => number;
+  sanitizeValue:  (input: string, field: string) => string;
+}
+
+/** Constructeur d'InputSanitizer. */
+interface InputSanitizerConstructor {
+  new(config: InputSanitizerConfig): InputSanitizerInstance;
+}
+
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: {}
 }));
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
-  createContextLogger: () => ({
-    security: jest.fn(),
+  createContextLogger: (): MockLogger => ({
+    security:  jest.fn(),
     operation: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn()
+    warn:      jest.fn(),
+    error:     jest.fn()
   })
 }));
 
-// ─── Dynamic imports ──────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let InputSanitizer;
+// Assertion d'assignation définitive — assigné dans beforeAll avant tout test.
+let InputSanitizer!: InputSanitizerConstructor;
 
 beforeAll(async () => {
-  ({ InputSanitizer } = await import('../../../src/security/input-sanitizer.js'));
+  ({ InputSanitizer } =
+    await import('../../../src/security/input-sanitizer.js') as {
+      InputSanitizer: InputSanitizerConstructor;
+    });
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('InputSanitizer', () => {
-  let sanitizer;
+  let sanitizer!: InputSanitizerInstance;
 
   beforeEach(() => {
     sanitizer = new InputSanitizer({
-      ENABLE_XSS: true,
-      ENABLE_SQL: true,
+      ENABLE_XSS:        true,
+      ENABLE_SQL:        true,
       MAX_STRING_LENGTH: 100,
-      ALLOWED_TAGS: [],
+      ALLOWED_TAGS:      [],
       CUSTOM_SANITIZERS: {}
     });
   });
@@ -48,14 +93,14 @@ describe('InputSanitizer', () => {
 
     test('sanitizes string values inside an object recursively', () => {
       const input = { field1: '<script>xss()</script>Hello', nested: { field2: 'safe' } };
-      const result = sanitizer.sanitizeAll(input);
+      const result = sanitizer.sanitizeAll(input) as typeof input;
       expect(result.field1).not.toContain('<script>');
       expect(result.nested.field2).toBe('safe');
     });
 
     test('sanitizes elements inside arrays', () => {
       const input = { items: ['<script>alert(1)</script>', 'normal'] };
-      const result = sanitizer.sanitizeAll(input);
+      const result = sanitizer.sanitizeAll(input) as typeof input;
       expect(Array.isArray(result.items)).toBe(true);
       expect(result.items[0]).not.toContain('<script>');
       expect(result.items[1]).toBe('normal');
@@ -67,12 +112,15 @@ describe('InputSanitizer', () => {
     });
 
     test('applies custom sanitizer when key matches', () => {
+      // Sanitizer personnalisé — transformation en majuscules pour la clé "special"
       const custom = new InputSanitizer({
-        ENABLE_XSS: false, ENABLE_SQL: false,
-        MAX_STRING_LENGTH: 1000, ALLOWED_TAGS: [],
-        CUSTOM_SANITIZERS: { special: v => v.toUpperCase() }
+        ENABLE_XSS:        false,
+        ENABLE_SQL:        false,
+        MAX_STRING_LENGTH: 1000,
+        ALLOWED_TAGS:      [],
+        CUSTOM_SANITIZERS: { special: (v: string) => v.toUpperCase() }
       });
-      expect(custom.sanitizeAll({ special: 'hello' }).special).toBe('HELLO');
+      expect((custom.sanitizeAll({ special: 'hello' }) as Record<string, string>).special).toBe('HELLO');
     });
   });
 
@@ -109,7 +157,7 @@ describe('InputSanitizer', () => {
       try {
         sanitizer.sanitizeSQL("value'; --");
       } catch (e) {
-        expect(e.extensions.code).toBe('SQL_INJECTION_PREVENTED');
+        expect((e as GraphQLError).extensions.code).toBe('SQL_INJECTION_PREVENTED');
       }
     });
 
@@ -147,10 +195,12 @@ describe('InputSanitizer', () => {
 
   describe('sanitizeValue — string length guard', () => {
     test('throws when string exceeds maxStringLength', () => {
+      // Chaîne de 101 caractères — dépasse la limite de 100
       expect(() => sanitizer.sanitizeValue('a'.repeat(101), 'longField')).toThrow(GraphQLError);
     });
 
     test('accepts strings at exactly maxStringLength', () => {
+      // Chaîne de 100 caractères — exactement à la limite, aucune erreur attendue
       expect(() => sanitizer.sanitizeValue('a'.repeat(100), 'field')).not.toThrow();
     });
   });
