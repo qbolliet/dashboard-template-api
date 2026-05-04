@@ -1,10 +1,59 @@
-﻿// Unit tests for src/security/pattern-validator.js
+/**
+ * Unit tests for PatternValidator (src/security/pattern-validator.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks config-loader and logger to isolate the validator logic.
+ * Covers validateQuery, compilePatterns, and reload methods.
+ */
+
 import { jest } from '@jest/globals';
 import { GraphQLError } from 'graphql';
 
-// ─── Mock config ──────────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
-const mockConfig = {
+/** Configuration mockée de la section patterns de sécurité. */
+interface MockConfig {
+  SECURITY_PATTERNS: { blocked: unknown[]; allowed: unknown[] };
+  API: { SECURITY_THRESHOLDS: { QUERY_SNIPPET_LENGTH: number } };
+}
+
+/** Logger contextuel mocké — quatre méthodes de journalisation. */
+interface MockLogger {
+  security:  jest.Mock;
+  operation: jest.Mock;
+  warn:      jest.Mock;
+  error:     jest.Mock;
+}
+
+/** Entrée de pattern bloqué compilé — regex + message + pattern original. */
+interface BlockedPattern {
+  regex:    RegExp;
+  message:  string;
+  original: string;
+}
+
+/** Patterns compilés du validateur — liste des patterns bloqués et autorisés. */
+interface CompiledPatterns {
+  blocked: BlockedPattern[];
+  allowed: string[];
+}
+
+/** Interface publique d'une instance de PatternValidator. */
+interface PatternValidatorInstance {
+  compiledPatterns: CompiledPatterns;
+  validateQuery:    (query: unknown) => Promise<void>;
+  compilePatterns:  () => CompiledPatterns;
+  reload:           () => void;
+}
+
+/** Constructeur de PatternValidator. */
+interface PatternValidatorConstructor {
+  new(): PatternValidatorInstance;
+}
+
+// ─── Configuration mockée ─────────────────────────────────────────────────────
+
+const mockConfig: MockConfig = {
   SECURITY_PATTERNS: {
     blocked: [],
     allowed: []
@@ -16,33 +65,37 @@ const mockConfig = {
   }
 };
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig
 }));
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
-  createContextLogger: () => ({
-    security: jest.fn(),
+  createContextLogger: (): MockLogger => ({
+    security:  jest.fn(),
     operation: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn()
+    warn:      jest.fn(),
+    error:     jest.fn()
   })
 }));
 
-// ─── Dynamic imports ──────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let PatternValidator;
+// Assertion d'assignation définitive — assigné dans beforeAll avant tout test.
+let PatternValidator!: PatternValidatorConstructor;
 
 beforeAll(async () => {
-  ({ PatternValidator } = await import('../../../src/security/pattern-validator.js'));
+  ({ PatternValidator } =
+    await import('../../../src/security/pattern-validator.js') as {
+      PatternValidator: PatternValidatorConstructor;
+    });
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('PatternValidator', () => {
-  let validator;
+  let validator!: PatternValidatorInstance;
 
   beforeEach(() => {
     validator = new PatternValidator();
@@ -59,6 +112,7 @@ describe('PatternValidator', () => {
     });
 
     test('resolves without error for malformed input (not a validator responsibility)', async () => {
+      // Validation lexicale — non responsabilité du PatternValidator
       await expect(validator.validateQuery('not valid graphql {{{')).resolves.toBeUndefined();
     });
 
@@ -68,10 +122,11 @@ describe('PatternValidator', () => {
     });
 
     test('throws GraphQLError when query matches a blocked pattern', async () => {
+      // Ajout manuel d'un pattern bloqué — simulation d'une règle de sécurité
       const blockedValidator = new PatternValidator();
       blockedValidator.compiledPatterns.blocked.push({
-        regex: /drop\s+table/i,
-        message: 'DDL operations are forbidden',
+        regex:    /drop\s+table/i,
+        message:  'DDL operations are forbidden',
         original: 'drop\\s+table'
       });
       await expect(blockedValidator.validateQuery('DROP TABLE users')).rejects.toThrow(GraphQLError);
@@ -80,23 +135,24 @@ describe('PatternValidator', () => {
     test('thrown error has FORBIDDEN_PATTERN extension code', async () => {
       const blockedValidator = new PatternValidator();
       blockedValidator.compiledPatterns.blocked.push({
-        regex: /forbidden/i,
-        message: 'Forbidden keyword',
+        regex:    /forbidden/i,
+        message:  'Forbidden keyword',
         original: 'forbidden'
       });
       try {
         await blockedValidator.validateQuery('forbidden query');
       } catch (e) {
-        expect(e.extensions.code).toBe('FORBIDDEN_PATTERN');
+        expect((e as GraphQLError).extensions.code).toBe('FORBIDDEN_PATTERN');
       }
     });
 
     test('allows query that matches an allowed pattern, skipping blocked check', async () => {
+      // Pattern dans la liste autorisée — doit contourner la vérification des bloqués
       const specificValidator = new PatternValidator();
       specificValidator.compiledPatterns.allowed.push('safe_operation');
       specificValidator.compiledPatterns.blocked.push({
-        regex: /safe_operation/i,
-        message: 'Would be blocked without allow-list',
+        regex:    /safe_operation/i,
+        message:  'Would be blocked without allow-list',
         original: 'safe_operation'
       });
       await expect(specificValidator.validateQuery('safe_operation')).resolves.toBeUndefined();
@@ -121,6 +177,7 @@ describe('PatternValidator', () => {
     });
 
     test('resets compiled patterns to a new object reference', () => {
+      // Référence initiale — doit changer après reload
       const before = validator.compiledPatterns;
       validator.reload();
       expect(validator.compiledPatterns).not.toBe(before);
