@@ -16,6 +16,27 @@ const dbLogger = createContextLogger({
     module: 'database-manager'
 });
 
+// ─── Interfaces ───────────────────────────────────────────────────────────────
+
+/** Statistiques du pool partagé retournées par getStatistics(). */
+interface PoolStats {
+    available: number;
+    using: number;
+    total: number;
+    maxConnections: number;
+    attachedCatalogs: string[];
+}
+
+/** Statistiques complètes du gestionnaire de bases de données. */
+interface DatabaseStats {
+    sharedPool: PoolStats | null;
+    defaultDatabase: string;
+    allowedDatabases: string[];
+    allowCrossDatabase: boolean;
+}
+
+// ─── Classe DatabaseManager ───────────────────────────────────────────────────
+
 /**
  * DatabaseManager - Manages a shared DuckDB pool attached to multiple DuckLake catalogs.
  *
@@ -31,32 +52,35 @@ const dbLogger = createContextLogger({
  *     ALLOW_CROSS_DATABASE_QUERIES: true
  *   CATALOGS:
  *     project_a:
- *       PATH: 'outputs/project_a.ducklake'       # chemin relatif depuis la racine du projet
+ *       PATH: 'outputs/project_a.ducklake'
  *       DATA_PATH: 'outputs/project_a_data/'
- *       READ_ONLY: true
- *     project_b:
- *       PATH: 'outputs/project_b.ducklake'
- *       DATA_PATH: 'outputs/project_b_data/'
  *       READ_ONLY: true
  *   DATABASE:
  *     POOL:
  *       MAX_CONNECTIONS: 5
  *       ACQUIRE_TIMEOUT: 10000
- *       CONNECTION_RETRY_DELAY: 100
  *       POOL_RETRY_DELAY: 50
  */
 class DatabaseManager {
+    private readonly defaultDatabase: string;
+    private readonly allowedDatabases: string[];
+    private readonly allowCrossDatabase: boolean;
+    private sharedPool: DuckDBPool | null;
+    private readonly schemas: Record<string, string>;
+
     constructor() {
         // Configuration du routage des catalogues depuis le fichier de config
         this.defaultDatabase = config.DATABASE_ROUTING.DEFAULT_DATABASE;
 
         // ALLOWED_DATABASES peut être une string JSON ou un tableau selon le config-loader
         const rawAllowed = config.DATABASE_ROUTING.ALLOWED_DATABASES;
-        this.allowedDatabases = typeof rawAllowed === 'string'
-            ? JSON.parse(rawAllowed)
-            : rawAllowed;
+        this.allowedDatabases =
+            typeof rawAllowed === 'string'
+                ? (JSON.parse(rawAllowed) as string[])
+                : rawAllowed;
 
-        this.allowCrossDatabase = config.DATABASE_ROUTING.ALLOW_CROSS_DATABASE_QUERIES;
+        this.allowCrossDatabase =
+            config.DATABASE_ROUTING.ALLOW_CROSS_DATABASE_QUERIES;
 
         // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
         this.sharedPool = null;
@@ -72,7 +96,7 @@ class DatabaseManager {
      * Build the catalog array and create the single shared DuckDB pool.
      * Each entry in config.CATALOGS becomes an ATTACH in the shared DuckDB instance.
      */
-    initializeDatabases() {
+    initializeDatabases(): void {
         dbLogger.database('Initializing database manager', {
             defaultDatabase: this.defaultDatabase,
             allowedDatabases: this.allowedDatabases,
@@ -80,22 +104,28 @@ class DatabaseManager {
         });
 
         // Construction de la liste des catalogues DuckLake à attacher
-        const catalogs = [];
+        const catalogs: { alias: string; path: string; dataPath: string; readOnly: boolean }[] = [];
 
         for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
-            // Résolution du chemin absolu vers le fichier catalogue (slashes pour DuckLake)
-            const catalogPath = resolve(__dirname, '../../', catalogConfig.PATH).replace(/\\/g, '/');
+            // Résolution du chemin absolu vers le fichier catalogue
+            const catalogPath = resolve(__dirname, '../../', catalogConfig.PATH).replace(
+                /\\/g,
+                '/'
+            );
             // Résolution du chemin absolu vers le répertoire de données Parquet
-            const dataPathRaw = resolve(__dirname, '../../', catalogConfig.DATA_PATH).replace(/\\/g, '/');
+            const dataPathRaw = resolve(
+                __dirname,
+                '../../',
+                catalogConfig.DATA_PATH
+            ).replace(/\\/g, '/');
             // DuckLake exige un slash final sur DATA_PATH
             const dataPath = dataPathRaw.endsWith('/') ? dataPathRaw : dataPathRaw + '/';
 
             // Stockage du schéma DuckLake configuré pour ce catalogue
-            this.schemas[catalogId] = catalogConfig.SCHEMA || 'main';
+            this.schemas[catalogId] = catalogConfig.SCHEMA ?? 'main';
 
             // Vérification de l'existence du fichier catalogue
             if (!fs.existsSync(catalogPath)) {
-                // Avertissement non bloquant : DuckLake peut initialiser un catalogue vide
                 dbLogger.warn(`Catalog file not found for ${catalogId}`, {
                     path: catalogPath,
                     configPath: catalogConfig.PATH
@@ -118,11 +148,11 @@ class DatabaseManager {
         }
 
         // Validation que le catalogue par défaut est bien dans la liste
-        const defaultInCatalogs = catalogs.some(c => c.alias === this.defaultDatabase);
+        const defaultInCatalogs = catalogs.some((c) => c.alias === this.defaultDatabase);
         if (!defaultInCatalogs) {
             throw new Error(
                 `Default database '${this.defaultDatabase}' not found in CATALOGS config. ` +
-                `Available: ${catalogs.map(c => c.alias).join(', ')}`
+                    `Available: ${catalogs.map((c) => c.alias).join(', ')}`
             );
         }
 
@@ -135,7 +165,7 @@ class DatabaseManager {
         };
 
         dbLogger.database('Creating shared pool', {
-            catalogs: catalogs.map(c => ({
+            catalogs: catalogs.map((c) => ({
                 alias: c.alias,
                 path: c.path.replace(process.cwd(), '.'),
                 readOnly: c.readOnly
@@ -146,30 +176,35 @@ class DatabaseManager {
         this.sharedPool = new DuckDBPool(poolConfig);
 
         dbLogger.database('Database manager initialized successfully', {
-            attachedCatalogs: catalogs.map(c => c.alias)
+            attachedCatalogs: catalogs.map((c) => c.alias)
         });
     }
 
     /**
      * Get the shared connection pool.
      * Validates that the requested catalogId is allowed before returning the pool.
-     * The caller is responsible for using catalog-qualified queries:
-     *   SELECT * FROM {catalogId}.main.fact_table
      *
-     * @param {string|null} catalogId - Catalog to validate access for (null = default).
-     * @returns {DuckDBPool} The shared connection pool.
-     * @throws {Error} If catalogId is not in ALLOWED_DATABASES.
+     * Args:
+     *     catalogId: Catalog to validate access for (null = default).
+     *
+     * Returns:
+     *     The shared connection pool.
+     *
+     * Raises:
+     *     Error: If catalogId is not in ALLOWED_DATABASES.
      */
-    getPool(catalogId = null) {
-        // Utilisation du catalogue par défaut si aucun ID n'est spécifié
-        const targetCatalog = catalogId || this.defaultDatabase;
+    getPool(catalogId: string | null = null): DuckDBPool {
+        const targetCatalog = catalogId ?? this.defaultDatabase;
 
-        // Validation que le catalogue demandé est autorisé
         if (!this.isValidDatabase(targetCatalog)) {
             throw new Error(
                 `Database '${targetCatalog}' is not allowed or not configured. ` +
-                `Allowed: ${this.allowedDatabases.join(', ')}`
+                    `Allowed: ${this.allowedDatabases.join(', ')}`
             );
+        }
+
+        if (!this.sharedPool) {
+            throw new Error('Shared pool is not initialized.');
         }
 
         return this.sharedPool;
@@ -178,28 +213,33 @@ class DatabaseManager {
     /**
      * Validate if a catalog ID is in the allowed list.
      *
-     * @param {string} catalogId - Catalog identifier to validate.
-     * @returns {boolean} True if the catalog is allowed.
+     * Args:
+     *     catalogId: Catalog identifier to validate.
+     *
+     * Returns:
+     *     True if the catalog is allowed.
      */
-    isValidDatabase(catalogId) {
+    isValidDatabase(catalogId: string): boolean {
         return this.allowedDatabases.includes(catalogId);
     }
 
     /**
      * Get list of allowed catalog IDs.
      *
-     * @returns {Array<string>} List of allowed catalog identifiers.
+     * Returns:
+     *     List of allowed catalog identifiers.
      */
-    getAvailableDatabases() {
+    getAvailableDatabases(): string[] {
         return [...this.allowedDatabases];
     }
 
     /**
      * Get default catalog ID.
      *
-     * @returns {string} Default catalog identifier.
+     * Returns:
+     *     Default catalog identifier.
      */
-    getDefaultDatabase() {
+    getDefaultDatabase(): string {
         return this.defaultDatabase;
     }
 
@@ -207,19 +247,27 @@ class DatabaseManager {
      * Get the DuckLake schema name for a catalog.
      * Defaults to 'main' if not configured.
      *
-     * @param {string} catalogId - Catalog identifier.
-     * @returns {string} Schema name (e.g. 'main').
+     * Args:
+     *     catalogId: Catalog identifier.
+     *
+     * Returns:
+     *     Schema name (e.g. 'main').
      */
-    getSchema(catalogId) {
-        return this.schemas[catalogId] || this.schemas[this.defaultDatabase] || 'main';
+    getSchema(catalogId: string): string {
+        return (
+            this.schemas[catalogId] ??
+            this.schemas[this.defaultDatabase] ??
+            'main'
+        );
     }
 
     /**
      * Check if cross-catalog queries are allowed.
      *
-     * @returns {boolean} True if cross-catalog queries are allowed.
+     * Returns:
+     *     True if cross-catalog queries are allowed.
      */
-    isCrossDatabaseAllowed() {
+    isCrossDatabaseAllowed(): boolean {
         return this.allowCrossDatabase;
     }
 
@@ -227,19 +275,29 @@ class DatabaseManager {
      * Validate and resolve the catalog ID for a GraphQL request.
      * Priority: explicit parameter > HTTP header context > default catalog.
      *
-     * @param {string|null} requestedDatabase - Catalog requested by the client.
-     * @param {string|null} contextDatabase - Catalog from request context (HTTP header).
-     * @returns {string} Validated catalog ID to use.
-     * @throws {Error} If the resolved catalog is not available.
+     * Args:
+     *     requestedDatabase: Catalog requested by the client.
+     *     contextDatabase: Catalog from request context (HTTP header).
+     *
+     * Returns:
+     *     Validated catalog ID to use.
+     *
+     * Raises:
+     *     Error: If the resolved catalog is not available.
      */
-    validateDatabaseRouting(requestedDatabase = null, contextDatabase = null) {
+    validateDatabaseRouting(
+        requestedDatabase: string | null = null,
+        contextDatabase: string | null = null
+    ): string {
         // Priorité : paramètre GraphQL > en-tête HTTP > catalogue par défaut
-        const targetDatabase = requestedDatabase || contextDatabase || this.defaultDatabase;
+        // Utilisation de || pour traiter les chaînes vides comme absentes
+        const targetDatabase =
+            requestedDatabase || contextDatabase || this.defaultDatabase;
 
         if (!this.isValidDatabase(targetDatabase)) {
             throw new Error(
                 `Database '${targetDatabase}' is not available. ` +
-                `Available databases: ${this.getAvailableDatabases().join(', ')}`
+                    `Available databases: ${this.getAvailableDatabases().join(', ')}`
             );
         }
 
@@ -248,10 +306,8 @@ class DatabaseManager {
 
     /**
      * Close the shared pool and all its connections.
-     *
-     * @returns {Promise<void>}
      */
-    async close() {
+    async close(): Promise<void> {
         dbLogger.database('Closing shared database pool');
 
         if (this.sharedPool) {
@@ -269,17 +325,22 @@ class DatabaseManager {
     /**
      * Get connection statistics for the shared pool.
      *
-     * @returns {Object} Statistics for the shared pool and routing configuration.
+     * Returns:
+     *     Statistics for the shared pool and routing configuration.
      */
-    getStatistics() {
+    getStatistics(): DatabaseStats {
         // Récupération des statistiques du pool partagé si disponible
-        const poolStats = this.sharedPool ? {
-            available: this.sharedPool.pool.filter(c => !c.inUse).length,
-            using: this.sharedPool.pool.filter(c => c.inUse).length,
-            total: this.sharedPool.pool.length,
-            maxConnections: this.sharedPool.maxConnections,
-            attachedCatalogs: (this.sharedPool.catalogs || []).map(c => c.alias)
-        } : null;
+        const poolStats: PoolStats | null = this.sharedPool
+            ? {
+                  available: this.sharedPool.pool.filter((c) => !c.inUse).length,
+                  using: this.sharedPool.pool.filter((c) => c.inUse).length,
+                  total: this.sharedPool.pool.length,
+                  maxConnections: this.sharedPool.maxConnections,
+                  attachedCatalogs: (this.sharedPool.catalogs ?? []).map(
+                      (c) => c.alias
+                  )
+              }
+            : null;
 
         return {
             sharedPool: poolStats,
@@ -294,7 +355,7 @@ class DatabaseManager {
 const databaseManager = new DatabaseManager();
 
 // Fonction de fermeture des connexions avec logging
-const closeAllConnections = async () => {
+const closeAllConnections = async (): Promise<void> => {
     await databaseManager.close();
 };
 

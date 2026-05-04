@@ -139,7 +139,8 @@ export async function enrichFactsWithDimensions(
     // Enrichissement de chaque fait avec ses détails dimensionnels
     return facts.map((fact) => {
         if (!fact || typeof fact !== 'object') {
-            return { ...fact, dimensionDetails: [] };
+            // Branche défensive — invariant garanti par le type Fact[]
+            return { dimensionDetails: [] } as Fact & { dimensionDetails: (DimensionDetail | Fact)[] };
         }
 
         const factDimensionFields = Object.keys(fact).filter(

@@ -112,7 +112,7 @@ class BaseQueryLoader {
         let pool: DuckDBPool | undefined;
         try {
             // Récupération du pool associé à l'identifiant de base de données
-            pool = (databaseManager as { getPool: (id: string | null) => DuckDBPool }).getPool(this.databaseId);
+            pool = (databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }).getPool(this.databaseId);
             // Acquisition de la connexion
             connection = await pool.acquire();
             // Exécution de la fonction avec la connexion
@@ -142,7 +142,7 @@ class BaseQueryLoader {
      *     Fully qualified table name string.
      */
     qualifyTable(tableName: string): string {
-        const dm = databaseManager as { defaultDatabase: string; getSchema: (id: string) => string };
+        const dm = databaseManager as unknown as { defaultDatabase: string; getSchema: (id: string) => string };
         const catalog = this.databaseId || dm.defaultDatabase;
         const schema = dm.getSchema(catalog);
         return `"${catalog}".${schema}.${tableName}`;
