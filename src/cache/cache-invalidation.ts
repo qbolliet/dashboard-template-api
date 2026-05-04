@@ -208,7 +208,10 @@ class CacheInvalidationManager {
 
         try {
             // Récupération de la liste de toutes les bases de données configurées
-            const databases: string[] = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+            const rawDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+            const databases: string[] = Array.isArray(rawDatabases)
+                ? rawDatabases
+                : (JSON.parse(rawDatabases) as string[]);
 
             // Création des promesses d'invalidation pour chaque base de données
             // Capture des erreurs individuelles pour ne pas bloquer le reste du processus
@@ -258,7 +261,10 @@ class CacheInvalidationManager {
     async getCacheStats(): Promise<CacheStats> {
         try {
             // Récupération de toutes les bases de données configurées
-            const databases: string[] = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+            const rawDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
+            const databases: string[] = Array.isArray(rawDatabases)
+                ? rawDatabases
+                : (JSON.parse(rawDatabases) as string[]);
             const stats: CacheStats = {};
 
             // Parcours de chaque base de données pour collecter les statistiques

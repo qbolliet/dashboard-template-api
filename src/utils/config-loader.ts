@@ -225,6 +225,23 @@ interface CacheConfig {
     HTTP_CACHE:   CacheHttpConfig;
 }
 
+/** Configuration d'un catalogue DuckLake individuel. */
+export interface CatalogConfig {
+    PATH: string;
+    DATA_PATH: string;
+    READ_ONLY: boolean;
+    SCHEMA?: string;
+}
+
+/** Configuration S3 pour le stockage distant des fichiers Parquet. */
+interface S3Config {
+    ENABLED: boolean;
+    ACCESS_KEY?: string;
+    SECRET_KEY?: string;
+    REGION?: string;
+    ENDPOINT?: string;
+}
+
 /** Configuration complète de l'application chargée depuis les fichiers YAML. */
 interface AppConfig {
     ENVIRONMENT: string;
@@ -252,14 +269,18 @@ interface AppConfig {
     DATABASE: {
         POOL: {
             MAX_CONNECTIONS: number;
+            ACQUIRE_TIMEOUT: number;
+            POOL_RETRY_DELAY: number;
         };
     };
     DATABASE_ROUTING: {
         DEFAULT_DATABASE: string;
-        ALLOWED_DATABASES: string[];
+        ALLOWED_DATABASES: string[] | string;
+        ALLOW_CROSS_DATABASE_QUERIES: boolean;
     };
+    S3?: S3Config;
     CACHE:   CacheConfig;
-    CATALOGS: Record<string, unknown>;
+    CATALOGS: Record<string, CatalogConfig>;
     SECURITY: SecurityConfig;
     SECURITY_LIMITS: SecurityLimitsConfig;
     SECURITY_PATTERNS: SecurityPatternsConfig;

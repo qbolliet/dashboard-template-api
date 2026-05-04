@@ -3,7 +3,7 @@ import { databaseManager, closeAllConnections } from './database-manager.js';
 import { createContextLogger } from '../utils/logger.js';
 
 // Création du logger contextualisé pour ce module
-const dbLogger = createContextLogger({ 
+const dbLogger = createContextLogger({
     component: 'database',
     module: 'connection'
 });
@@ -17,14 +17,14 @@ const getDefaultPool = () => {
 const dbPool = getDefaultPool();
 
 // Fonction de fermeture des connexions avec logging (compatibilité)
-const closeConnections = async () => {
+const closeConnections = async (): Promise<void> => {
     dbLogger.database('Closing all database connections (legacy function)');
     await closeAllConnections();
 };
 
 // Exportation pour compatibilité et nouvelles fonctionnalités
-export { 
-    dbPool, 
+export {
+    dbPool,
     closeConnections,
     databaseManager,
     closeAllConnections,
