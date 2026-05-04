@@ -7,7 +7,7 @@ import type { SelectOption } from '../../loaders/select-options.js';
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments de la requête getSelectOptions. */
-interface SelectOptionsArgs {
+export interface SelectOptionsArgs {
     fieldName: string;
     limit?: number;
     searchTerm?: string;
@@ -15,7 +15,7 @@ interface SelectOptionsArgs {
 }
 
 /** Arguments de la requête getGroupedSelectOptions. */
-interface GroupedSelectOptionsArgs {
+export interface GroupedSelectOptionsArgs {
     groupField: string;
     optionsField: string;
     limit?: number;
@@ -23,7 +23,7 @@ interface GroupedSelectOptionsArgs {
 }
 
 /** Résultat groupé d'options de sélection (groupe + options). */
-interface GroupedSelectOptions {
+export interface GroupedSelectOptions {
     group: SelectOption[];
     options: SelectOption[];
 }

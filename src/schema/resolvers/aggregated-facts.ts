@@ -26,7 +26,7 @@ interface AggregatedSortItem {
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments communs des requêtes getAggregatedFacts et getAggregatedFactsWithMetadata. */
-interface AggregatedFactsArgs {
+export interface AggregatedFactsArgs {
     fields?: string[];
     filters?: string | null;
     structuredFilters?: StructuredFilter[] | null;
@@ -41,7 +41,7 @@ interface AggregatedFactsArgs {
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
 /** Résultat agrégé avec métadonnées (utilisé par getAggregatedFactsWithMetadata). */
-interface AggregatedWithMetadataResult {
+export interface AggregatedWithMetadataResult {
     data: AggregatedFactParent[];
     [key: string]: unknown;
 }

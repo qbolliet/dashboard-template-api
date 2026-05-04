@@ -6,7 +6,7 @@ import type { GraphQLContext } from './types.js';
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments de la requête getMetaData. */
-interface MetadataArgs {
+export interface MetadataArgs {
     name: string;
     database?: string | null;
 }

@@ -33,7 +33,7 @@ interface Loaders {
 type Fact = Record<string, unknown>;
 
 /** Fait agrégé avec une clé de regroupement et une valeur numérique agrégée. */
-interface AggregatedFact {
+export interface AggregatedFact {
     key: unknown;
     value?: unknown;
     keyLabel?: unknown;

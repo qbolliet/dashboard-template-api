@@ -11,14 +11,14 @@ import type { StructuredFilter } from '../../utils/utils.js';
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments communs des requêtes sur la table des faits (inclut le routage). */
-interface FactTableArgs extends FactQueryParams {
+export interface FactTableArgs extends FactQueryParams {
     database?: string | null;
 }
 
 // ─── Interfaces des résultats enrichis ───────────────────────────────────────
 
 /** Résultat paginé de la table des faits. */
-interface PaginatedFactResult {
+export interface PaginatedFactResult {
     data: Record<string, unknown>[];
     total: number;
     hasNextPage: boolean;

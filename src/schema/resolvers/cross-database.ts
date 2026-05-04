@@ -18,7 +18,7 @@ type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MOD
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments de la requête compareFacts. */
-interface CompareFactsArgs {
+export interface CompareFactsArgs {
     databaseA: string;
     databaseB: string;
     joinFields: string[];
@@ -28,7 +28,7 @@ interface CompareFactsArgs {
 }
 
 /** Arguments de la requête compareAggregatedFacts. */
-interface CompareAggregatedFactsArgs {
+export interface CompareAggregatedFactsArgs {
     databaseA: string;
     databaseB: string;
     groupBy: string;
@@ -38,7 +38,7 @@ interface CompareAggregatedFactsArgs {
 }
 
 /** Arguments de la requête crossDatabaseSelectOptions. */
-interface CrossDatabaseSelectOptionsArgs {
+export interface CrossDatabaseSelectOptionsArgs {
     fieldName: string;
     databases: string[];
     limit?: number;
