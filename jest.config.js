@@ -19,9 +19,15 @@ export default {
     '^.+\\.tsx?$': ['ts-jest', {
       useESM: true,
       tsconfig: {
-        // Configuration ts-jest spécifique aux tests — hérite de tsconfig.json
+        // Configuration ts-jest spécifique aux tests — hérite de tsconfig.json.
+        // rootDir élargi à '.' pour couvrir tests/ en plus de src/.
+        // isolatedModules requis par ts-jest en mode NodeNext/ESM.
         allowJs: true,
-        checkJs: false
+        checkJs: false,
+        rootDir: '.',
+        module: 'NodeNext',
+        moduleResolution: 'NodeNext',
+        isolatedModules: true
       }
     }]
   },
@@ -64,9 +70,9 @@ export default {
   },
 
   // Setup des tests
-  globalSetup: '<rootDir>/tests/setup/setup-test-data.js',
-  setupFiles: ['<rootDir>/tests/setup/setup-env.js'],
-  setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.js'],
+  globalSetup: '<rootDir>/tests/setup/setup-test-data.ts',
+  setupFiles: ['<rootDir>/tests/setup/setup-env.ts'],
+  setupFilesAfterEnv: ['<rootDir>/tests/setup/setup.ts'],
 
   // Clear mocks between tests
   clearMocks: true,
