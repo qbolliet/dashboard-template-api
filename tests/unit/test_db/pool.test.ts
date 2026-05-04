@@ -1,25 +1,132 @@
-﻿// Unit tests for DuckDBPool (src/db/pool.js)
-// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+/**
+ * Unit tests for DuckDBPool (src/db/pool.js).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks @duckdb/node-api, config-loader, and logger to isolate pool logic.
+ * Covers constructor, initializeInstance, acquire, release, close,
+ * and all connection query methods (all, getAsJsonArray, getWithMetadata, exec).
+ */
+
 import { jest } from '@jest/globals';
 
-// ─── Mock state ───────────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
-const mockQueryResult = {
+/** Résultat de requête mocké — simulation de DuckDBQueryResult. */
+interface MockQueryResult {
+  getRowObjectsJson: jest.Mock;
+  getRowsJson:       jest.Mock;
+  columnNames:       jest.Mock;
+}
+
+/** Connexion DuckDB mockée — simulation de DuckDBConnection. */
+interface MockDuckConnection {
+  run:       jest.Mock;
+  prepare:   jest.Mock;
+  closeSync: jest.Mock;
+}
+
+/** Instance DuckDB mockée — simulation de DuckDBInstance. */
+interface MockDuckInstance {
+  connect:   jest.Mock;
+  closeSync: jest.Mock;
+}
+
+/** Statement préparé mocké — retourné par mockDuckConn.prepare(). */
+interface MockPreparedStatement {
+  bindNull:    jest.Mock;
+  bindVarchar: jest.Mock;
+  bindInteger: jest.Mock;
+  bindDouble:  jest.Mock;
+  bindBoolean: jest.Mock;
+  run:         jest.Mock;
+}
+
+/** Configuration passée au constructeur DuckDBPool. */
+interface PoolConfig {
+  catalogs:        CatalogConfig[];
+  maxConnections:  number;
+  acquireTimeout:  number;
+  retryDelay:      number;
+}
+
+/** Configuration d'un catalogue DuckLake attaché au pool. */
+interface CatalogConfig {
+  alias:    string;
+  path:     string;
+  dataPath: string;
+  readOnly: boolean;
+}
+
+/** Instance de DuckDBPool avec accès aux membres internes pour les tests. */
+interface DuckDBPoolInstance {
+  maxConnections:   number;
+  acquireTimeout:   number;
+  retryDelay:       number;
+  pool:             PoolEntry[];
+  catalogs:         CatalogConfig[];
+  instance:         MockDuckInstance | null;
+  instancePromise:  Promise<MockDuckInstance> | null;
+  initializeInstance: () => Promise<MockDuckInstance>;
+  acquire:          () => Promise<PoolEntry>;
+  release:          (conn: PoolEntry) => void;
+  close:            () => Promise<void>;
+}
+
+/** Entrée dans le tableau pool — connexion avec flag d'utilisation. */
+interface PoolEntry {
+  conn:    MockDuckConnection;
+  inUse:   boolean;
+  all:              (sql: string, params?: unknown[]) => Promise<unknown[]>;
+  getAsJsonArray:   (sql: string, params?: unknown[]) => Promise<unknown[][]>;
+  getWithMetadata:  (sql: string, params?: unknown[]) => Promise<QueryWithMetadata>;
+  exec:             (sql: string) => Promise<void>;
+}
+
+/** Résultat enrichi de getWithMetadata — données + colonnes + métadonnées. */
+interface QueryWithMetadata {
+  columns:  string[];
+  data:     unknown[];
+  metadata: {
+    count:   number;
+    extents: Record<string, [number, number]>;
+  };
+}
+
+/** Module DuckDBPool après import dynamique. */
+interface PoolModule {
+  DuckDBPool: new (config: PoolConfig) => DuckDBPoolInstance;
+}
+
+/** Module @duckdb/node-api après import dynamique. */
+interface DuckDBNodeApiModule {
+  DuckDBInstance: {
+    create: jest.Mock;
+  };
+}
+
+// ─── État des mocks ───────────────────────────────────────────────────────────
+
+// Résultat de requête mocké — utilisé par toutes les méthodes de connexion
+const mockQueryResult: MockQueryResult = {
   getRowObjectsJson: jest.fn().mockResolvedValue([{ id: 1, value: 'test' }]),
   getRowsJson:       jest.fn().mockResolvedValue([[1, 'test']]),
   columnNames:       jest.fn().mockReturnValue(['id', 'value'])
 };
 
-const mockDuckConn = {
+// Connexion DuckDB mockée — simulation de l'objet retourné par instance.connect()
+const mockDuckConn: MockDuckConnection = {
   run:       jest.fn().mockResolvedValue(mockQueryResult),
   prepare:   jest.fn(),
   closeSync: jest.fn()
 };
 
-const mockInstance = {
+// Instance DuckDB mockée — simulation de l'objet retourné par DuckDBInstance.create()
+const mockInstance: MockDuckInstance = {
   connect:   jest.fn().mockResolvedValue(mockDuckConn),
   closeSync: jest.fn()
 };
+
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('@duckdb/node-api', () => ({
   DuckDBInstance: { create: jest.fn().mockResolvedValue(mockInstance) }
@@ -33,29 +140,45 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({ database: jest.fn(), error: jest.fn(), warn: jest.fn() })
 }));
 
-// ─── Dynamic imports ──────────────────────────────────────────────────────────
+// ─── Imports dynamiques ───────────────────────────────────────────────────────
 
-let DuckDBPool;
-let DuckDBInstance;
+let DuckDBPool:     new (config: PoolConfig) => DuckDBPoolInstance;
+let DuckDBInstance: { create: jest.Mock };
 
 beforeAll(async () => {
-  ({ DuckDBPool }      = await import('../../../src/db/pool.js'));
-  ({ DuckDBInstance }  = await import('@duckdb/node-api'));
+  ({ DuckDBPool }      = await import('../../../src/db/pool.js') as unknown as PoolModule);
+  ({ DuckDBInstance }  = await import('@duckdb/node-api') as unknown as DuckDBNodeApiModule);
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const makeCatalogs = () => [
+/**
+ * Build the default catalog list used in most tests.
+ *
+ * Returns:
+ *     Array with a single read-only 'main' catalog.
+ */
+const makeCatalogs = (): CatalogConfig[] => [
   { alias: 'main', path: '/abs/main.ducklake', dataPath: '/abs/data/main/', readOnly: true }
 ];
 
-const makePool = (overrides = {}) => new DuckDBPool({
-  catalogs:       makeCatalogs(),
-  maxConnections: 3,
-  acquireTimeout: 500,
-  retryDelay:     20,
-  ...overrides
-});
+/**
+ * Create a DuckDBPool instance with sensible defaults for testing.
+ *
+ * Args:
+ *     overrides: Partial PoolConfig values to override the defaults.
+ *
+ * Returns:
+ *     A configured DuckDBPool instance ready for testing.
+ */
+const makePool = (overrides: Partial<PoolConfig> = {}): DuckDBPoolInstance =>
+  new DuckDBPool({
+    catalogs:       makeCatalogs(),
+    maxConnections: 3,
+    acquireTimeout: 500,
+    retryDelay:     20,
+    ...overrides
+  });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -70,8 +193,9 @@ describe('DuckDBPool', () => {
     mockQueryResult.getRowObjectsJson.mockResolvedValue([{ id: 1, value: 'test' }]);
     mockQueryResult.getRowsJson.mockResolvedValue([[1, 'test']]);
     mockQueryResult.columnNames.mockReturnValue(['id', 'value']);
+    // Statement préparé par défaut — méthodes de binding et run
     mockDuckConn.prepare.mockImplementation(() =>
-      Promise.resolve({
+      Promise.resolve<MockPreparedStatement>({
         bindNull:    jest.fn(),
         bindVarchar: jest.fn(),
         bindInteger: jest.fn(),
@@ -82,7 +206,7 @@ describe('DuckDBPool', () => {
     );
   });
 
-  // ── Constructor ───────────────────────────────────────────────────────────
+  // ── Constructeur ──────────────────────────────────────────────────────────
 
   describe('Constructor', () => {
     test('sets maxConnections from config', () => {
@@ -105,8 +229,8 @@ describe('DuckDBPool', () => {
     });
 
     test('stores catalogs from config', () => {
-      const catalogs = [
-        { alias: 'a', path: '/a.ducklake', dataPath: '/data_a/', readOnly: true },
+      const catalogs: CatalogConfig[] = [
+        { alias: 'a', path: '/a.ducklake', dataPath: '/data_a/', readOnly: true  },
         { alias: 'b', path: '/b.ducklake', dataPath: '/data_b/', readOnly: false }
       ];
       expect(makePool({ catalogs }).catalogs).toEqual(catalogs);
@@ -119,7 +243,7 @@ describe('DuckDBPool', () => {
     });
   });
 
-  // ── initializeInstance ────────────────────────────────────────────────────
+  // ── Initialisation de l'instance DuckDB ───────────────────────────────────
 
   describe('initializeInstance', () => {
     test('creates an in-memory DuckDB instance', async () => {
@@ -134,20 +258,22 @@ describe('DuckDBPool', () => {
 
     test('attaches each catalog with ATTACH', async () => {
       await makePool().initializeInstance();
-      const attachCalls = mockDuckConn.run.mock.calls.filter(([sql]) => sql.includes('ATTACH'));
+      const attachCalls = mockDuckConn.run.mock.calls.filter(([sql]) => (sql as string).includes('ATTACH'));
       expect(attachCalls).toHaveLength(1);
       expect(attachCalls[0][0]).toContain('"main"');
     });
 
     test('includes DATA_PATH option in ATTACH when dataPath is set', async () => {
       await makePool().initializeInstance();
-      const [attachSql] = mockDuckConn.run.mock.calls.find(([sql]) => sql.includes('ATTACH'));
+      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) => (sql as string).includes('ATTACH'));
+      const [attachSql] = attachCall as [string];
       expect(attachSql).toContain('DATA_PATH');
     });
 
     test('includes READ_ONLY option in ATTACH for read-only catalogs', async () => {
       await makePool().initializeInstance();
-      const [attachSql] = mockDuckConn.run.mock.calls.find(([sql]) => sql.includes('ATTACH'));
+      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) => (sql as string).includes('ATTACH'));
+      const [attachSql] = attachCall as [string];
       expect(attachSql).toContain('READ_ONLY');
     });
 
@@ -173,12 +299,12 @@ describe('DuckDBPool', () => {
 
     test('does not configure S3 when S3.ENABLED is false', async () => {
       await makePool().initializeInstance();
-      const sqlCalls = mockDuckConn.run.mock.calls.map(([sql]) => sql);
+      const sqlCalls = mockDuckConn.run.mock.calls.map(([sql]) => sql as string);
       expect(sqlCalls.some(s => s.includes('httpfs'))).toBe(false);
     });
   });
 
-  // ── acquire ───────────────────────────────────────────────────────────────
+  // ── Acquisition de connexion ──────────────────────────────────────────────
 
   describe('acquire', () => {
     test('creates a new connection when pool is empty', async () => {
@@ -221,7 +347,7 @@ describe('DuckDBPool', () => {
     }, 5000);
   });
 
-  // ── release ───────────────────────────────────────────────────────────────
+  // ── Libération de connexion ───────────────────────────────────────────────
 
   describe('release', () => {
     test('marks connection as no longer in use', async () => {
@@ -241,11 +367,11 @@ describe('DuckDBPool', () => {
     });
 
     test('silently ignores unknown connections', () => {
-      expect(() => makePool().release({ conn: {} })).not.toThrow();
+      expect(() => makePool().release({ conn: {} } as PoolEntry)).not.toThrow();
     });
   });
 
-  // ── close ─────────────────────────────────────────────────────────────────
+  // ── Fermeture du pool ─────────────────────────────────────────────────────
 
   describe('close', () => {
     test('resolves without error when pool is empty', async () => {
@@ -279,11 +405,11 @@ describe('DuckDBPool', () => {
     });
   });
 
-  // ── Connection query methods ──────────────────────────────────────────────
+  // ── Méthodes de requête des connexions ────────────────────────────────────
 
   describe('Connection query methods', () => {
-    let pool;
-    let conn;
+    let pool: DuckDBPoolInstance;
+    let conn: PoolEntry;
 
     beforeEach(async () => {
       pool = makePool();
@@ -302,7 +428,7 @@ describe('DuckDBPool', () => {
       });
 
       test('uses prepared statement for parameterized queries', async () => {
-        const mockPrep = {
+        const mockPrep: MockPreparedStatement = {
           bindVarchar: jest.fn(),
           bindInteger: jest.fn(),
           bindDouble:  jest.fn(),
@@ -371,7 +497,7 @@ describe('DuckDBPool', () => {
       });
 
       test('uses prepared statement for parameterized queries', async () => {
-        const mockPrep = {
+        const mockPrep: Partial<MockPreparedStatement> = {
           bindInteger: jest.fn(),
           run:         jest.fn().mockResolvedValue(mockQueryResult)
         };

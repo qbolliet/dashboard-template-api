@@ -1,15 +1,91 @@
-﻿// Unit tests for InjectableDatabaseManager (tests/database-manager-injectable.js)
-// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+/**
+ * Unit tests for InjectableDatabaseManager (tests/setup/database-manager-injectable.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks DuckDBPool and the fs module to isolate initialization logic.
+ * Covers constructor, pool management, validation, statistics, close,
+ * dependency injection integration, and error handling.
+ */
+
 import { jest } from '@jest/globals';
 
-// ─── Shared mock state ────────────────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
-const fsExists = jest.fn().mockReturnValue(true);
-const fsStat   = jest.fn().mockReturnValue({ size: 1024000, mtime: new Date('2023-01-01') });
+/** Configuration d'un pool mocké — simulation de DuckDBPool. */
+interface MockPool {
+  config:    Record<string, unknown>;
+  available: number;
+  using:     number;
+  waiting:   number;
+  close:     jest.Mock;
+  on:        jest.Mock;
+  acquire:   jest.Mock;
+  release:   jest.Mock;
+}
 
-const makeMockPool = (cfg = {}) => ({
+/** Configuration passée au constructeur DuckDBPool mocké. */
+interface MockPoolConfig {
+  maxConnections?: number;
+  [key: string]:   unknown;
+}
+
+/** Logger mocké — toutes les méthodes de journalisation. */
+interface MockLogger {
+  database: jest.Mock;
+  warn:     jest.Mock;
+  error:    jest.Mock;
+  info:     jest.Mock;
+}
+
+/** Configuration complète d'une base de données individuelle. */
+interface DatabaseEntry {
+  PATH: string;
+  POOL: {
+    MAX_CONNECTIONS:        number;
+    ACQUIRE_TIMEOUT:        number;
+    CONNECTION_RETRY_DELAY: number;
+    CONNECTION_RETRY_MAX:   number;
+  };
+}
+
+/** Configuration complète du routage et des bases de données. */
+interface ManagerConfig {
+  DATABASE_ROUTING: {
+    DEFAULT_DATABASE:             string;
+    ALLOWED_DATABASES:            string[];
+    ALLOW_CROSS_DATABASE_QUERIES: boolean;
+    AUTO_INITIALIZE?:             boolean;
+  };
+  DATABASES: Record<string, DatabaseEntry>;
+}
+
+/** Statistiques de fichier mockées retournées par fs.statSync. */
+interface MockFileStat {
+  size:  number;
+  mtime: Date;
+}
+
+// ─── État partagé des mocks ───────────────────────────────────────────────────
+
+// Simulation des méthodes fs utilisées lors de l'initialisation
+const fsExists: jest.Mock = jest.fn().mockReturnValue(true);
+const fsStat:   jest.Mock = jest.fn().mockReturnValue<MockFileStat>({
+  size:  1024000,
+  mtime: new Date('2023-01-01')
+});
+
+/**
+ * Create a mock DuckDBPool instance from a given configuration.
+ *
+ * Args:
+ *     cfg: Pool configuration to reflect in the mock instance.
+ *
+ * Returns:
+ *     A MockPool object with jest mock methods.
+ */
+const makeMockPool = (cfg: MockPoolConfig = {}): MockPool => ({
   config:    cfg,
-  available: cfg.maxConnections ?? 5,
+  available: cfg.maxConnections as number ?? 5,
   using:     0,
   waiting:   0,
   close:     jest.fn().mockResolvedValue(undefined),
@@ -18,9 +94,12 @@ const makeMockPool = (cfg = {}) => ({
   release:   jest.fn()
 });
 
-const MockDuckDBPool = jest.fn().mockImplementation(cfg => makeMockPool(cfg));
+// Constructeur DuckDBPool mocké — retourne un pool conforme à MockPool
+const MockDuckDBPool: jest.Mock = jest.fn().mockImplementation(
+  (cfg: MockPoolConfig) => makeMockPool(cfg)
+);
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/db/pool.js', () => ({ DuckDBPool: MockDuckDBPool }));
 jest.unstable_mockModule('fs', () => ({
@@ -29,24 +108,40 @@ jest.unstable_mockModule('fs', () => ({
   statSync:   fsStat
 }));
 
-// ─── Dynamic imports ──────────────────────────────────────────────────────────
+// ─── Imports dynamiques ───────────────────────────────────────────────────────
 
-let InjectableDatabaseManager;
-let createTestContainer;
-let DuckDBPool;
+// Types d'import — résolus après enregistrement des mocks
+type InjectableDatabaseManagerConstructor = new (
+  config: ManagerConfig,
+  logger?: Partial<MockLogger>
+) => InstanceType<InjectableDatabaseManagerConstructor>;
+
+let InjectableDatabaseManager: InjectableDatabaseManagerConstructor;
+let createTestContainer:       () => { instance: jest.Mock; register: jest.Mock; get: jest.Mock; mock: jest.Mock };
+let DuckDBPool:                 jest.Mock;
 
 beforeAll(async () => {
-  ({ InjectableDatabaseManager } = await import('../../setup/database-manager-injectable.js'));
-  ({ createTestContainer }       = await import('../../setup/di-container.js'));
-  ({ DuckDBPool }                = await import('../../../src/db/pool.js'));
+  ({ InjectableDatabaseManager } = await import('../../setup/database-manager-injectable.js') as unknown as {
+    InjectableDatabaseManager: InjectableDatabaseManagerConstructor;
+  });
+  ({ createTestContainer } = await import('../../setup/di-container.js') as unknown as {
+    createTestContainer: () => ReturnType<typeof createTestContainer>;
+  });
+  ({ DuckDBPool } = await import('../../../src/db/pool.js') as unknown as { DuckDBPool: jest.Mock });
 });
 
-// ─── Config factory ───────────────────────────────────────────────────────────
+// ─── Fabrique de configuration ────────────────────────────────────────────────
 
-const makeConfig = () => ({
+/**
+ * Build a standard test configuration with three databases.
+ *
+ * Returns:
+ *     A ManagerConfig with main, test, and analytics databases configured.
+ */
+const makeConfig = (): ManagerConfig => ({
   DATABASE_ROUTING: {
-    DEFAULT_DATABASE:            'main',
-    ALLOWED_DATABASES:           ['main', 'test', 'analytics'],
+    DEFAULT_DATABASE:             'main',
+    ALLOWED_DATABASES:            ['main', 'test', 'analytics'],
     ALLOW_CROSS_DATABASE_QUERIES: true
   },
   DATABASES: {
@@ -68,19 +163,24 @@ const makeConfig = () => ({
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('Injectable DatabaseManager', () => {
-  let mockConfig;
-  let mockLogger;
+  let mockConfig: ManagerConfig;
+  let mockLogger: MockLogger;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    MockDuckDBPool.mockImplementation(cfg => makeMockPool(cfg));
+    MockDuckDBPool.mockImplementation((cfg: MockPoolConfig) => makeMockPool(cfg));
     fsExists.mockReturnValue(true);
-    fsStat.mockReturnValue({ size: 1024000, mtime: new Date('2023-01-01') });
+    fsStat.mockReturnValue<MockFileStat>({ size: 1024000, mtime: new Date('2023-01-01') });
     mockConfig = makeConfig();
-    mockLogger = { database: jest.fn(), warn: jest.fn(), error: jest.fn(), info: jest.fn() };
+    mockLogger = {
+      database: jest.fn(),
+      warn:     jest.fn(),
+      error:    jest.fn(),
+      info:     jest.fn()
+    };
   });
 
-  // ── Constructor & initialization ──────────────────────────────────────────
+  // ── Constructeur et initialisation ────────────────────────────────────────
 
   describe('Constructor and Initialization', () => {
     test('should initialize with correct configuration', () => {
@@ -92,7 +192,7 @@ describe('Injectable DatabaseManager', () => {
     });
 
     test('should throw error without required configuration', () => {
-      expect(() => new InjectableDatabaseManager({}, mockLogger))
+      expect(() => new InjectableDatabaseManager({} as ManagerConfig, mockLogger))
         .toThrow('DATABASE_ROUTING configuration is required');
     });
 
@@ -109,7 +209,7 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── Pool management ───────────────────────────────────────────────────────
+  // ── Gestion des pools ─────────────────────────────────────────────────────
 
   describe('Database Pool Management', () => {
     test('should return distinct pool for each database', () => {
@@ -147,7 +247,7 @@ describe('Injectable DatabaseManager', () => {
       expect(dm.isValidDatabase('analytics')).toBe(true);
       expect(dm.isValidDatabase('invalid')).toBe(false);
       expect(dm.isValidDatabase('')).toBe(false);
-      expect(dm.isValidDatabase(null)).toBe(false);
+      expect(dm.isValidDatabase(null as unknown as string)).toBe(false);
     });
 
     test('should validate routing with correct priority', () => {
@@ -164,7 +264,7 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── Statistics ────────────────────────────────────────────────────────────
+  // ── Statistiques ──────────────────────────────────────────────────────────
 
   describe('Database Statistics', () => {
     test('should return stats for every database', () => {
@@ -188,13 +288,13 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── Close ─────────────────────────────────────────────────────────────────
+  // ── Fermeture ─────────────────────────────────────────────────────────────
 
   describe('Database Operations', () => {
     test('should close all database pools', async () => {
       const dm       = new InjectableDatabaseManager(mockConfig, mockLogger);
-      const mainPool = dm.getPool('main');
-      const testPool = dm.getPool('test');
+      const mainPool = dm.getPool('main') as MockPool;
+      const testPool = dm.getPool('test') as MockPool;
 
       await dm.close();
 
@@ -205,7 +305,7 @@ describe('Injectable DatabaseManager', () => {
 
     test('should propagate errors during close', async () => {
       const dm       = new InjectableDatabaseManager(mockConfig, mockLogger);
-      const mainPool = dm.getPool('main');
+      const mainPool = dm.getPool('main') as MockPool;
       mainPool.close.mockRejectedValueOnce(new Error('Close failed'));
 
       await expect(dm.close()).rejects.toThrow('Close failed');
@@ -219,12 +319,12 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── Pool config per database ──────────────────────────────────────────────
+  // ── Configuration par base de données ────────────────────────────────────
 
   describe('Multiple Database Scenarios', () => {
     test('should initialize each database with its specific maxConnections', () => {
       new InjectableDatabaseManager(mockConfig, mockLogger);
-      const maxConns = MockDuckDBPool.mock.calls.map(c => c[0].maxConnections);
+      const maxConns = MockDuckDBPool.mock.calls.map((c: unknown[]) => (c[0] as MockPoolConfig).maxConnections);
       expect(maxConns).toContain(5);
       expect(maxConns).toContain(3);
       expect(maxConns).toContain(10);
@@ -240,7 +340,7 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── DI container integration ──────────────────────────────────────────────
+  // ── Intégration DI ────────────────────────────────────────────────────────
 
   describe('Dependency Injection Integration', () => {
     test('should work with DI container', () => {
@@ -249,7 +349,10 @@ describe('Injectable DatabaseManager', () => {
       container.instance('logger', mockLogger);
       container.register(
         'databaseManager',
-        (cfg, log) => new InjectableDatabaseManager(cfg, log),
+        (cfg: unknown, log: unknown) => new InjectableDatabaseManager(
+          cfg as ManagerConfig,
+          log as Partial<MockLogger>
+        ),
         { dependencies: ['config', 'logger'] }
       );
 
@@ -270,7 +373,7 @@ describe('Injectable DatabaseManager', () => {
     });
   });
 
-  // ── Error handling & edge cases ───────────────────────────────────────────
+  // ── Gestion des erreurs et cas limites ────────────────────────────────────
 
   describe('Error Handling and Edge Cases', () => {
     test('should not throw when database files are missing', () => {
@@ -288,10 +391,10 @@ describe('Injectable DatabaseManager', () => {
     });
 
     test('should throw when DATABASES is empty and default cannot initialize', () => {
-      const invalidConfig = {
+      const invalidConfig: ManagerConfig = {
         DATABASE_ROUTING: {
-          DEFAULT_DATABASE:            'main',
-          ALLOWED_DATABASES:           ['main'],
+          DEFAULT_DATABASE:             'main',
+          ALLOWED_DATABASES:            ['main'],
           ALLOW_CROSS_DATABASE_QUERIES: true
         },
         DATABASES: {}
