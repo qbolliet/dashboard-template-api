@@ -6,7 +6,7 @@ import type { GraphQLContext } from './types.js';
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments de la requête getDimensionTable. */
-interface DimensionTableArgs {
+export interface DimensionTableArgs {
     name: string;
     database?: string | null;
 }

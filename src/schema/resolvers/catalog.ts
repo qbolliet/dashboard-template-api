@@ -7,19 +7,19 @@ import type { CatalogMetadataRow } from '../../loaders/catalog.js';
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments de la requête getDatabaseSchema. */
-interface DatabaseSchemaArgs {
+export interface DatabaseSchemaArgs {
     database: string;
 }
 
 /** Arguments de la requête getSharedDimensions. */
-interface SharedDimensionsArgs {
+export interface SharedDimensionsArgs {
     databases: string[];
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
 /** Entrée du catalogue d'une base de données (schéma + dimensions). */
-interface DatabaseCatalogEntry {
+export interface DatabaseCatalogEntry {
     id: string;
     fields: CatalogMetadataRow[];
     dimensionNames: string[];

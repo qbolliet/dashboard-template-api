@@ -11,7 +11,7 @@ interface DimensionDetail {
 }
 
 /** Objet fait (parent du field resolver dimensionDetails). */
-interface FactParent extends Record<string, unknown> {
+export interface FactParent extends Record<string, unknown> {
     dimensionDetails?: DimensionDetail[];
 }
 

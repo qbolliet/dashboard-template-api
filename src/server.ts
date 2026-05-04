@@ -43,6 +43,7 @@ interface ServerContext {
     getLoadersForDatabase: (databaseId: string | null) => LoadersCollection | null;
     req: Request;
     res: Response;
+    [key: string]: unknown;
 }
 
 /** Erreur Express enrichie avec un code de statut HTTP optionnel. */
