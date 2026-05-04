@@ -1,13 +1,116 @@
-﻿// Unit tests for DatabaseManager (src/db/database-manager.js)
-// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+/**
+ * Unit tests for DatabaseManager (src/db/database-manager.js).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks config-loader, logger, DuckDBPool, and the fs module.
+ * Covers constructor initialization, getPool, isValidDatabase,
+ * getAvailableDatabases, getDefaultDatabase, getSchema,
+ * isCrossDatabaseAllowed, validateDatabaseRouting, getStatistics,
+ * close, and concurrent operations.
+ */
+
 import { jest } from '@jest/globals';
 
-// ─── Shared mutable mock state ───────────────────────────────────────────────
+// ─── Interfaces ───────────────────────────────────────────────────────────────
 
-const mockConfig = {
+/** Configuration d'un catalogue DuckLake individuel. */
+interface CatalogConfig {
+  PATH:      string;
+  DATA_PATH: string;
+  READ_ONLY: boolean;
+  SCHEMA?:   string;
+}
+
+/** Configuration complète du module — reflète la structure de config-loader. */
+interface MockConfig {
   DATABASE_ROUTING: {
-    DEFAULT_DATABASE: 'main',
-    ALLOWED_DATABASES: ['main', 'test', 'analytics'],
+    DEFAULT_DATABASE:             string;
+    ALLOWED_DATABASES:            string[];
+    ALLOW_CROSS_DATABASE_QUERIES: boolean;
+  };
+  CATALOGS: Record<string, CatalogConfig>;
+  DATABASE: {
+    POOL: {
+      MAX_CONNECTIONS:  number;
+      ACQUIRE_TIMEOUT:  number;
+      POOL_RETRY_DELAY: number;
+    };
+  };
+  S3: { ENABLED: boolean };
+}
+
+/** Logger mocké — méthodes utilisées par le DatabaseManager. */
+interface MockLogger {
+  database: jest.Mock;
+  warn:     jest.Mock;
+  error:    jest.Mock;
+  info:     jest.Mock;
+}
+
+/** Pool mocké — simulation du DuckDBPool partagé. */
+interface MockPool {
+  pool:           unknown[];
+  maxConnections: number;
+  catalogs:       unknown[];
+  close:          jest.Mock;
+  acquire:        jest.Mock;
+  release:        jest.Mock;
+}
+
+/** Configuration passée au constructeur DuckDBPool lors de l'initialisation. */
+interface PoolConstructorConfig {
+  maxConnections:  number;
+  acquireTimeout:  number;
+  catalogs:        { alias: string; readOnly?: boolean; dataPath?: string }[];
+  [key: string]:   unknown;
+}
+
+/** Statistiques agrégées retournées par getStatistics(). */
+interface ManagerStatistics {
+  defaultDatabase:  string;
+  allowedDatabases: string[];
+  allowCrossDatabase: boolean;
+  sharedPool:       SharedPoolStats | null;
+}
+
+/** Statistiques du pool partagé — sous-objet de ManagerStatistics. */
+interface SharedPoolStats {
+  available:        number;
+  using:            number;
+  total:            number;
+  maxConnections:   number;
+  attachedCatalogs: string[];
+}
+
+/** Module database-manager.js après import dynamique. */
+interface DatabaseManagerModule {
+  DatabaseManager: new () => DatabaseManagerInstance;
+}
+
+/** Instance de DatabaseManager avec les membres accessibles dans les tests. */
+interface DatabaseManagerInstance {
+  defaultDatabase:          string;
+  allowedDatabases:         string[];
+  allowCrossDatabase:       boolean;
+  sharedPool:               MockPool | null;
+  getPool:                  (catalogId?: string | null) => MockPool;
+  isValidDatabase:          (id: string | null) => boolean;
+  getAvailableDatabases:    () => string[];
+  getDefaultDatabase:       () => string;
+  getSchema:                (catalogId: string) => string;
+  isCrossDatabaseAllowed:   () => boolean;
+  validateDatabaseRouting:  (requested?: string | null, context?: string | null) => string;
+  getStatistics:            () => ManagerStatistics;
+  close:                    () => Promise<void>;
+}
+
+// ─── État partagé des mocks ───────────────────────────────────────────────────
+
+// Configuration mockée — partagée entre tous les tests via référence mutable
+const mockConfig: MockConfig = {
+  DATABASE_ROUTING: {
+    DEFAULT_DATABASE:             'main',
+    ALLOWED_DATABASES:            ['main', 'test', 'analytics'],
     ALLOW_CROSS_DATABASE_QUERIES: true
   },
   CATALOGS: {
@@ -21,17 +124,27 @@ const mockConfig = {
   S3: { ENABLED: false }
 };
 
-const mockLogger = {
+const mockLogger: MockLogger = {
   database: jest.fn(),
   warn:     jest.fn(),
   error:    jest.fn(),
   info:     jest.fn()
 };
 
-const fsExists = jest.fn().mockReturnValue(true);
-const fsStat   = jest.fn().mockReturnValue({ size: 1024, mtime: new Date() });
+// Simulation des méthodes fs — vérification de l'existence des fichiers
+const fsExists: jest.Mock = jest.fn().mockReturnValue(true);
+const fsStat:   jest.Mock = jest.fn().mockReturnValue({ size: 1024, mtime: new Date() });
 
-const makeMockPool = (cfg = {}) => ({
+/**
+ * Create a mock DuckDBPool instance reflecting the given configuration.
+ *
+ * Args:
+ *     cfg: Pool constructor configuration.
+ *
+ * Returns:
+ *     A MockPool with jest mock methods.
+ */
+const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig): MockPool => ({
   pool:           [],
   maxConnections: cfg.maxConnections ?? 5,
   catalogs:       cfg.catalogs ?? [],
@@ -40,9 +153,12 @@ const makeMockPool = (cfg = {}) => ({
   release:        jest.fn()
 });
 
-const MockDuckDBPool = jest.fn().mockImplementation(cfg => makeMockPool(cfg));
+// Constructeur DuckDBPool mocké — retourne un pool par appel
+const MockDuckDBPool: jest.Mock = jest.fn().mockImplementation(
+  (cfg: PoolConstructorConfig) => makeMockPool(cfg)
+);
 
-// ─── Mock registration (must precede any dynamic import) ─────────────────────
+// ─── Enregistrement des mocks (avant tout import dynamique) ──────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
@@ -55,28 +171,28 @@ jest.unstable_mockModule('fs', () => ({
   statSync:   fsStat
 }));
 
-// ─── Dynamic import ───────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let DatabaseManager;
+let DatabaseManager: new () => DatabaseManagerInstance;
 
 beforeAll(async () => {
-  ({ DatabaseManager } = await import('../../../src/db/database-manager.js'));
+  ({ DatabaseManager } = await import('../../../src/db/database-manager.js') as unknown as DatabaseManagerModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('DatabaseManager', () => {
-  let manager;
+  let manager: DatabaseManagerInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    MockDuckDBPool.mockImplementation(cfg => makeMockPool(cfg));
+    MockDuckDBPool.mockImplementation((cfg: PoolConstructorConfig) => makeMockPool(cfg));
     fsExists.mockReturnValue(true);
     fsStat.mockReturnValue({ size: 1024, mtime: new Date() });
     manager = new DatabaseManager();
   });
 
-  // ── Constructor & initialization ──────────────────────────────────────────
+  // ── Constructeur et initialisation ────────────────────────────────────────
 
   describe('Constructor and initialization', () => {
     test('reads defaultDatabase from config', () => {
@@ -93,24 +209,25 @@ describe('DatabaseManager', () => {
 
     test('creates a single shared DuckDBPool containing all catalog aliases', () => {
       expect(MockDuckDBPool).toHaveBeenCalledTimes(1);
-      const [poolCfg] = MockDuckDBPool.mock.calls[0];
-      const aliases = poolCfg.catalogs.map(c => c.alias);
+      const [poolCfg] = MockDuckDBPool.mock.calls[0] as [PoolConstructorConfig];
+      const aliases   = poolCfg.catalogs.map(c => c.alias);
       expect(aliases).toContain('main');
       expect(aliases).toContain('test');
       expect(aliases).toContain('analytics');
     });
 
     test('passes correct pool settings to DuckDBPool', () => {
-      const [poolCfg] = MockDuckDBPool.mock.calls[0];
+      const [poolCfg] = MockDuckDBPool.mock.calls[0] as [PoolConstructorConfig];
       expect(poolCfg.maxConnections).toBe(5);
       expect(poolCfg.acquireTimeout).toBe(5000);
     });
 
     test('catalogs include readOnly and dataPath', () => {
-      const [poolCfg] = MockDuckDBPool.mock.calls[0];
-      const main = poolCfg.catalogs.find(c => c.alias === 'main');
-      expect(main.readOnly).toBe(true);
-      expect(main.dataPath).toMatch(/\/$/); // dataPath must end with /
+      const [poolCfg] = MockDuckDBPool.mock.calls[0] as [PoolConstructorConfig];
+      const main      = poolCfg.catalogs.find(c => c.alias === 'main');
+      expect(main!.readOnly).toBe(true);
+      // dataPath doit se terminer par un séparateur de répertoire
+      expect(main!.dataPath).toMatch(/\/$/);
     });
 
     test('logs a warning when a catalog file is missing', () => {
@@ -150,7 +267,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── getPool ───────────────────────────────────────────────────────────────
+  // ── Récupération du pool ──────────────────────────────────────────────────
 
   describe('getPool', () => {
     test('returns the shared pool when no catalogId is specified', () => {
@@ -173,7 +290,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── isValidDatabase ───────────────────────────────────────────────────────
+  // ── Validation de base de données ─────────────────────────────────────────
 
   describe('isValidDatabase', () => {
     test('returns true for each configured catalog', () => {
@@ -195,7 +312,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── getAvailableDatabases ─────────────────────────────────────────────────
+  // ── Liste des bases disponibles ───────────────────────────────────────────
 
   describe('getAvailableDatabases', () => {
     test('returns all allowed catalog IDs', () => {
@@ -209,7 +326,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── getDefaultDatabase ────────────────────────────────────────────────────
+  // ── Base de données par défaut ────────────────────────────────────────────
 
   describe('getDefaultDatabase', () => {
     test('returns the configured default catalog', () => {
@@ -217,7 +334,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── getSchema ─────────────────────────────────────────────────────────────
+  // ── Schéma d'un catalogue ─────────────────────────────────────────────────
 
   describe('getSchema', () => {
     test('returns "main" when no SCHEMA is configured for a catalog', () => {
@@ -239,7 +356,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── isCrossDatabaseAllowed ────────────────────────────────────────────────
+  // ── Requêtes cross-database ───────────────────────────────────────────────
 
   describe('isCrossDatabaseAllowed', () => {
     test('returns the configured ALLOW_CROSS_DATABASE_QUERIES value', () => {
@@ -247,7 +364,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── validateDatabaseRouting ───────────────────────────────────────────────
+  // ── Routage des requêtes ──────────────────────────────────────────────────
 
   describe('validateDatabaseRouting', () => {
     test('returns requested catalog when valid', () => {
@@ -277,7 +394,7 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── getStatistics ─────────────────────────────────────────────────────────
+  // ── Statistiques ──────────────────────────────────────────────────────────
 
   describe('getStatistics', () => {
     test('returns routing configuration fields', () => {
@@ -290,7 +407,7 @@ describe('DatabaseManager', () => {
     test('returns pool stats with attachedCatalogs', () => {
       const { sharedPool } = manager.getStatistics();
       expect(sharedPool).toBeDefined();
-      expect(sharedPool.attachedCatalogs).toEqual(
+      expect(sharedPool!.attachedCatalogs).toEqual(
         expect.arrayContaining(['main', 'test', 'analytics'])
       );
     });
@@ -309,11 +426,11 @@ describe('DatabaseManager', () => {
     });
   });
 
-  // ── close ─────────────────────────────────────────────────────────────────
+  // ── Fermeture ─────────────────────────────────────────────────────────────
 
   describe('close', () => {
     test('delegates to pool.close()', async () => {
-      const pool = manager.sharedPool;
+      const pool = manager.sharedPool!;
       await manager.close();
       expect(pool.close).toHaveBeenCalledTimes(1);
     });
@@ -324,7 +441,7 @@ describe('DatabaseManager', () => {
     });
 
     test('propagates pool close errors', async () => {
-      manager.sharedPool.close.mockRejectedValueOnce(new Error('Pool close failed'));
+      manager.sharedPool!.close.mockRejectedValueOnce(new Error('Pool close failed'));
       await expect(manager.close()).rejects.toThrow('Pool close failed');
     });
 
@@ -335,14 +452,14 @@ describe('DatabaseManager', () => {
   });
 });
 
-// ── Concurrent operations ─────────────────────────────────────────────────────
+// ── Opérations concurrentes ───────────────────────────────────────────────────
 
 describe('DatabaseManager — concurrent operations', () => {
-  let manager;
+  let manager: DatabaseManagerInstance;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    MockDuckDBPool.mockImplementation(cfg => makeMockPool(cfg));
+    MockDuckDBPool.mockImplementation((cfg: PoolConstructorConfig) => makeMockPool(cfg));
     fsExists.mockReturnValue(true);
     fsStat.mockReturnValue({ size: 1024, mtime: new Date() });
     manager = new DatabaseManager();
