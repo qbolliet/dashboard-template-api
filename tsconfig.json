@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    // Cible et format de modules
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    // Répertoires
+    "outDir": "./dist",
+    "rootDir": "./src",
+
+    // Interopérabilité
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+
+    // Génération des fichiers de sortie
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    // Mode non-strict pour une coexistence entre Javascript et Typescript
+    // Pour activer le mode strict après conversion complète, décommenter les options suivantes :
+    // "strict": true,                       // active tous les contrôles stricts ci-dessous
+    // "strictNullChecks": true,             // null/undefined doivent être déclarés explicitement
+    // "strictFunctionTypes": true,          // variance des paramètres de fonctions
+    // "strictBindCallApply": true,          // typage de bind/call/apply
+    // "strictPropertyInitialization": true, // propriétés de classe initialisées dans le constructeur
+    // "noImplicitAny": true,                // interdit le type any implicite
+    // "noImplicitThis": true,               // interdit this implicite
+    // "alwaysStrict": true,                 // active le mode strict JS dans les fichiers émis
+    // "noUncheckedIndexedAccess": true,     // accès aux tableaux/objets indexés retourne T | undefined
+    // "exactOptionalPropertyTypes": true,  // propriétés optionnelles ne peuvent pas être undefined explicitement
+
+    // Mode strict complet
+    "strict": true,
+
+    // Compatibilité et qualité
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Paramètres permettant une coexistence entre Javascript et Typescipt
+    // "allowJs": true,   // accepte les fichiers .js non encore convertis
+    // "checkJs": false   // ne vérifie pas les types dans les fichiers .js
+    "allowJs": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
+}
