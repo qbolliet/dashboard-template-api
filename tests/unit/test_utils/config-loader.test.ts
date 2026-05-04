@@ -1,10 +1,45 @@
-﻿// Unit tests for ConfigLoader (src/utils/config-loader.js)
-// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+/**
+ * Unit tests for ConfigLoader (src/utils/config-loader.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks the fs and yaml modules to avoid disk I/O.
+ * Covers module load, mergeDeep, resolveEnvVariables, applyEnvironmentSpecific,
+ * convertNumericValues, validateEnvironment, validateRequiredFields, and get.
+ */
+
 import { jest } from '@jest/globals';
 
-// ─── Minimal valid config (passes all validations) ────────────────────────────
+// ─── Interfaces ────────────────────────────────────────────────────────────────
 
-const validConfig = {
+/** Configuration minimale valide — satisfait toutes les validations requises. */
+interface ValidConfig {
+  ENVIRONMENT: string;
+  API:  { PORT: number; TIMEOUTS: { CACHE_DEFAULT: number } };
+  DATABASE_ROUTING: {
+    DEFAULT_DATABASE:  string;
+    ALLOWED_DATABASES: string[];
+  };
+  DATABASE: { POOL: { MAX_CONNECTIONS: number } };
+  SECURITY: { RATE_LIMIT: { MAX_REQUESTS: number } };
+  CATALOGS: Record<string, unknown>;
+}
+
+/** Interface publique de l'instance ConfigLoader exposée par le module. */
+interface ConfigLoaderInstance {
+  config: Record<string, unknown> | null;
+  loadConfig:                () => Record<string, unknown>;
+  mergeDeep:                 (target: Record<string, unknown>, source: Record<string, unknown>) => Record<string, unknown>;
+  resolveEnvVariables:       (value: unknown) => unknown;
+  applyEnvironmentSpecific:  (cfg: Record<string, unknown>) => Record<string, unknown>;
+  convertNumericValues:      (value: unknown) => unknown;
+  validateEnvironment:       (cfg: Record<string, unknown>) => void;
+  validateRequiredFields:    (cfg: Record<string, unknown>) => void;
+  get:                       (path: string, defaultValue?: unknown) => unknown;
+}
+
+// ─── Configuration valide minimale ────────────────────────────────────────────
+
+const validConfig: ValidConfig = {
   ENVIRONMENT: 'development',
   API:  { PORT: 4000, TIMEOUTS: { CACHE_DEFAULT: 300 } },
   DATABASE_ROUTING: {
@@ -16,17 +51,17 @@ const validConfig = {
   CATALOGS: { main: {} },
 };
 
-// ─── Mutable mock fns ─────────────────────────────────────────────────────────
+// ─── Fonctions mock mutables ──────────────────────────────────────────────────
 
 const mockFsExistsSync  = jest.fn().mockReturnValue(true);
 const mockFsReadFile    = jest.fn().mockReturnValue('mocked: yaml');
 const mockYamlParse     = jest.fn().mockReturnValue(validConfig);
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('fs', () => ({
-  default:    { existsSync: mockFsExistsSync, readFileSync: mockFsReadFile },
-  existsSync: mockFsExistsSync,
+  default:      { existsSync: mockFsExistsSync, readFileSync: mockFsReadFile },
+  existsSync:   mockFsExistsSync,
   readFileSync: mockFsReadFile,
 }));
 
@@ -35,15 +70,20 @@ jest.unstable_mockModule('yaml', () => ({
   parse:   mockYamlParse,
 }));
 
-// ─── Dynamic import ───────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let configLoader, config;
+// Assertion d'assignation définitive — assignés dans beforeAll avant tout test.
+let configLoader!: ConfigLoaderInstance;
+let config!: ValidConfig;
 
 beforeAll(async () => {
-  ({ configLoader, config } = await import('../../../src/utils/config-loader.js'));
+  ({ configLoader, config } = await import('../../../src/utils/config-loader.js') as {
+    configLoader: ConfigLoaderInstance;
+    config: ValidConfig;
+  });
 });
 
-// ─── Module-level load ────────────────────────────────────────────────────────
+// ─── Chargement du module ─────────────────────────────────────────────────────
 
 describe('ConfigLoader – module load', () => {
   test('exports a loaded config object', () => {
@@ -64,6 +104,7 @@ describe('ConfigLoader – module load', () => {
   });
 
   test('loadConfig returns the same object on repeated calls (cached)', () => {
+    // Mise en cache interne — deux appels successifs retournent la même référence.
     const first  = configLoader.loadConfig();
     const second = configLoader.loadConfig();
     expect(first).toBe(second);
@@ -84,6 +125,7 @@ describe('ConfigLoader – mergeDeep', () => {
   });
 
   test('replaces arrays instead of merging them', () => {
+    // Remplacement des tableaux — pas de concaténation, la source écrase la cible.
     const target = { items: [1, 2, 3] };
     const source = { items: [4, 5] };
     expect(configLoader.mergeDeep(target, source).items).toEqual([4, 5]);
@@ -105,6 +147,7 @@ describe('ConfigLoader – mergeDeep', () => {
   });
 
   test('does not mutate the target object', () => {
+    // Immutabilité — la cible ne doit pas être modifiée en place.
     const target = { a: { b: 1 } };
     const source = { a: { c: 2 } };
     const originalTarget = JSON.parse(JSON.stringify(target));
@@ -123,14 +166,17 @@ describe('ConfigLoader – resolveEnvVariables', () => {
   });
 
   test('uses default value when env var is not set', () => {
+    // Valeur par défaut — utilisée quand la variable d'environnement est absente.
     expect(configLoader.resolveEnvVariables('${CL_UNDEF_VAR:-my_default}')).toBe('my_default');
   });
 
   test('keeps the placeholder when no env var and no default', () => {
+    // Conservation du placeholder — pas de substitution si aucune valeur disponible.
     expect(configLoader.resolveEnvVariables('${CL_NO_DEFAULT}')).toBe('${CL_NO_DEFAULT}');
   });
 
   test('substitutes multiple variables in a string', () => {
+    // Substitutions multiples — plusieurs variables dans une même chaîne.
     process.env.CL_HOST = 'localhost';
     process.env.CL_PORT = '5432';
     const result = configLoader.resolveEnvVariables('${CL_HOST}:${CL_PORT}');
@@ -143,7 +189,7 @@ describe('ConfigLoader – resolveEnvVariables', () => {
     process.env.CL_DB_HOST = 'db.example.com';
     const result = configLoader.resolveEnvVariables({
       database: { host: '${CL_DB_HOST}', port: '${CL_DB_PORT:-5432}' },
-    });
+    }) as { database: { host: string; port: string } };
     expect(result.database.host).toBe('db.example.com');
     expect(result.database.port).toBe('5432');
     delete process.env.CL_DB_HOST;
@@ -157,6 +203,7 @@ describe('ConfigLoader – resolveEnvVariables', () => {
   });
 
   test('passes non-string primitives through unchanged', () => {
+    // Primitives non-string — retournées telles quelles sans transformation.
     expect(configLoader.resolveEnvVariables(42)).toBe(42);
     expect(configLoader.resolveEnvVariables(true)).toBe(true);
     expect(configLoader.resolveEnvVariables(null)).toBe(null);
@@ -191,6 +238,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
   });
 
   test('falls back to development when env value is missing', () => {
+    // Repli sur "development" — environnement inconnu (ex. "staging") traité comme dev.
     const cfg = {
       ENVIRONMENT: 'staging',
       feature: {
@@ -203,6 +251,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
   });
 
   test('merges common with env-specific arrays', () => {
+    // Fusion des tableaux "common" et de l'environnement spécifique.
     const cfg = {
       ENVIRONMENT: 'production',
       patterns: {
@@ -212,7 +261,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       },
     };
     const result = configLoader.applyEnvironmentSpecific(cfg);
-    expect(result.patterns.list).toEqual(['a', 'b', 'c']);
+    expect((result.patterns as { list: string[] }).list).toEqual(['a', 'b', 'c']);
   });
 
   test('applies recursively to nested objects', () => {
@@ -226,10 +275,11 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       },
     };
     const result = configLoader.applyEnvironmentSpecific(cfg);
-    expect(result.top.nested).toEqual({ flag: 'yes' });
+    expect((result.top as { nested: unknown }).nested).toEqual({ flag: 'yes' });
   });
 
   test('returns non-object values unchanged', () => {
+    // Primitives — retournées sans transformation par la résolution d'environnement.
     const cfg = {
       ENVIRONMENT: 'development',
       count: 42,
@@ -245,7 +295,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
 
 describe('ConfigLoader – convertNumericValues', () => {
   test('converts integer strings to numbers', () => {
-    const result = configLoader.convertNumericValues({ port: '3000', timeout: '5000' });
+    const result = configLoader.convertNumericValues({ port: '3000', timeout: '5000' }) as Record<string, unknown>;
     expect(result.port).toBe(3000);
     expect(result.timeout).toBe(5000);
   });
@@ -255,23 +305,24 @@ describe('ConfigLoader – convertNumericValues', () => {
   });
 
   test('converts float strings to numbers', () => {
-    const result = configLoader.convertNumericValues({ ratio: '3.14', pct: '99.9' });
+    const result = configLoader.convertNumericValues({ ratio: '3.14', pct: '99.9' }) as Record<string, unknown>;
     expect(result.ratio).toBe(3.14);
     expect(result.pct).toBe(99.9);
   });
 
   test('converts "true" and "false" strings to booleans', () => {
-    const result = configLoader.convertNumericValues({ on: 'true', off: 'false' });
+    const result = configLoader.convertNumericValues({ on: 'true', off: 'false' }) as Record<string, unknown>;
     expect(result.on).toBe(true);
     expect(result.off).toBe(false);
   });
 
   test('preserves non-numeric strings', () => {
+    // Conservation des chaînes non numériques — pas de conversion parasite.
     const result = configLoader.convertNumericValues({
-      name: 'service',
-      ip:   '192.168.1.1',
+      name:  'service',
+      ip:    '192.168.1.1',
       mixed: '123abc',
-    });
+    }) as Record<string, unknown>;
     expect(result.name).toBe('service');
     expect(result.ip).toBe('192.168.1.1');
     expect(result.mixed).toBe('123abc');
@@ -280,18 +331,19 @@ describe('ConfigLoader – convertNumericValues', () => {
   test('handles nested objects', () => {
     const result = configLoader.convertNumericValues({
       db: { port: '5432', connections: '10' },
-    });
+    }) as { db: Record<string, unknown> };
     expect(result.db.port).toBe(5432);
     expect(result.db.connections).toBe(10);
   });
 
   test('handles arrays', () => {
-    const result = configLoader.convertNumericValues({ ids: ['1', '2', 'abc'] });
+    const result = configLoader.convertNumericValues({ ids: ['1', '2', 'abc'] }) as { ids: unknown[] };
     expect(result.ids).toEqual([1, 2, 'abc']);
   });
 
   test('preserves actual numbers and booleans unchanged', () => {
-    const result = configLoader.convertNumericValues({ port: 4000, flag: true });
+    // Valeurs déjà typées — pas de double conversion.
+    const result = configLoader.convertNumericValues({ port: 4000, flag: true }) as Record<string, unknown>;
     expect(result.port).toBe(4000);
     expect(result.flag).toBe(true);
   });
@@ -326,7 +378,8 @@ describe('ConfigLoader – validateEnvironment', () => {
 // ─── validateRequiredFields ───────────────────────────────────────────────────
 
 describe('ConfigLoader – validateRequiredFields', () => {
-  const base = {
+  // Configuration de base complète — sert de référence pour les tests de champs manquants.
+  const base: Record<string, unknown> = {
     API: { PORT: 4000 },
     DATABASE_ROUTING: { DEFAULT_DATABASE: 'main', ALLOWED_DATABASES: ['main'] },
     DATABASE: { POOL: { MAX_CONNECTIONS: 5 } },
@@ -375,7 +428,7 @@ describe('ConfigLoader – validateRequiredFields', () => {
   });
 
   test('throws when CATALOGS is missing', () => {
-    const { CATALOGS, ...rest } = base;
+    const { CATALOGS: _removed, ...rest } = base;
     expect(() => configLoader.validateRequiredFields(rest)).toThrow('No catalogs configured');
   });
 });
@@ -383,7 +436,7 @@ describe('ConfigLoader – validateRequiredFields', () => {
 // ─── get ──────────────────────────────────────────────────────────────────────
 
 describe('ConfigLoader – get', () => {
-  let savedConfig;
+  let savedConfig: Record<string, unknown> | null;
 
   beforeAll(() => {
     savedConfig = configLoader.config;
@@ -409,6 +462,7 @@ describe('ConfigLoader – get', () => {
   });
 
   test('retrieves a nested value via dot notation', () => {
+    // Notation pointée — accès aux valeurs imbriquées via des chemins segmentés.
     expect(configLoader.get('database.host')).toBe('localhost');
     expect(configLoader.get('database.ssl.enabled')).toBe(true);
   });
@@ -423,16 +477,17 @@ describe('ConfigLoader – get', () => {
   });
 
   test('returns 0 and false values (not treated as missing)', () => {
+    // Valeurs falsy — 0 et false ne doivent pas déclencher le retour de la valeur par défaut.
     configLoader.config = { num: 0, flag: false };
     expect(configLoader.get('num')).toBe(0);
     expect(configLoader.get('flag')).toBe(false);
   });
 });
 
-// ─── loadConfig – cache reset ─────────────────────────────────────────────────
+// ─── loadConfig — réinitialisation du cache ───────────────────────────────────
 
 describe('ConfigLoader – loadConfig cache reset', () => {
-  let savedConfig;
+  let savedConfig: Record<string, unknown> | null;
 
   beforeAll(() => {
     savedConfig = configLoader.config;
@@ -443,10 +498,11 @@ describe('ConfigLoader – loadConfig cache reset', () => {
   });
 
   test('re-loads when config is nulled manually', () => {
+    // Réinitialisation manuelle — la mise à null force un rechargement depuis les fichiers.
     configLoader.config = null;
     const reloaded = configLoader.loadConfig();
     expect(reloaded).toBeDefined();
-    expect(reloaded.DATABASE_ROUTING).toBeDefined();
+    expect((reloaded as ValidConfig).DATABASE_ROUTING).toBeDefined();
   });
 
   test('result of re-load is then cached again', () => {

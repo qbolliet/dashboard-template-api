@@ -1,17 +1,65 @@
-﻿// Unit tests for logger and createContextLogger (src/utils/logger.js)
-// Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+/**
+ * Unit tests for logger and createContextLogger (src/utils/logger.ts).
+ *
+ * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
+ * Mocks winston and winston-daily-rotate-file to avoid file-system side-effects.
+ * Verifies logger export and contextual log methods routing and metadata merging.
+ */
+
 import { jest } from '@jest/globals';
 
-// ─── Shared mutable mock state ────────────────────────────────────────────────
+// ─── Interfaces ────────────────────────────────────────────────────────────────
 
-const mockWinstonLogger = {
+/** Interface du logger Winston mocké exposant les quatre niveaux de log. */
+interface MockWinstonLogger {
+  info:  jest.Mock;
+  debug: jest.Mock;
+  warn:  jest.Mock;
+  error: jest.Mock;
+}
+
+/** Forme minimale de la configuration requise par le module logger. */
+interface MockConfig {
+  ENVIRONMENT: string;
+  LOGGING: {
+    LEVEL:  string;
+    FORMAT: string;
+    TRANSPORTS: {
+      console: { enabled: boolean };
+      file:    { enabled: boolean; directory: string; filename: string; datePattern: string; maxSize: string; maxFiles: string; compress: boolean };
+      error:   { enabled: boolean; directory: string; filename: string };
+    };
+    SAMPLING:     { enabled: boolean; rate: number };
+    SANITIZATION: { fields: string[] };
+    PERFORMANCE:  { SLOW_QUERY_THRESHOLD: number };
+  };
+}
+
+/** Objet de format Winston retourné par les helpers de format mockés. */
+interface MockFormatObj {
+  transform: jest.Mock;
+}
+
+/** Fabrique de format Winston — callable et dotée de méthodes nommées. */
+interface MockFormatCreator {
+  (): () => MockFormatObj;
+  timestamp: jest.Mock;
+  errors:    jest.Mock;
+  printf:    jest.Mock;
+  combine:   jest.Mock;
+  simple:    jest.Mock;
+}
+
+// ─── État mutable des mocks ───────────────────────────────────────────────────
+
+const mockWinstonLogger: MockWinstonLogger = {
   info:  jest.fn(),
   debug: jest.fn(),
   warn:  jest.fn(),
   error: jest.fn(),
 };
 
-const mockConfig = {
+const mockConfig: MockConfig = {
   ENVIRONMENT: 'development',
   LOGGING: {
     LEVEL:  'info',
@@ -27,18 +75,18 @@ const mockConfig = {
   },
 };
 
-// ─── Winston format mock ──────────────────────────────────────────────────────
-// winston.format is both callable (format(fn)()) and has named properties
+// ─── Mock du format Winston ───────────────────────────────────────────────────
+// winston.format est à la fois callable (format(fn)()) et porteur de méthodes nommées.
 
-const mockFormatObj = { transform: jest.fn() };
-const mockFormatCreator = jest.fn().mockReturnValue(() => mockFormatObj);
+const mockFormatObj: MockFormatObj = { transform: jest.fn() };
+const mockFormatCreator = jest.fn().mockReturnValue(() => mockFormatObj) as unknown as MockFormatCreator;
 mockFormatCreator.timestamp = jest.fn().mockReturnValue(mockFormatObj);
 mockFormatCreator.errors    = jest.fn().mockReturnValue(mockFormatObj);
 mockFormatCreator.printf    = jest.fn().mockReturnValue(mockFormatObj);
 mockFormatCreator.combine   = jest.fn().mockReturnValue(mockFormatObj);
 mockFormatCreator.simple    = jest.fn().mockReturnValue(mockFormatObj);
 
-// ─── Mock registration ────────────────────────────────────────────────────────
+// ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
@@ -56,12 +104,17 @@ jest.unstable_mockModule('winston-daily-rotate-file', () => ({
   default: jest.fn().mockImplementation(() => ({})),
 }));
 
-// ─── Dynamic import ───────────────────────────────────────────────────────────
+// ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let logger, createContextLogger;
+// Assertion d'assignation définitive — assignés dans beforeAll avant tout test.
+let logger!: MockWinstonLogger;
+let createContextLogger!: (context: Record<string, unknown>) => Record<string, (...args: unknown[]) => void>;
 
 beforeAll(async () => {
-  ({ logger, createContextLogger } = await import('../../../src/utils/logger.js'));
+  ({ logger, createContextLogger } = await import('../../../src/utils/logger.js') as {
+    logger: MockWinstonLogger;
+    createContextLogger: (context: Record<string, unknown>) => Record<string, (...args: unknown[]) => void>;
+  });
 });
 
 beforeEach(() => {
@@ -117,6 +170,7 @@ describe('createContextLogger', () => {
   });
 
   test('performance() calls logger.info with performance tag and metrics', () => {
+    // Métriques de performance — transmises dans un objet "metrics" dédié.
     const ctx = createContextLogger({});
     ctx.performance('slow query', { duration: 2000 });
     expect(mockWinstonLogger.info).toHaveBeenCalledWith(
@@ -147,6 +201,7 @@ describe('createContextLogger', () => {
   });
 
   test('error() calls logger.error with error tag and error object', () => {
+    // Propagation de l'objet erreur — accessible via la clé "error" du contexte de log.
     const ctx = createContextLogger({});
     const err = new Error('boom');
     ctx.error('something failed', err);
@@ -160,6 +215,7 @@ describe('createContextLogger', () => {
   });
 
   test('merges base context into every log call', () => {
+    // Fusion du contexte de base — chaque appel de log hérite des métadonnées initiales.
     const base = { requestId: 'req-abc', operationName: 'getUsers' };
     const ctx = createContextLogger(base);
     ctx.operation('some op');
@@ -179,6 +235,7 @@ describe('createContextLogger', () => {
   });
 
   test('each createContextLogger call is independent', () => {
+    // Isolation des contextes — deux loggers créés séparément ne partagent pas d'état.
     const ctx1 = createContextLogger({ requestId: 'r1' });
     const ctx2 = createContextLogger({ requestId: 'r2' });
     ctx1.operation('msg1');
