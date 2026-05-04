@@ -108,6 +108,34 @@ interface SecurityThresholdsConfig {
     QUERY_SNIPPET_LENGTH: number;
 }
 
+/** Configuration CORS de l'API. */
+interface CorsConfig {
+    CREDENTIALS: boolean;
+    METHODS: string[];
+    HEADERS: string[];
+    ORIGINS: string[];
+}
+
+/** Limites de taille des requêtes entrantes. */
+interface RequestLimitsConfig {
+    MAX_REQUEST_SIZE: string;
+    MAX_FIELD_SIZE: number;
+    MAX_FIELDS: number;
+}
+
+/** Configuration de la compression des réponses HTTP. */
+interface CompressionConfig {
+    ENABLED: boolean;
+    THRESHOLD: number;
+    LEVEL: number;
+}
+
+/** Configuration GraphQL (introspection et playground). */
+interface GraphqlConfig {
+    INTROSPECTION: boolean;
+    PLAYGROUND: boolean;
+}
+
 /** Configuration des DataLoaders (taille de batch et timeouts de cache). */
 interface LoadersConfig {
     BATCH_SIZE: number;
@@ -202,6 +230,11 @@ interface AppConfig {
     ENVIRONMENT: string;
     API: {
         PORT: number;
+        DOMAIN?: string;
+        CORS: CorsConfig;
+        REQUEST_LIMITS: RequestLimitsConfig;
+        GRAPHQL: GraphqlConfig;
+        COMPRESSION: CompressionConfig;
         TIMEOUTS: {
             FACT_SIMPLE: number;
             FACT_COMPLEX: number;
@@ -632,5 +665,9 @@ export type {
     RateLimitConfig,
     ComplexityConfig,
     SanitizationConfig,
-    SecurityMonitoringConfig
+    SecurityMonitoringConfig,
+    CorsConfig,
+    RequestLimitsConfig,
+    CompressionConfig,
+    GraphqlConfig
 };
