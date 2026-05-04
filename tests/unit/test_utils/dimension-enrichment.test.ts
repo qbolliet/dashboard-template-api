@@ -1,18 +1,65 @@
-﻿// Unit tests for dimension enrichment utilities (src/utils/dimension-enrichment.js)
+/**
+ * Unit tests for dimension enrichment utilities (src/utils/dimension-enrichment.ts).
+ *
+ * Covers enrichFactsWithDimensions (field-level enrichment) and
+ * enrichAggregatedFactsWithLabels (group-by key label resolution),
+ * including categorical/non-categorical branching and deduplication.
+ */
+
+// Importation directe — pas de module à mocker, les loaders sont des faux objets.
 import { jest } from '@jest/globals';
 import {
   enrichFactsWithDimensions,
   enrichAggregatedFactsWithLabels,
 } from '../../../src/utils/dimension-enrichment.js';
 
-// ─── Mock loader factory ───────────────────────────────────────────────────────
+// ─── Interfaces ────────────────────────────────────────────────────────────────
 
-const makeMockLoaders = ({ metadataMap = {}, dimensionValueMap = {} } = {}) => ({
+/** Métadonnée de champ indiquant si la dimension est catégorielle. */
+interface FieldMetadata {
+  is_categorical: boolean;
+}
+
+/** Détail d'une valeur de dimension enrichie. */
+interface DimensionDetail {
+  name: string;
+  value: string;
+  label: string;
+}
+
+/** Options de configuration de la fabrique de mocks. */
+interface MockLoadersOptions {
+  metadataMap?: Record<string, FieldMetadata | null>;
+  dimensionValueMap?: Record<string, DimensionDetail | null>;
+}
+
+/** Loaders mockés exposant les mêmes méthodes que les loaders de production. */
+interface MockLoaders {
+  metadata: { load: jest.Mock };
+  dimensionValue: { load: jest.Mock };
+}
+
+// ─── Fabrique de mocks ─────────────────────────────────────────────────────────
+
+/**
+ * Create a set of mock data loaders for dimension enrichment tests.
+ *
+ * Args:
+ *     options: Optional maps controlling what each loader returns.
+ *         metadataMap: Keyed by field name, value is FieldMetadata or null.
+ *         dimensionValueMap: Keyed by "dimensionName:value", value is DimensionDetail or null.
+ *
+ * Returns:
+ *     MockLoaders object with jest.fn() for each load method.
+ */
+const makeMockLoaders = ({ metadataMap = {}, dimensionValueMap = {} }: MockLoadersOptions = {}): MockLoaders => ({
   metadata: {
-    load: jest.fn(fieldName => Promise.resolve(metadataMap[fieldName] ?? null)),
+    load: jest.fn((fieldName: unknown) =>
+      Promise.resolve(metadataMap[fieldName as string] ?? null)
+    ),
   },
   dimensionValue: {
-    load: jest.fn(({ dimensionName, value }) =>
+    load: jest.fn(({ dimensionName, value }: { dimensionName: string; value: string }) =>
       Promise.resolve(dimensionValueMap[`${dimensionName}:${value}`] ?? null)
     ),
   },
@@ -35,6 +82,7 @@ describe('enrichFactsWithDimensions', () => {
   });
 
   test('skips null field values when building dimension details', async () => {
+    // Valeurs null — ignorées lors de la construction des détails de dimension.
     const facts = [{ value: 100, region: null }];
     const loaders = makeMockLoaders();
     const result = await enrichFactsWithDimensions(facts, loaders);
@@ -65,6 +113,7 @@ describe('enrichFactsWithDimensions', () => {
   });
 
   test('falls back to raw object when categorical detail not found', async () => {
+    // Repli sur la valeur brute — label identique à la valeur si non trouvé.
     const facts = [{ value: 100, region_id: '99' }];
     const loaders = makeMockLoaders({
       metadataMap: { region_id: { is_categorical: true } },
@@ -79,6 +128,7 @@ describe('enrichFactsWithDimensions', () => {
   });
 
   test('loads each unique (field, value) pair only once', async () => {
+    // Déduplication — chaque paire (champ, valeur) ne doit être chargée qu'une seule fois.
     const facts = [
       { value: 10, region_id: '1' },
       { value: 20, region_id: '1' },
@@ -96,6 +146,7 @@ describe('enrichFactsWithDimensions', () => {
   });
 
   test('excludes value and _groupByField from dimension enrichment', async () => {
+    // Champs réservés — "value" et "_groupByField" exclus de l'enrichissement.
     const facts = [{ value: 100, _groupByField: 'year' }];
     const loaders = makeMockLoaders();
     const result = await enrichFactsWithDimensions(facts, loaders);
@@ -125,6 +176,7 @@ describe('enrichAggregatedFactsWithLabels', () => {
     const loaders = makeMockLoaders();
     expect(await enrichAggregatedFactsWithLabels(null, 'field', loaders)).toBeNull();
     expect(await enrichAggregatedFactsWithLabels([], 'field', loaders)).toEqual([]);
+    // Champ groupBy null — retour direct sans transformation.
     const facts = [{ key: '1', value: 100 }];
     expect(await enrichAggregatedFactsWithLabels(facts, null, loaders)).toEqual(facts);
   });
@@ -158,8 +210,8 @@ describe('enrichAggregatedFactsWithLabels', () => {
     const loaders = makeMockLoaders({
       metadataMap: { region_id: { is_categorical: true } },
       dimensionValueMap: {
-        'region_id:1': { label: 'Paris' },
-        'region_id:2': { label: 'Lyon' },
+        'region_id:1': { name: 'region_id', value: '1', label: 'Paris' },
+        'region_id:2': { name: 'region_id', value: '2', label: 'Lyon' },
       },
     });
     const result = await enrichAggregatedFactsWithLabels(facts, 'region_id', loaders);
@@ -168,6 +220,7 @@ describe('enrichAggregatedFactsWithLabels', () => {
   });
 
   test('falls back to key when label not found', async () => {
+    // Repli sur la clé brute — label identique à la clé si dimension introuvable.
     const facts = [{ key: '99', value: 50 }];
     const loaders = makeMockLoaders({
       metadataMap: { region_id: { is_categorical: true } },
@@ -178,6 +231,7 @@ describe('enrichAggregatedFactsWithLabels', () => {
   });
 
   test('loads each unique key only once', async () => {
+    // Déduplication — clés identiques dans plusieurs faits chargées une seule fois.
     const facts = [
       { key: '1', value: 10 },
       { key: '1', value: 20 },
@@ -186,8 +240,8 @@ describe('enrichAggregatedFactsWithLabels', () => {
     const loaders = makeMockLoaders({
       metadataMap: { region_id: { is_categorical: true } },
       dimensionValueMap: {
-        'region_id:1': { label: 'Paris' },
-        'region_id:2': { label: 'Lyon' },
+        'region_id:1': { name: 'region_id', value: '1', label: 'Paris' },
+        'region_id:2': { name: 'region_id', value: '2', label: 'Lyon' },
       },
     });
     await enrichAggregatedFactsWithLabels(facts, 'region_id', loaders);
@@ -198,13 +252,14 @@ describe('enrichAggregatedFactsWithLabels', () => {
     const facts = [{ key: '1', value: 100 }];
     const loaders = makeMockLoaders({
       metadataMap: { region_id: { is_categorical: true } },
-      dimensionValueMap: { 'region_id:1': { label: 'Paris' } },
+      dimensionValueMap: { 'region_id:1': { name: 'region_id', value: '1', label: 'Paris' } },
     });
     const result = await enrichAggregatedFactsWithLabels(facts, 'region_id', loaders);
     expect(result[0]._groupByField).toBe('region_id');
   });
 
   test('preserves original fact fields', async () => {
+    // Conservation des champs originaux — pas de mutation destructive des faits.
     const facts = [{ key: '1', value: 999, extra: 'data' }];
     const loaders = makeMockLoaders({
       metadataMap: { cat: { is_categorical: false } },

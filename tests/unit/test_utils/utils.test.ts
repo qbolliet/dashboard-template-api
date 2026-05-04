@@ -1,5 +1,14 @@
-﻿// Unit tests for validateIdentifier and buildWhereClause (src/utils/utils.js)
+/**
+ * Unit tests for validateIdentifier and buildWhereClause (src/utils/utils.ts).
+ *
+ * Verifies identifier validation rules and SQL WHERE clause construction,
+ * including escaping, operator handling, and edge cases.
+ */
+
+// Importation directe — pas de dépendances à mocker.
 import { validateIdentifier, buildWhereClause } from '../../../src/utils/utils.js';
+
+// ─── validateIdentifier ───────────────────────────────────────────────────────
 
 describe('validateIdentifier', () => {
   test('accepts valid identifiers', () => {
@@ -30,11 +39,13 @@ describe('validateIdentifier', () => {
   });
 
   test('rejects non-string input', () => {
-    expect(() => validateIdentifier(null)).toThrow();
-    expect(() => validateIdentifier(42)).toThrow();
+    // Entrées non-string — doivent lever une erreur quel que soit le type.
+    expect(() => validateIdentifier(null as unknown as string)).toThrow();
+    expect(() => validateIdentifier(42 as unknown as string)).toThrow();
   });
 
   test('includes the context in the error message', () => {
+    // Contexte optionnel — enrichit le message d'erreur pour le débogage.
     expect(() => validateIdentifier('bad-name', 'filter key')).toThrow('Invalid filter key name');
   });
 
@@ -42,6 +53,8 @@ describe('validateIdentifier', () => {
     expect(() => validateIdentifier('bad-name')).toThrow('"bad-name"');
   });
 });
+
+// ─── buildWhereClause ─────────────────────────────────────────────────────────
 
 describe('buildWhereClause', () => {
   test('returns empty string when no filters provided', () => {
@@ -65,9 +78,9 @@ describe('buildWhereClause', () => {
   });
 
   test('omits quotes for boolean string values', () => {
-    const filtersTrue = [{ key: 'active', operator: '=', value: 'true' }];
-    expect(buildWhereClause(null, filtersTrue)).toBe('WHERE active = true');
+    const filtersTrue  = [{ key: 'active', operator: '=', value: 'true' }];
     const filtersFalse = [{ key: 'active', operator: '=', value: 'false' }];
+    expect(buildWhereClause(null, filtersTrue)).toBe('WHERE active = true');
     expect(buildWhereClause(null, filtersFalse)).toBe('WHERE active = false');
   });
 
@@ -101,7 +114,7 @@ describe('buildWhereClause', () => {
   test('joins multiple structured filters with AND', () => {
     const filters = [
       { key: 'status', operator: '=', value: 'active' },
-      { key: 'age', operator: '>', value: '18' },
+      { key: 'age',    operator: '>',  value: '18' },
     ];
     expect(buildWhereClause(null, filters)).toBe("WHERE status = 'active' AND age > 18");
   });
@@ -114,6 +127,7 @@ describe('buildWhereClause', () => {
   });
 
   test('escapes single quotes in string values', () => {
+    // Échappement SQL — apostrophes doublées pour éviter les injections.
     const filters = [{ key: 'name', operator: '=', value: "O'Brien" }];
     expect(buildWhereClause(null, filters)).toBe("WHERE name = 'O''Brien'");
   });
