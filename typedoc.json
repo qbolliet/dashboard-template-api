@@ -1,0 +1,14 @@
+{
+  "entryPoints": ["src"],
+  "entryPointStrategy": "expand",
+  "tsconfig": "tsconfig.json",
+  "out": "docs-site/docs/code-reference",
+  "plugin": ["typedoc-plugin-markdown"],
+  "readme": "none",
+  "hideGenerator": true,
+  "disableSources": false,
+  "githubPages": false,
+  "outputFileStrategy": "modules",
+  "flattenOutputFiles": false,
+  "entryFileName": "index"
+}

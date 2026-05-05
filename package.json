@@ -19,7 +19,10 @@
     "db:update": "node scripts/handle-database-update.js",
     "db:update:dry": "node scripts/handle-database-update.js --dry-run",
     "db:invalidate": "curl -X POST http://localhost:4000/api/cache/invalidate-all || echo 'Server not running'",
-    "db:stats": "curl http://localhost:4000/api/cache/stats || echo 'Server not running'"
+    "db:stats": "curl http://localhost:4000/api/cache/stats || echo 'Server not running'",
+    "docs:typedoc": "typedoc",
+    "docs:schema": "node docs-site/scripts/generate-schema.mjs",
+    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm --prefix docs-site run build"
   },
   "repository": {
     "type": "git",
@@ -63,6 +66,8 @@
     "jest": "^30.3.0",
     "ts-jest": "^29.4.0",
     "tsx": "^4.19.0",
+    "typedoc": "^0.28.19",
+    "typedoc-plugin-markdown": "^4.11.0",
     "typescript": "^5.8.0"
   }
 }

@@ -1,0 +1,72 @@
+name: Deploy Documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Only one deployment at a time; cancel in-progress run if a new push arrives
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Install API dependencies (TypeDoc, schema generation)
+      - name: Install API dependencies
+        run: npm ci
+
+      # Generate TypeDoc code reference (outputs to docs-site/docs/code-reference/)
+      - name: Generate code reference (TypeDoc)
+        run: npm run docs:typedoc
+
+      # Compile TypeScript — required for schema introspection generation
+      - name: Build TypeScript
+        run: npm run build
+
+      # Generate static schema.json for GraphQL Voyager
+      - name: Generate GraphQL schema introspection
+        run: npm run docs:schema
+
+      - name: Install docs-site dependencies
+        working-directory: docs-site
+        run: npm ci
+
+      - name: Build documentation site
+        working-directory: docs-site
+        run: npm run build
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs-site/build
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
