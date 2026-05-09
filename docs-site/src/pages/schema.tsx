@@ -3,22 +3,35 @@ import BrowserOnly from '@docusaurus/BrowserOnly';
 import Layout from '@theme/Layout';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 
-// VoyagerLoader is rendered only in the browser (inside BrowserOnly),
-// so it is safe to call require() and use browser APIs here.
+// Fetch the introspection JSON once and pass the resulting object to Voyager.
+// Passing a fresh provider function on every render makes Voyager v2 re-trigger
+// introspection on each cycle and stay stuck on "Transmitting…" under React 18.
 function VoyagerLoader({ schemaUrl }: { schemaUrl: string }): JSX.Element {
+  const [introspection, setIntrospection] = React.useState<unknown>(null);
   const [error, setError] = React.useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Voyager } = require('graphql-voyager');
 
-  async function introspectionProvider(_query: string) {
-    const res = await fetch(schemaUrl);
-    if (!res.ok) {
-      const msg = `schema.json not found (HTTP ${res.status}) — run \`npm run build && npm run docs:schema\` from the repo root, then restart the docs server.`;
-      setError(msg);
-      throw new Error(msg);
-    }
-    return res.json();
-  }
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(schemaUrl);
+        if (!res.ok) {
+          throw new Error(
+            `schema.json not found (HTTP ${res.status}) — run \`npm run build && npm run docs:schema\` from the repo root, then restart the docs server.`,
+          );
+        }
+        const data = await res.json();
+        if (!cancelled) setIntrospection(data);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [schemaUrl]);
 
   if (error) {
     return (
@@ -28,9 +41,17 @@ function VoyagerLoader({ schemaUrl }: { schemaUrl: string }): JSX.Element {
     );
   }
 
+  if (!introspection) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <p>Chargement du schéma…</p>
+      </div>
+    );
+  }
+
   return (
     <Voyager
-      introspection={introspectionProvider}
+      introspection={introspection}
       displayOptions={{ skipRelay: false, skipDeprecated: false }}
     />
   );

@@ -6,10 +6,15 @@ docs-site/node_modules/
 docs-site/build/
 docs-site/.docusaurus/
 docs-site/static/schema.json
+docs-site/static/schema.graphql
 
 # TypeDoc generated files (regenerated in CI; keep only the placeholder index.md)
 docs-site/docs/code-reference/*.md
 !docs-site/docs/code-reference/index.md
+
+# graphql-markdown generated files (regenerated in CI; keep only the placeholder index.md)
+docs-site/docs/graphql-api/*.md
+!docs-site/docs/graphql-api/index.md
 
 # TypeScript compiled output
 dist/

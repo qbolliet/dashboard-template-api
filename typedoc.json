@@ -1,6 +1,7 @@
 {
   "entryPoints": ["src"],
   "entryPointStrategy": "expand",
+  "exclude": ["src/index.ts"],
   "tsconfig": "tsconfig.json",
   "out": "docs-site/docs/code-reference",
   "plugin": ["typedoc-plugin-markdown"],
@@ -10,5 +11,6 @@
   "githubPages": false,
   "outputFileStrategy": "modules",
   "flattenOutputFiles": false,
-  "entryFileName": "index"
+  "entryFileName": "README",
+  "excludeReferences": true
 }

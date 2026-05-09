@@ -1,5 +1,6 @@
 /**
- * Generates docs-site/static/schema.json from the compiled TypeScript typedefs.
+ * Generates docs-site/static/schema.json (introspection) and
+ * docs-site/static/schema.graphql (SDL) from the compiled TypeScript typedefs.
  *
  * Prerequisites:
  *   npm run build   (from the repo root — compiles src/ → dist/)
@@ -9,6 +10,7 @@
  */
 
 import { makeExecutableSchema } from '@graphql-tools/schema';
+import { introspectionFromSchema, printSchema } from 'graphql';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -21,18 +23,22 @@ const rootDir = join(__dirname, '..', '..');
 const typedefsUrl = pathToFileURL(join(rootDir, 'dist', 'schema', 'typedefs', 'index.js'));
 const { typeDefs } = await import(typedefsUrl.href);
 
-// Import introspectionFromSchema from the ROOT node_modules to avoid the dual-graphql
-// conflict on Windows: docs-site/node_modules/graphql (voyager dep) vs root node_modules/graphql.
-const rootGraphqlUrl = pathToFileURL(join(rootDir, 'node_modules', 'graphql', 'index.js'));
-const { introspectionFromSchema } = await import(rootGraphqlUrl.href);
-
+// makeExecutableSchema and introspectionFromSchema must share the same `graphql`
+// instance, otherwise schema objects are rejected as "from another module or realm".
+// Using static ESM imports lets Node resolve and dedupe `graphql` from a single
+// starting point (this script's location → docs-site/node_modules/graphql).
 const schema = makeExecutableSchema({ typeDefs });
 const introspection = introspectionFromSchema(schema);
+const sdl = printSchema(schema);
 
 const outputDir = join(__dirname, '..', 'static');
 mkdirSync(outputDir, { recursive: true });
 
-const outputPath = join(outputDir, 'schema.json');
-writeFileSync(outputPath, JSON.stringify({ data: introspection }, null, 2));
+const jsonPath = join(outputDir, 'schema.json');
+writeFileSync(jsonPath, JSON.stringify({ data: introspection }, null, 2));
 
-console.log(`Schema introspection written to ${outputPath}`);
+const sdlPath = join(outputDir, 'schema.graphql');
+writeFileSync(sdlPath, sdl);
+
+console.log(`Schema introspection written to ${jsonPath}`);
+console.log(`Schema SDL written to ${sdlPath}`);

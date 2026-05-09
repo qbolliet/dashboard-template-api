@@ -20,9 +20,10 @@
     "db:update:dry": "node scripts/handle-database-update.js --dry-run",
     "db:invalidate": "curl -X POST http://localhost:4000/api/cache/invalidate-all || echo 'Server not running'",
     "db:stats": "curl http://localhost:4000/api/cache/stats || echo 'Server not running'",
-    "docs:typedoc": "typedoc",
+    "docs:typedoc": "typedoc && node docs-site/scripts/dedupe-typedoc.mjs",
     "docs:schema": "node docs-site/scripts/generate-schema.mjs",
-    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm --prefix docs-site run build"
+    "docs:graphql": "npm --prefix docs-site run graphql-to-doc",
+    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm run docs:graphql && npm --prefix docs-site run build"
   },
   "repository": {
     "type": "git",

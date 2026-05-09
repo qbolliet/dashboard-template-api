@@ -32,7 +32,22 @@ const config: Config = {
 
   // TypeDoc is run as a separate pre-step (npm run docs:typedoc from repo root)
   // and outputs markdown files into docs/code-reference/ before this build.
-  plugins: [],
+  // @graphql-markdown/docusaurus generates docs/graphql-api/* from the SDL produced
+  // by scripts/generate-schema.mjs.
+  plugins: [
+    [
+      '@graphql-markdown/docusaurus',
+      {
+        schema: 'static/schema.graphql',
+        rootPath: './docs',
+        baseURL: 'graphql-api',
+        homepage: './docs/graphql-api/index.md',
+        loaders: {
+          GraphQLFileLoader: '@graphql-tools/graphql-file-loader',
+        },
+      },
+    ],
+  ],
 
   presets: [
     [
@@ -76,6 +91,18 @@ const config: Config = {
           sidebarId: 'docs',
           position: 'left',
           label: 'Docs',
+        },
+        {
+          type: 'docSidebar',
+          sidebarId: 'codeReference',
+          position: 'left',
+          label: 'Code Reference',
+        },
+        {
+          type: 'docSidebar',
+          sidebarId: 'graphqlApi',
+          position: 'left',
+          label: 'GraphQL API',
         },
         {
           to: '/schema',
