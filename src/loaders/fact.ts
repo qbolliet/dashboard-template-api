@@ -7,7 +7,7 @@ import type { StructuredFilter } from '../utils/utils.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
 
-/** Paramètres d'une requête sur la table des faits. */
+/** Parameters for a fact table query. */
 interface FactQueryParams {
     fields?: string[];
     filters?: string | null;
@@ -21,7 +21,7 @@ interface FactQueryParams {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Résultat paginé standard avec comptage total. */
+/** Standard paginated result with total count. */
 interface PaginatedFactResult {
     data: Record<string, unknown>[] | unknown[][];
     total: number;
@@ -31,7 +31,7 @@ interface PaginatedFactResult {
     generatedAt: string;
 }
 
-/** Résultat D3 paginé (metadata enrichie de données de pagination). */
+/** Paginated D3 result (metadata enriched with pagination data). */
 interface PaginatedD3Result extends D3QueryResult {
     metadata: D3QueryResult['metadata'] & {
         total: number;
@@ -42,7 +42,7 @@ interface PaginatedD3Result extends D3QueryResult {
     };
 }
 
-/** Union de tous les formats possibles retournés par loadFacts. */
+/** Union of all possible formats returned by loadFacts. */
 type FactQueryResult =
     | Record<string, unknown>[]
     | unknown[][]
@@ -63,8 +63,7 @@ class FactLoader extends FactQueryLoader {
     /**
      * Creates a FactLoader bound to a specific database.
      *
-     * Args:
-     *     databaseId: Catalog alias to query; null uses the default database.
+     * @param databaseId - Catalog alias to query; null uses the default database.
      */
     constructor(databaseId: string | null = null) {
         super({
@@ -84,15 +83,10 @@ class FactLoader extends FactQueryLoader {
      * format. When includeCount is true, a separate COUNT query is issued
      * and the result is wrapped with pagination metadata.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Query parameters controlling fields, filters, and format.
-     *
-     * Returns:
-     *     Query results in the requested format, optionally with count.
-     *
-     * Raises:
-     *     Error: When pagination parameters exceed configured limits.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Query parameters controlling fields, filters, and format.
+     * @returns Query results in the requested format, optionally with count.
+     * @throws {Error} When pagination parameters exceed configured limits.
      */
     async loadFacts(connection: DuckDBConnection, params: FactQueryParams): Promise<FactQueryResult> {
         const {
@@ -172,12 +166,9 @@ class FactLoader extends FactQueryLoader {
     /**
      * Gets the total count of rows matching the given filters.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     filters: Object containing raw and structured filter parameters.
-     *
-     * Returns:
-     *     Total row count as a number.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param filters - Object containing raw and structured filter parameters.
+     * @returns Total row count as a number.
      */
     async getCount(
         connection: DuckDBConnection,
@@ -194,11 +185,8 @@ class FactLoader extends FactQueryLoader {
 /**
  * Creates a DataLoader for fact table queries in default format.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by FactQueryParams, returning FactQueryResult.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by FactQueryParams, returning FactQueryResult.
  */
 const createFactLoader = (databaseId: string | null = null) => {
     const loader = new FactLoader(databaseId);
@@ -211,11 +199,8 @@ const createFactLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for fact table queries with row count included.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader returning paginated fact results with total count.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader returning paginated fact results with total count.
  */
 const createFactWithCountLoader = (databaseId: string | null = null) => {
     const loader = new FactLoader(databaseId);
@@ -228,11 +213,8 @@ const createFactWithCountLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for fact table queries in D3 metadata format with count.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader returning D3-formatted facts with column metadata and count.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader returning D3-formatted facts with column metadata and count.
  */
 const createFactWithMetadataLoader = (databaseId: string | null = null) => {
     const loader = new FactLoader(databaseId);

@@ -8,15 +8,26 @@ const dbLogger = createContextLogger({
     module: 'connection'
 });
 
-// Fonction de compatibilité pour obtenir le pool par défaut
+/**
+ * Returns the shared DuckDB connection pool for the default catalog.
+ * Provided for backward compatibility with code that does not pass a catalog ID.
+ *
+ * @returns The shared {@link DuckDBPool} instance.
+ */
 const getDefaultPool = () => {
     return databaseManager.getPool();
 };
 
-// Pool par défaut pour la compatibilité avec l'ancien code
+/**
+ * Default connection pool for the default catalog.
+ * Alias of {@link getDefaultPool} retained for backward compatibility.
+ */
 const dbPool = getDefaultPool();
 
-// Fonction de fermeture des connexions avec logging (compatibilité)
+/**
+ * Closes all open database connections.
+ * Thin wrapper around {@link closeAllConnections} retained for backward compatibility.
+ */
 const closeConnections = async (): Promise<void> => {
     dbLogger.database('Closing all database connections (legacy function)');
     await closeAllConnections();

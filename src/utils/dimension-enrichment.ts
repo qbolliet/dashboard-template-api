@@ -1,25 +1,25 @@
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Détail d'une valeur de dimension catégorielle chargée depuis le loader. */
+/** Detail of a categorical dimension value loaded from the dimension loader. */
 interface DimensionDetail {
     name: string;
     value: unknown;
     label: unknown;
 }
 
-/** Métadonnées d'un champ issues du loader de métadonnées. */
+/** Field metadata returned by the metadata loader. */
 interface FieldMetadata {
     is_categorical?: boolean;
     [key: string]: unknown;
 }
 
-/** Requête de chargement d'une valeur de dimension. */
+/** Load request for a single dimension value. */
 interface DimensionLoadRequest {
     dimensionName: string;
     value: unknown;
 }
 
-/** Ensemble des loaders DataLoader disponibles dans le contexte GraphQL. */
+/** Set of DataLoader instances available in the GraphQL context. */
 interface Loaders {
     metadata: {
         load: (fieldName: string) => Promise<FieldMetadata | null>;
@@ -29,10 +29,10 @@ interface Loaders {
     };
 }
 
-/** Fait brut — objet dont les clés sont des noms de dimensions ou des valeurs. */
+/** Raw fact — an object whose keys are dimension names or measure values. */
 type Fact = Record<string, unknown>;
 
-/** Fait agrégé avec une clé de regroupement et une valeur numérique agrégée. */
+/** Aggregated fact with a group-by key and an aggregated numeric value. */
 export interface AggregatedFact {
     key: unknown;
     value?: unknown;
@@ -52,12 +52,9 @@ export interface AggregatedFact {
  * Note: An alternative would be to JOIN dimensions in the SQL query itself,
  * which would be more efficient but would reduce GraphQL flexibility.
  *
- * Args:
- *     facts: Array of raw fact objects to enrich.
- *     loaders: GraphQL DataLoader collection.
- *
- * Returns:
- *     Facts enriched with a `dimensionDetails` array on each item.
+ * @param facts - Array of raw fact objects to enrich.
+ * @param loaders - GraphQL DataLoader collection.
+ * @returns Facts enriched with a `dimensionDetails` array on each item.
  */
 // Enrichissement en masse des faits avec les détails de leurs dimensions catégorielles
 export async function enrichFactsWithDimensions(
@@ -177,13 +174,10 @@ export async function enrichFactsWithDimensions(
  *
  * Loads labels in bulk and attaches `keyLabel` to each aggregated fact.
  *
- * Args:
- *     aggregatedFacts: Array of aggregated fact objects.
- *     groupByField: The field used for grouping (determines label source).
- *     loaders: GraphQL DataLoader collection.
- *
- * Returns:
- *     Aggregated facts enriched with `keyLabel` and `_groupByField`.
+ * @param aggregatedFacts - Array of aggregated fact objects.
+ * @param groupByField - The field used for grouping (determines label source).
+ * @param loaders - GraphQL DataLoader collection.
+ * @returns Aggregated facts enriched with `keyLabel` and `_groupByField`.
  */
 // Enrichissement des faits agrégés avec les labels de la dimension de regroupement
 export async function enrichAggregatedFactsWithLabels(

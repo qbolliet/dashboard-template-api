@@ -12,7 +12,7 @@ import { config } from '../utils/config-loader.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-/** Union des nœuds AST possédant un ensemble de sélections potentiel. */
+/** Union of AST node types that may carry a selection set. */
 type SelectableNode =
     | FieldNode
     | InlineFragmentNode
@@ -28,13 +28,10 @@ type SelectableNode =
  * fragments stay at the same depth; named fragment spreads are resolved
  * via the validation context.
  *
- * Args:
- *     node: AST node to inspect (operation, field, or fragment).
- *     context: Validation context used to resolve named fragments.
- *     currentDepth: Depth accumulated by the caller.
- *
- * Returns:
- *     Maximum depth found in this node and all its descendants.
+ * @param node - AST node to inspect (operation, field, or fragment).
+ * @param context - Validation context used to resolve named fragments.
+ * @param currentDepth - Depth accumulated by the caller.
+ * @returns Maximum depth found in this node and all its descendants.
  */
 const calculateNodeDepth = (
     node: SelectableNode,
@@ -81,14 +78,9 @@ const calculateNodeDepth = (
  * Depth is computed recursively across the full operation, including named
  * and inline fragments. Use this rule when you need accurate depth tracking.
  *
- * Args:
- *     maxDepth: Maximum allowed nesting depth for any operation.
- *
- * Returns:
- *     A validation rule function compatible with Apollo Server.
- *
- * Raises:
- *     Error: When maxDepth is not a positive integer.
+ * @param maxDepth - Maximum allowed nesting depth for any operation.
+ * @returns A validation rule function compatible with Apollo Server.
+ * @throws {Error} When maxDepth is not a positive integer.
  */
 const createDepthLimitRule = (
     maxDepth: number = config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5
@@ -133,14 +125,9 @@ const createDepthLimitRule = (
  * Less accurate than createDepthLimitRule for queries with fragments, but
  * has lower per-validation overhead. Suitable for simple query shapes.
  *
- * Args:
- *     maxDepth: Maximum allowed nesting depth for any field.
- *
- * Returns:
- *     A validation rule function compatible with Apollo Server.
- *
- * Raises:
- *     Error: When maxDepth is not a positive integer.
+ * @param maxDepth - Maximum allowed nesting depth for any field.
+ * @returns A validation rule function compatible with Apollo Server.
+ * @throws {Error} When maxDepth is not a positive integer.
  */
 const createSimpleDepthLimitRule = (
     maxDepth: number = config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5

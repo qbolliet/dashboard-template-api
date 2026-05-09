@@ -5,7 +5,7 @@ import { createContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-/** Entrée de catalogue DuckLake à attacher à l'instance DuckDB partagée. */
+/** DuckLake catalog entry to attach to the shared DuckDB instance. */
 export interface CatalogEntry {
     path: string;
     alias: string;
@@ -13,7 +13,7 @@ export interface CatalogEntry {
     dataPath?: string;
 }
 
-/** Configuration du pool de connexions DuckDB. */
+/** Configuration for the DuckDB connection pool. */
 export interface PoolConfig {
     catalogs: CatalogEntry[];
     maxConnections: number;
@@ -21,7 +21,7 @@ export interface PoolConfig {
     retryDelay: number;
 }
 
-/** Résultat d'une requête avec métadonnées pour la visualisation D3. */
+/** Query result with column metadata, intended for D3 visualization. */
 export interface WithMetadataResult {
     columns: string[];
     data: Record<string, Json>[];
@@ -31,7 +31,7 @@ export interface WithMetadataResult {
     };
 }
 
-/** Wrapper de connexion exposant les méthodes de requête DuckDB. */
+/** Connection wrapper exposing DuckDB query methods. */
 export interface ConnectionWrapper {
     instance: DuckDBInstance;
     conn: DuckDBConnection;
@@ -101,8 +101,7 @@ class DuckDBPool {
      * acquire() calls — the first call initializes, subsequent calls wait on the
      * same Promise.
      *
-     * Returns:
-     *     The shared DuckDB instance.
+     * @returns The shared DuckDB instance.
      */
     async initializeInstance(): Promise<DuckDBInstance> {
         // Retour immédiat si l'instance est déjà prête
@@ -175,11 +174,8 @@ class DuckDBPool {
      * Connections are reused when available (marked inUse = false).
      * If the pool is at capacity, waits with polling until a connection is freed.
      *
-     * Returns:
-     *     A connection wrapper with query methods.
-     *
-     * Raises:
-     *     Error: If acquisition times out.
+     * @returns A connection wrapper with query methods.
+     * @throws {Error} If acquisition times out.
      */
     async acquire(): Promise<ConnectionWrapper> {
         const dbLogger = createContextLogger({ component: 'database' });
@@ -227,10 +223,9 @@ class DuckDBPool {
                         /**
                          * Helper to bind a single parameter to a prepared statement.
                          *
-                         * Args:
-                         *     prepared: The prepared statement to bind to.
-                         *     param: The value to bind.
-                         *     paramIndex: 1-based parameter index.
+                         * @param prepared - The prepared statement to bind to.
+                         * @param param - The value to bind.
+                         * @param paramIndex - 1-based parameter index.
                          */
                         const bindParam = (
                             prepared: Awaited<ReturnType<DuckDBConnection['prepare']>>,
@@ -265,12 +260,9 @@ class DuckDBPool {
                              * Execute a query and return results as objects.
                              * Uses native DuckDB JSON methods for BigInt handling.
                              *
-                             * Args:
-                             *     query: SQL query to execute.
-                             *     params: Parameters for prepared statement.
-                             *
-                             * Returns:
-                             *     Query results as array of row objects.
+                             * @param query - SQL query to execute.
+                             * @param params - Parameters for prepared statement.
+                             * @returns Query results as array of row objects.
                              */
                             all: async (
                                 query: string,
@@ -293,12 +285,9 @@ class DuckDBPool {
                              * Execute a query and return results as a JSON array.
                              * Optimized for D3 visualization (array of arrays).
                              *
-                             * Args:
-                             *     query: SQL query to execute.
-                             *     params: Parameters for prepared statement.
-                             *
-                             * Returns:
-                             *     Query results as JSON array of arrays.
+                             * @param query - SQL query to execute.
+                             * @param params - Parameters for prepared statement.
+                             * @returns Query results as JSON array of arrays.
                              */
                             getAsJsonArray: async (
                                 query: string,
@@ -320,12 +309,9 @@ class DuckDBPool {
                             /**
                              * Execute a query and return D3-friendly result with column metadata.
                              *
-                             * Args:
-                             *     query: SQL query to execute.
-                             *     params: Parameters for prepared statement.
-                             *
-                             * Returns:
-                             *     Data with columns, rows, count, and numeric extents.
+                             * @param query - SQL query to execute.
+                             * @param params - Parameters for prepared statement.
+                             * @returns Data with columns, rows, count, and numeric extents.
                              */
                             getWithMetadata: async (
                                 query: string,
@@ -374,8 +360,7 @@ class DuckDBPool {
                             /**
                              * Execute a SQL statement without returning results (DDL, utilities).
                              *
-                             * Args:
-                             *     query: SQL statement to execute.
+                             * @param query - SQL statement to execute.
                              */
                             exec: async (query: string): Promise<void> => {
                                 await duckdbConnection.run(query);
@@ -419,8 +404,7 @@ class DuckDBPool {
     /**
      * Release a connection back to the pool.
      *
-     * Args:
-     *     connection: The connection wrapper to release.
+     * @param connection - The connection wrapper to release.
      */
     release(connection: ConnectionWrapper): void {
         const connIndex = this.pool.findIndex(

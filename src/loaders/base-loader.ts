@@ -7,7 +7,7 @@ import { config as globalConfig } from '../utils/config-loader.js';
 
 // ─── Interfaces de la connexion DuckDB ───────────────────────────────────────
 
-/** Métadonnées d'un résultat D3 (dimensions, extents, pagination). */
+/** Metadata of a D3 query result (dimensions, extents, pagination). */
 interface D3Metadata {
     count: number;
     extents: Record<string, [number, number]>;
@@ -18,14 +18,14 @@ interface D3Metadata {
     generatedAt?: string;
 }
 
-/** Résultat de requête enrichi pour la visualisation D3. */
+/** Enriched query result for D3 visualization. */
 interface D3QueryResult {
     columns: string[];
     data: Record<string, unknown>[];
     metadata: D3Metadata;
 }
 
-/** Interface d'une connexion DuckDB wrappée par le pool de connexions. */
+/** Interface of a DuckDB connection wrapped by the connection pool. */
 interface DuckDBConnection {
     all: (query: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
     getAsJsonArray: (query: string, params?: unknown[]) => Promise<unknown[][]>;
@@ -36,7 +36,7 @@ interface DuckDBConnection {
     conn: unknown;
 }
 
-/** Interface d'un pool de connexions DuckDB. */
+/** Interface of a DuckDB connection pool. */
 interface DuckDBPool {
     acquire: () => Promise<DuckDBConnection>;
     release: (connection: DuckDBConnection) => void;
@@ -45,7 +45,7 @@ interface DuckDBPool {
 
 // ─── Interfaces de configuration des loaders ─────────────────────────────────
 
-/** Configuration d'initialisation d'un loader de base. */
+/** Initialization configuration for a base loader. */
 interface BaseLoaderConfig {
     batchSize?: number;
     cachePrefix?: string;
@@ -54,7 +54,7 @@ interface BaseLoaderConfig {
     databaseId?: string | null;
 }
 
-/** Critère de tri pour les clauses ORDER BY SQL. */
+/** Sort criterion for SQL ORDER BY clauses. */
 interface SortItem {
     field: string;
     order: 'ASC' | 'DESC';
@@ -80,8 +80,7 @@ class BaseQueryLoader {
     /**
      * Creates a new BaseQueryLoader instance.
      *
-     * Args:
-     *     config: Optional configuration overrides for the loader.
+     * @param config - Optional configuration overrides for the loader.
      */
     constructor(config: BaseLoaderConfig = {}) {
         this.batchSize = config.batchSize || 5;
@@ -98,14 +97,9 @@ class BaseQueryLoader {
      * Acquires a connection from the pool before calling queryFn and
      * releases it in the finally block, even when queryFn throws.
      *
-     * Args:
-     *     queryFn: Async function that receives a DuckDB connection.
-     *
-     * Returns:
-     *     Result of queryFn.
-     *
-     * Raises:
-     *     Error: When pool acquisition fails or queryFn throws.
+     * @param queryFn - Async function that receives a DuckDB connection.
+     * @returns Result of queryFn.
+     * @throws {Error} When pool acquisition fails or queryFn throws.
      */
     async executeWithConnection<T>(queryFn: (connection: DuckDBConnection) => Promise<T>): Promise<T> {
         let connection: DuckDBConnection | undefined;
@@ -135,11 +129,8 @@ class BaseQueryLoader {
      * With the DuckLake multi-catalog setup, all table names must be prefixed
      * as "{catalogId}".{schema}.{tableName}.
      *
-     * Args:
-     *     tableName: Bare table name (e.g. 'fact_table', 'dim_country').
-     *
-     * Returns:
-     *     Fully qualified table name string.
+     * @param tableName - Bare table name (e.g. 'fact_table', 'dim_country').
+     * @returns Fully qualified table name string.
      */
     qualifyTable(tableName: string): string {
         const dm = databaseManager as unknown as { defaultDatabase: string; getSchema: (id: string) => string };
@@ -155,12 +146,9 @@ class BaseQueryLoader {
      * On cache miss, calls loader(), stores the result, then returns it.
      * Falls back to a direct loader call on any Redis error.
      *
-     * Args:
-     *     key: Cache key (will be JSON-serialized).
-     *     loader: Async function that fetches the data on cache miss.
-     *
-     * Returns:
-     *     Cached or freshly loaded data.
+     * @param key - Cache key (will be JSON-serialized).
+     * @param loader - Async function that fetches the data on cache miss.
+     * @returns Cached or freshly loaded data.
      */
     async loadWithCache<T>(key: unknown, loader: () => Promise<T>): Promise<T> {
         if (!this.cacheEnabled) {
@@ -184,12 +172,9 @@ class BaseQueryLoader {
      * createBatchLoader when the underlying query can handle multiple
      * keys in a single round-trip.
      *
-     * Args:
-     *     loadFn: Function that fetches data for a single key.
-     *     options: Additional DataLoader options (overrides defaults).
-     *
-     * Returns:
-     *     Configured DataLoader instance.
+     * @param loadFn - Function that fetches data for a single key.
+     * @param options - Additional DataLoader options (overrides defaults).
+     * @returns Configured DataLoader instance.
      */
     createLoader<K, V>(
         loadFn: (connection: DuckDBConnection, key: K) => Promise<V>,
@@ -229,12 +214,9 @@ class BaseQueryLoader {
      * Passes all queued keys to batchLoadFn in a single call, allowing
      * the implementation to issue one efficient SQL query per batch.
      *
-     * Args:
-     *     batchLoadFn: Function that loads data for multiple keys at once.
-     *     options: Additional DataLoader options (overrides defaults).
-     *
-     * Returns:
-     *     Configured DataLoader instance.
+     * @param batchLoadFn - Function that loads data for multiple keys at once.
+     * @param options - Additional DataLoader options (overrides defaults).
+     * @returns Configured DataLoader instance.
      */
     createBatchLoader<K, V>(
         batchLoadFn: (connection: DuckDBConnection, keys: readonly K[]) => Promise<(V | null)[]>,
@@ -277,11 +259,8 @@ class FactQueryLoader extends BaseQueryLoader {
     /**
      * Builds a SQL SELECT clause from a list of field names.
      *
-     * Args:
-     *     fields: Array of column names to include in the SELECT.
-     *
-     * Returns:
-     *     Comma-separated field list, or '*' when fields is empty or null.
+     * @param fields - Array of column names to include in the SELECT.
+     * @returns Comma-separated field list, or '*' when fields is empty or null.
      */
     buildSelectClause(fields: string[] | null | undefined): string {
         return fields && fields.length > 0 ? fields.join(', ') : '*';
@@ -291,11 +270,8 @@ class FactQueryLoader extends BaseQueryLoader {
     /**
      * Builds a SQL ORDER BY clause from sort configuration.
      *
-     * Args:
-     *     sort: Array of sort items, each with a field name and direction.
-     *
-     * Returns:
-     *     ORDER BY clause string, or empty string when sort is empty or null.
+     * @param sort - Array of sort items, each with a field name and direction.
+     * @returns ORDER BY clause string, or empty string when sort is empty or null.
      */
     buildSortClause(sort: SortItem[] | null | undefined): string {
         if (!sort || sort.length === 0) return '';
@@ -306,12 +282,9 @@ class FactQueryLoader extends BaseQueryLoader {
     /**
      * Validates that pagination parameters are within configured bounds.
      *
-     * Args:
-     *     limit: Maximum number of rows to return.
-     *     offset: Number of rows to skip.
-     *
-     * Raises:
-     *     Error: When limit exceeds MAX_LIMIT or offset exceeds MAX_OFFSET.
+     * @param limit - Maximum number of rows to return.
+     * @param offset - Number of rows to skip.
+     * @throws {Error} When limit exceeds MAX_LIMIT or offset exceeds MAX_OFFSET.
      */
     validatePagination(limit: number, offset: number): void {
         if (limit > globalConfig.API.PAGINATION.MAX_LIMIT) {

@@ -12,12 +12,12 @@ import type {
 
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
 
-/** Opérations d'agrégation SQL supportées pour les requêtes cross-base. */
+/** Supported SQL aggregation operations for cross-database queries. */
 type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments de la requête compareFacts. */
+/** Arguments for the compareFacts query. */
 export interface CompareFactsArgs {
     databaseA: string;
     databaseB: string;
@@ -27,7 +27,7 @@ export interface CompareFactsArgs {
     sort?: Array<{ field: string; order: 'ASC' | 'DESC' }>;
 }
 
-/** Arguments de la requête compareAggregatedFacts. */
+/** Arguments for the compareAggregatedFacts query. */
 export interface CompareAggregatedFactsArgs {
     databaseA: string;
     databaseB: string;
@@ -37,7 +37,7 @@ export interface CompareAggregatedFactsArgs {
     offset?: number;
 }
 
-/** Arguments de la requête crossDatabaseSelectOptions. */
+/** Arguments for the crossDatabaseSelectOptions query. */
 export interface CrossDatabaseSelectOptionsArgs {
     fieldName: string;
     databases: string[];
@@ -46,7 +46,7 @@ export interface CrossDatabaseSelectOptionsArgs {
 
 // ─── Constantes de validation ─────────────────────────────────────────────────
 
-/** Liste exhaustive des opérations d'agrégation supportées. */
+/** Exhaustive list of supported aggregation operations. */
 const VALID_AGGREGATIONS: readonly AggregationType[] = [
     'SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'
 ];
@@ -56,8 +56,7 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
 /**
  * Checks that cross-database queries are enabled and throws if not.
  *
- * Raises:
- *     GraphQLError: When cross-database queries are disabled.
+ * @throws {GraphQLError} When cross-database queries are disabled.
  */
 // Vérification de l'activation des requêtes cross-base
 function assertCrossDatabaseAllowed(): void {
@@ -72,11 +71,8 @@ function assertCrossDatabaseAllowed(): void {
 /**
  * Validates a database alias and throws a descriptive error when invalid.
  *
- * Args:
- *     db: Database alias to validate.
- *
- * Raises:
- *     GraphQLError: When the alias is not registered in the database manager.
+ * @param db - Database alias to validate.
+ * @throws {GraphQLError} When the alias is not registered in the database manager.
  */
 // Validation d'un identifiant de base de données
 function assertValidDatabase(db: string): void {
@@ -97,22 +93,17 @@ const crossDatabaseResolvers = {
         /**
          * Compares fact rows across two databases joined on common fields.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     databaseA: Alias of the first database.
-         *     databaseB: Alias of the second database.
-         *     joinFields: Field names used to join the two datasets.
-         *     limit: Maximum number of rows to return.
-         *     offset: Number of rows to skip.
-         *     sort: Sort criteria applied after the join.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Comparison result with rows from both databases.
-         *
-         * Raises:
-         *     GraphQLError: When cross-database is disabled, databases are
-         *         invalid, joinFields is empty, or limit exceeds the maximum.
+         * @param _ - Parent resolver result (unused at root).
+         * @param databaseA - Alias of the first database.
+         * @param databaseB - Alias of the second database.
+         * @param joinFields - Field names used to join the two datasets.
+         * @param limit - Maximum number of rows to return.
+         * @param offset - Number of rows to skip.
+         * @param sort - Sort criteria applied after the join.
+         * @param context - GraphQL context with loaders.
+         * @returns Comparison result with rows from both databases.
+         * @throws {GraphQLError} When cross-database is disabled, databases are
+         *     invalid, joinFields is empty, or limit exceeds the maximum.
          */
         // Comparaison des faits entre deux bases de données
         compareFacts: async (
@@ -155,22 +146,17 @@ const crossDatabaseResolvers = {
         /**
          * Compares aggregated facts across two databases grouped by a dimension.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     databaseA: Alias of the first database.
-         *     databaseB: Alias of the second database.
-         *     groupBy: Dimension field used for grouping.
-         *     aggregation: Aggregation function to apply.
-         *     limit: Maximum number of groups to return.
-         *     offset: Number of groups to skip.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Comparison result with aggregated rows from both databases.
-         *
-         * Raises:
-         *     GraphQLError: When cross-database is disabled, databases or
-         *         aggregation type are invalid, or groupBy is missing.
+         * @param _ - Parent resolver result (unused at root).
+         * @param databaseA - Alias of the first database.
+         * @param databaseB - Alias of the second database.
+         * @param groupBy - Dimension field used for grouping.
+         * @param aggregation - Aggregation function to apply.
+         * @param limit - Maximum number of groups to return.
+         * @param offset - Number of groups to skip.
+         * @param context - GraphQL context with loaders.
+         * @returns Comparison result with aggregated rows from both databases.
+         * @throws {GraphQLError} When cross-database is disabled, databases or
+         *     aggregation type are invalid, or groupBy is missing.
          */
         // Comparaison des faits agrégés entre deux bases de données
         compareAggregatedFacts: async (
@@ -220,19 +206,14 @@ const crossDatabaseResolvers = {
         /**
          * Fetches select options for a field across multiple databases.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     fieldName: Field to fetch options for.
-         *     databases: List of database aliases to query.
-         *     limit: Maximum number of options to return.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Merged list of select options from all databases.
-         *
-         * Raises:
-         *     GraphQLError: When cross-database is disabled, fewer than two
-         *         databases are specified, or any alias is invalid.
+         * @param _ - Parent resolver result (unused at root).
+         * @param fieldName - Field to fetch options for.
+         * @param databases - List of database aliases to query.
+         * @param limit - Maximum number of options to return.
+         * @param context - GraphQL context with loaders.
+         * @returns Merged list of select options from all databases.
+         * @throws {GraphQLError} When cross-database is disabled, fewer than two
+         *     databases are specified, or any alias is invalid.
          */
         // Récupération des options de sélection sur plusieurs bases de données
         crossDatabaseSelectOptions: async (

@@ -9,18 +9,22 @@
  */
 
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { introspectionFromSchema } from 'graphql';
 import { writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..', '..');
 
 // Import only the merged typedefs — no resolver deps (DuckDB, Redis, etc.)
-const { typeDefs } = await import(
-  join(rootDir, 'dist', 'schema', 'typedefs', 'index.js')
-);
+// pathToFileURL is required on Windows: dynamic import() only accepts file:// URLs, not raw paths.
+const typedefsUrl = pathToFileURL(join(rootDir, 'dist', 'schema', 'typedefs', 'index.js'));
+const { typeDefs } = await import(typedefsUrl.href);
+
+// Import introspectionFromSchema from the ROOT node_modules to avoid the dual-graphql
+// conflict on Windows: docs-site/node_modules/graphql (voyager dep) vs root node_modules/graphql.
+const rootGraphqlUrl = pathToFileURL(join(rootDir, 'node_modules', 'graphql', 'index.js'));
+const { introspectionFromSchema } = await import(rootGraphqlUrl.href);
 
 const schema = makeExecutableSchema({ typeDefs });
 const introspection = introspectionFromSchema(schema);

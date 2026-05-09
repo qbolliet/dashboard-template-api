@@ -13,7 +13,7 @@ import type { SecurityConfig } from '../utils/config-loader.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Contexte GraphQL étendu avec les informations de sécurité. */
+/** Extended GraphQL context carrying security-related request information. */
 interface GraphQLContext {
     req?:           HttpRequest;
     requestId?:     string;
@@ -21,13 +21,13 @@ interface GraphQLContext {
     [key: string]:  unknown;
 }
 
-/** Contexte de traçabilité pour les entrées de log de sécurité. */
+/** Tracing context attached to security log entries. */
 interface SecurityLogContext {
     requestId?:     string;
     operationName:  string;
 }
 
-/** Métriques collectées lors de l'exécution d'un resolver. */
+/** Performance and security metrics collected during a resolver execution. */
 interface SecurityMetrics {
     executionTime:       number;
     complexity:          number;
@@ -35,18 +35,18 @@ interface SecurityMetrics {
     success:             boolean;
 }
 
-/** Représentation minimale d'une opération GraphQL pour la validation. */
+/** Minimal representation of a GraphQL operation used for validation. */
 interface GraphQLOperation {
     name?:       { value?: string };
     operation?:  string;
 }
 
-/** Représentation minimale d'une requête HTTP pour la validation au niveau document. */
+/** Minimal representation of an HTTP request used for document-level validation. */
 interface GraphQLRequest {
     query?: string;
 }
 
-// Signature du resolver GraphQL originel
+/** Signature of an original GraphQL resolver function. */
 type ResolverFn = (
     root:    unknown,
     args:    Record<string, unknown>,
@@ -54,7 +54,7 @@ type ResolverFn = (
     info:    GraphQLResolveInfo
 ) => Promise<unknown> | unknown;
 
-// Signature de la fonction middleware de sécurité
+/** Signature of the security middleware function that wraps a resolver. */
 type MiddlewareFn = (
     resolve: ResolverFn,
     root:    unknown,
@@ -83,8 +83,7 @@ class SecurityManager {
     /**
      * Initializes all security sub-modules from the provided configuration.
      *
-     * Args:
-     *     securityConfig: Security section of the application configuration.
+     * @param securityConfig - Security section of the application configuration.
      */
     constructor(securityConfig: SecurityConfig = config.SECURITY) {
         this.config = securityConfig;
@@ -109,8 +108,7 @@ class SecurityManager {
      * input sanitization, then delegates to the original resolver. Security
      * metrics are logged after each successful resolution.
      *
-     * Returns:
-     *     Async middleware function to wrap GraphQL resolvers.
+     * @returns Async middleware function to wrap GraphQL resolvers.
      */
     createSecurityMiddleware(): MiddlewareFn {
         return async (resolve, root, args, context, info) => {
@@ -182,13 +180,10 @@ class SecurityManager {
      * Checks for forbidden query patterns, disallowed operation names,
      * and non-query operation types (mutations and subscriptions are blocked).
      *
-     * Args:
-     *     operation: Parsed GraphQL operation definition.
-     *     request: Raw HTTP request containing the query string.
-     *     context: GraphQL execution context for logging.
-     *
-     * Raises:
-     *     GraphQLError: When the operation fails any validation check.
+     * @param operation - Parsed GraphQL operation definition.
+     * @param request - Raw HTTP request containing the query string.
+     * @param context - GraphQL execution context for logging.
+     * @throws {GraphQLError} When the operation fails any validation check.
      */
     async validateRequest(
         operation: GraphQLOperation,
@@ -232,11 +227,8 @@ class SecurityManager {
     /**
      * Determines whether a named operation is permitted to execute.
      *
-     * Args:
-     *     operationName: Name of the GraphQL operation.
-     *
-     * Returns:
-     *     True when the operation may proceed.
+     * @param operationName - Name of the GraphQL operation.
+     * @returns True when the operation may proceed.
      */
     private isOperationAllowed(operationName: string): boolean {
         // Autorisation de l'introspection en dehors de la production
@@ -250,11 +242,8 @@ class SecurityManager {
     /**
      * Determines whether rate limiting should be skipped for a given field.
      *
-     * Args:
-     *     info: GraphQL resolve info (may be undefined).
-     *
-     * Returns:
-     *     True when rate limiting should be bypassed.
+     * @param info - GraphQL resolve info (may be undefined).
+     * @returns True when rate limiting should be bypassed.
      */
     private shouldSkipRateLimit(info?: GraphQLResolveInfo): boolean {
         // Exemption des champs d'introspection hors production
@@ -273,9 +262,8 @@ class SecurityManager {
      * Slow queries are always logged; full metrics are logged only when
      * LOG_ALL_METRICS is enabled in the monitoring configuration.
      *
-     * Args:
-     *     info: GraphQL resolve info (may be undefined).
-     *     metrics: Execution metrics to record.
+     * @param info - GraphQL resolve info (may be undefined).
+     * @param metrics - Execution metrics to record.
      */
     private logSecurityMetrics(
         info:    GraphQLResolveInfo | undefined,
@@ -307,10 +295,9 @@ class SecurityManager {
      * Distinguishes between declared security violations and unexpected errors
      * to route them to the appropriate log level.
      *
-     * Args:
-     *     error: The caught error.
-     *     info: GraphQL resolve info (may be undefined).
-     *     context: Security log context for enrichment.
+     * @param error - The caught error.
+     * @param info - GraphQL resolve info (may be undefined).
+     * @param context - Security log context for enrichment.
      */
     private handleSecurityError(
         error:   unknown,
@@ -349,14 +336,9 @@ let securityManagerInstance: SecurityManager | null = null;
 /**
  * Initializes the global SecurityManager singleton with a given configuration.
  *
- * Args:
- *     securityConfig: Security configuration to pass to the constructor.
- *
- * Returns:
- *     The newly created SecurityManager instance.
- *
- * Raises:
- *     Error: When the singleton has already been initialized.
+ * @param securityConfig - Security configuration to pass to the constructor.
+ * @returns The newly created SecurityManager instance.
+ * @throws {Error} When the singleton has already been initialized.
  */
 const initializeSecurityManager = (securityConfig: SecurityConfig): SecurityManager => {
     if (securityManagerInstance) {
@@ -369,8 +351,7 @@ const initializeSecurityManager = (securityConfig: SecurityConfig): SecurityMana
 /**
  * Returns the global SecurityManager singleton, initializing with defaults if needed.
  *
- * Returns:
- *     The active SecurityManager instance.
+ * @returns The active SecurityManager instance.
  */
 const getSecurityManager = (): SecurityManager => {
     if (!securityManagerInstance) {

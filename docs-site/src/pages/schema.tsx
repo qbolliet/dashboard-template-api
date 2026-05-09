@@ -6,17 +6,26 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 // VoyagerLoader is rendered only in the browser (inside BrowserOnly),
 // so it is safe to call require() and use browser APIs here.
 function VoyagerLoader({ schemaUrl }: { schemaUrl: string }): JSX.Element {
+  const [error, setError] = React.useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { Voyager } = require('graphql-voyager');
 
   async function introspectionProvider(_query: string) {
     const res = await fetch(schemaUrl);
     if (!res.ok) {
-      throw new Error(
-        'schema.json not found — run `node docs-site/scripts/generate-schema.mjs` and rebuild the docs.'
-      );
+      const msg = `schema.json not found (HTTP ${res.status}) — run \`npm run build && npm run docs:schema\` from the repo root, then restart the docs server.`;
+      setError(msg);
+      throw new Error(msg);
     }
     return res.json();
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: '2rem', color: '#c00', fontFamily: 'monospace', fontSize: '0.9rem' }}>
+        ⚠️ {error}
+      </div>
+    );
   }
 
   return (

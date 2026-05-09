@@ -7,20 +7,20 @@ import type { SecurityPatternEntry } from '../utils/config-loader.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Pattern bloqué compilé en expression régulière. */
+/** A blocked pattern compiled into a regular expression. */
 interface CompiledPattern {
     regex:    RegExp;
     message:  string;
     original: string;
 }
 
-/** Ensemble brut des patterns chargés depuis la configuration. */
+/** Raw set of patterns loaded from the configuration. */
 interface PatternSet {
     blocked: SecurityPatternEntry[];
     allowed: string[];
 }
 
-/** Ensemble des patterns compilés prêts pour la validation. */
+/** Set of compiled patterns ready for validation. */
 interface CompiledPatternSet {
     blocked: CompiledPattern[];
     allowed: string[];
@@ -58,8 +58,7 @@ class PatternValidator {
      * Falls back to sensible defaults when the SECURITY_PATTERNS section
      * is absent from the loaded configuration.
      *
-     * Returns:
-     *     PatternSet with blocked and allowed pattern definitions.
+     * @returns PatternSet with blocked and allowed pattern definitions.
      */
     private loadPatterns(): PatternSet {
         try {
@@ -103,8 +102,7 @@ class PatternValidator {
      * Patterns that fail to compile are logged and skipped so a single
      * malformed entry does not disable the whole validator.
      *
-     * Returns:
-     *     CompiledPatternSet with ready-to-use RegExp objects.
+     * @returns CompiledPatternSet with ready-to-use RegExp objects.
      */
     private compilePatterns(): CompiledPatternSet {
         const compiled: CompiledPatternSet = { blocked: [], allowed: [] };
@@ -136,11 +134,8 @@ class PatternValidator {
      * Otherwise, each blocked pattern is tested and an error is thrown
      * on the first match.
      *
-     * Args:
-     *     query: Raw GraphQL query string to validate.
-     *
-     * Raises:
-     *     GraphQLError: When a blocked pattern is detected in the query.
+     * @param query - Raw GraphQL query string to validate.
+     * @throws {GraphQLError} When a blocked pattern is detected in the query.
      */
     async validateQuery(query: string | null | undefined): Promise<void> {
         if (!query || typeof query !== 'string') {

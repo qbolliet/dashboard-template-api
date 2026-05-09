@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 
 // ─── Interfaces de configuration ────────────────────────────────────────────
 
-/** Configuration du transport fichier pour le logger. */
+/** File transport configuration for the logger. */
 interface FileTransportConfig {
     enabled: boolean;
     directory: string;
@@ -21,26 +21,26 @@ interface FileTransportConfig {
     compress: boolean;
 }
 
-/** Configuration du transport console pour le logger. */
+/** Console transport configuration for the logger. */
 interface ConsoleTransportConfig {
     enabled: boolean;
 }
 
-/** Configuration du transport fichier d'erreurs pour le logger. */
+/** Error file transport configuration for the logger. */
 interface ErrorTransportConfig {
     enabled: boolean;
     directory: string;
     filename: string;
 }
 
-/** Entrée brute d'un pattern de sécurité (liste bloquée). */
+/** Raw entry for a security pattern (block-list). */
 interface SecurityPatternEntry {
     pattern: string;
     message: string;
     flags?: string;
 }
 
-/** Configuration du rate limiter. */
+/** Rate limiter configuration. */
 interface RateLimitConfig {
     MAX_REQUESTS: number;
     WINDOW_MS: number;
@@ -50,7 +50,7 @@ interface RateLimitConfig {
     TRUSTED_PROXIES: string[];
 }
 
-/** Configuration de l'analyse de complexité des requêtes. */
+/** Query complexity analysis configuration. */
 interface ComplexityConfig {
     MAX_ALLOWED: number;
     SCALAR_COST: number;
@@ -61,7 +61,7 @@ interface ComplexityConfig {
     CUSTOM_SCORES: Record<string, number>;
 }
 
-/** Configuration de la sanitisation des entrées utilisateur. */
+/** User input sanitization configuration. */
 interface SanitizationConfig {
     ENABLE_XSS: boolean;
     ENABLE_SQL: boolean;
@@ -70,13 +70,13 @@ interface SanitizationConfig {
     CUSTOM_SANITIZERS: Record<string, (value: unknown) => unknown>;
 }
 
-/** Configuration du monitoring de sécurité. */
+/** Security monitoring configuration. */
 interface SecurityMonitoringConfig {
     SLOW_QUERY_THRESHOLD: number;
     LOG_ALL_METRICS: boolean;
 }
 
-/** Configuration de sécurité complète (section SECURITY du YAML). */
+/** Full security configuration (SECURITY section of the YAML). */
 interface SecurityConfig {
     MAX_QUERY_DEPTH: number;
     RATE_LIMIT: RateLimitConfig;
@@ -85,7 +85,7 @@ interface SecurityConfig {
     MONITORING: SecurityMonitoringConfig;
 }
 
-/** Limites globales de sécurité (section SECURITY_LIMITS du YAML). */
+/** Global security limits (SECURITY_LIMITS section of the YAML). */
 interface SecurityLimitsConfig {
     DEFAULT_DEPTH_LIMIT: number;
     MAX_INPUT_LENGTH: number;
@@ -94,13 +94,13 @@ interface SecurityLimitsConfig {
     COMPLEXITY_CALCULATION_FACTOR: number;
 }
 
-/** Patterns de validation des requêtes (section SECURITY_PATTERNS du YAML). */
+/** Request validation patterns (SECURITY_PATTERNS section of the YAML). */
 interface SecurityPatternsConfig {
     blocked: SecurityPatternEntry[];
     allowed: string[];
 }
 
-/** Seuils de sécurité exposés dans la section API du YAML. */
+/** Security thresholds exposed in the API section of the YAML. */
 interface SecurityThresholdsConfig {
     HSTS_MAX_AGE: number;
     VALIDATION_MAX_LENGTH: number;
@@ -108,7 +108,7 @@ interface SecurityThresholdsConfig {
     QUERY_SNIPPET_LENGTH: number;
 }
 
-/** Configuration CORS de l'API. */
+/** API CORS configuration. */
 interface CorsConfig {
     CREDENTIALS: boolean;
     METHODS: string[];
@@ -116,27 +116,27 @@ interface CorsConfig {
     ORIGINS: string[];
 }
 
-/** Limites de taille des requêtes entrantes. */
+/** Size limits for incoming HTTP requests. */
 interface RequestLimitsConfig {
     MAX_REQUEST_SIZE: string;
     MAX_FIELD_SIZE: number;
     MAX_FIELDS: number;
 }
 
-/** Configuration de la compression des réponses HTTP. */
+/** HTTP response compression configuration. */
 interface CompressionConfig {
     ENABLED: boolean;
     THRESHOLD: number;
     LEVEL: number;
 }
 
-/** Configuration GraphQL (introspection et playground). */
+/** GraphQL configuration (introspection and playground). */
 interface GraphqlConfig {
     INTROSPECTION: boolean;
     PLAYGROUND: boolean;
 }
 
-/** Configuration des DataLoaders (taille de batch et timeouts de cache). */
+/** DataLoader configuration (batch size and cache timeouts). */
 interface LoadersConfig {
     BATCH_SIZE: number;
     MAX_BATCH_SIZE: number;
@@ -147,7 +147,7 @@ interface LoadersConfig {
     SELECT_OPTIONS_CACHE_TIMEOUT: number;
 }
 
-/** Limites de pagination appliquées aux requêtes GraphQL. */
+/** Pagination limits applied to GraphQL queries. */
 interface PaginationConfig {
     DEFAULT_LIMIT: number;
     MAX_LIMIT: number;
@@ -155,13 +155,13 @@ interface PaginationConfig {
     SELECT_OPTIONS_LIMIT: number;
 }
 
-/** Configuration Redis — stratégie de reconnexion. */
+/** Redis configuration — reconnection back-off strategy. */
 interface CacheRetryStrategyConfig {
     BASE_DELAY: number;
     MAX_DELAY:  number;
 }
 
-/** Configuration Redis — options avancées de connexion. */
+/** Redis configuration — advanced connection options. */
 interface CacheRedisOptionsConfig {
     RETRY_STRATEGY:          CacheRetryStrategyConfig;
     MAX_RETRIES_PER_REQUEST: number;
@@ -169,19 +169,19 @@ interface CacheRedisOptionsConfig {
     CONNECT_TIMEOUT:         number;
 }
 
-/** Configuration Redis — nœud de cluster. */
+/** Redis configuration — single cluster node. */
 interface CacheClusterNodeConfig {
     host: string;
     port: number;
 }
 
-/** Configuration Redis — mode cluster. */
+/** Redis configuration — cluster mode. */
 interface CacheClusterConfig {
     ENABLED: boolean;
     NODES:   CacheClusterNodeConfig[];
 }
 
-/** Configuration du client Redis. */
+/** Redis client configuration. */
 interface CacheRedisConfig {
     HOST:       string;
     PORT:       number;
@@ -192,7 +192,7 @@ interface CacheRedisConfig {
     CLUSTER?:   CacheClusterConfig;
 }
 
-/** Durées de vie des entrées Redis par type de données (en secondes). */
+/** Redis entry TTLs per data type (in seconds). */
 interface CacheTTLConfig {
     DEFAULT:          number;
     METADATA:         number;
@@ -203,7 +203,7 @@ interface CacheTTLConfig {
     COUNT_QUERIES:    number;
 }
 
-/** Paramètres d'invalidation automatique du cache. */
+/** Automatic cache invalidation parameters. */
 interface CacheInvalidationConfig {
     GRACE_PERIOD:    number;
     AUTO_INVALIDATE: boolean;
@@ -211,13 +211,13 @@ interface CacheInvalidationConfig {
     TIMEOUT:         number;
 }
 
-/** Configuration du cache HTTP (en-têtes de contrôle). */
+/** HTTP cache configuration (control headers). */
 interface CacheHttpConfig {
     PUBLIC_PATHS:    string[];
     VARY_BY_HEADERS: string[];
 }
 
-/** Configuration complète du cache Redis et HTTP. */
+/** Complete Redis and HTTP cache configuration. */
 interface CacheConfig {
     REDIS:        CacheRedisConfig;
     TTL:          CacheTTLConfig;
@@ -225,7 +225,7 @@ interface CacheConfig {
     HTTP_CACHE:   CacheHttpConfig;
 }
 
-/** Configuration d'un catalogue DuckLake individuel. */
+/** Configuration for an individual DuckLake catalog. */
 export interface CatalogConfig {
     PATH: string;
     DATA_PATH: string;
@@ -233,7 +233,7 @@ export interface CatalogConfig {
     SCHEMA?: string;
 }
 
-/** Configuration S3 pour le stockage distant des fichiers Parquet. */
+/** S3 configuration for remote Parquet file storage. */
 interface S3Config {
     ENABLED: boolean;
     ACCESS_KEY?: string;
@@ -242,7 +242,7 @@ interface S3Config {
     ENDPOINT?: string;
 }
 
-/** Configuration complète de l'application chargée depuis les fichiers YAML. */
+/** Complete application configuration loaded from YAML files. */
 interface AppConfig {
     ENVIRONMENT: string;
     API: {
@@ -305,7 +305,7 @@ interface AppConfig {
     };
 }
 
-/** Objet intermédiaire générique utilisé lors de la fusion et de la résolution. */
+/** Generic intermediate object used during merging and resolution. */
 type ConfigRecord = Record<string, unknown>;
 
 // ─── Classe de chargement de la configuration ────────────────────────────────
@@ -331,11 +331,8 @@ class ConfigLoader {
      *
      * Subsequent calls return the cached result without re-reading files.
      *
-     * Returns:
-     *     The fully merged and validated application configuration.
-     *
-     * Raises:
-     *     Error: When a required field is missing or the environment is invalid.
+     * @returns The fully merged and validated application configuration.
+     * @throws {Error} When a required field is missing or the environment is invalid.
      */
     // Chargement et fusion de tous les fichiers de configuration YAML
     loadConfig(): AppConfig {
@@ -386,12 +383,9 @@ class ConfigLoader {
     /**
      * Performs a deep merge of two plain objects.
      *
-     * Args:
-     *     target: Base object to merge into.
-     *     source: Object whose properties override or extend the target.
-     *
-     * Returns:
-     *     A new object combining both inputs recursively.
+     * @param target - Base object to merge into.
+     * @param source - Object whose properties override or extend the target.
+     * @returns A new object combining both inputs recursively.
      */
     // Fusion profonde de deux objets simples (non destructive)
     private mergeDeep(target: ConfigRecord, source: ConfigRecord): ConfigRecord {
@@ -420,11 +414,8 @@ class ConfigLoader {
     /**
      * Checks whether a value is a plain (non-array) object.
      *
-     * Args:
-     *     item: Value to inspect.
-     *
-     * Returns:
-     *     True when the value is a non-null, non-array object.
+     * @param item - Value to inspect.
+     * @returns True when the value is a non-null, non-array object.
      */
     // Vérification qu'une valeur est un objet simple (hors tableaux)
     private isObject(item: unknown): item is ConfigRecord {
@@ -434,11 +425,8 @@ class ConfigLoader {
     /**
      * Resolves `${VAR:-default}` placeholders against process environment variables.
      *
-     * Args:
-     *     obj: Configuration value (string, array, or object) to process recursively.
-     *
-     * Returns:
-     *     The same structure with all placeholders replaced.
+     * @param obj - Configuration value (string, array, or object) to process recursively.
+     * @returns The same structure with all placeholders replaced.
      */
     // Résolution des variables d'environnement au format ${VAR:-default}
     private resolveEnvVariables(obj: unknown): ConfigRecord {
@@ -471,11 +459,8 @@ class ConfigLoader {
      * When an object has `development` or `production` keys, the current
      * environment's values are inlined, replacing the branched structure.
      *
-     * Args:
-     *     config: Raw configuration record after env-variable resolution.
-     *
-     * Returns:
-     *     Configuration with environment branches flattened.
+     * @param config - Raw configuration record after env-variable resolution.
+     * @returns Configuration with environment branches flattened.
      */
     // Aplatissement des branches d'environnement (development / production)
     private applyEnvironmentSpecific(config: ConfigRecord): ConfigRecord {
@@ -524,11 +509,8 @@ class ConfigLoader {
     /**
      * Converts string representations of numbers and booleans to native types.
      *
-     * Args:
-     *     obj: Configuration value to process recursively.
-     *
-     * Returns:
-     *     The same structure with strings coerced where applicable.
+     * @param obj - Configuration value to process recursively.
+     * @returns The same structure with strings coerced where applicable.
      */
     // Conversion automatique des chaînes numériques et booléennes vers leurs types natifs
     private convertNumericValues(obj: unknown): ConfigRecord {
@@ -569,11 +551,8 @@ class ConfigLoader {
     /**
      * Validates that the ENVIRONMENT field holds a recognised value.
      *
-     * Args:
-     *     config: Configuration record after all transformations.
-     *
-     * Raises:
-     *     Error: When ENVIRONMENT is not one of the allowed values.
+     * @param config - Configuration record after all transformations.
+     * @throws {Error} When ENVIRONMENT is not one of the allowed values.
      */
     // Vérification de la validité de la valeur d'environnement
     private validateEnvironment(config: ConfigRecord): void {
@@ -590,11 +569,8 @@ class ConfigLoader {
     /**
      * Validates that all required configuration fields are present and non-empty.
      *
-     * Args:
-     *     config: Configuration record after all transformations.
-     *
-     * Raises:
-     *     Error: When one or more required fields are absent.
+     * @param config - Configuration record after all transformations.
+     * @throws {Error} When one or more required fields are absent.
      */
     // Validation de la présence des champs obligatoires au démarrage
     private validateRequiredFields(config: ConfigRecord): void {
@@ -637,12 +613,9 @@ class ConfigLoader {
     /**
      * Retrieves a configuration value by dot-separated path.
      *
-     * Args:
-     *     dotPath: Dot-separated key path, e.g. "API.PORT".
-     *     defaultValue: Value returned when the path does not exist.
-     *
-     * Returns:
-     *     The value at the given path, or defaultValue when absent.
+     * @param dotPath - Dot-separated key path, e.g. "API.PORT".
+     * @param defaultValue - Value returned when the path does not exist.
+     * @returns The value at the given path, or defaultValue when absent.
      */
     // Accès à une valeur de configuration par chemin en pointillés
     get(dotPath: string, defaultValue: unknown = null): unknown {
@@ -660,7 +633,9 @@ class ConfigLoader {
 }
 
 // Instanciation du loader et chargement immédiat de la configuration
+/** Singleton {@link ConfigLoader} instance for the application. */
 const configLoader = new ConfigLoader();
+/** Fully resolved application configuration, loaded at module initialisation. */
 const config = configLoader.loadConfig();
 
 export { configLoader, config };

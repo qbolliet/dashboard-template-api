@@ -5,7 +5,7 @@ import type { GraphQLContext } from './types.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments de la requête getMetaData. */
+/** Arguments for the getMetaData query. */
 export interface MetadataArgs {
     name: string;
     database?: string | null;
@@ -23,14 +23,11 @@ const metadataResolvers = {
         /**
          * Fetches metadata for a given field name.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     name: Name of the field to retrieve metadata for.
-         *     database: Optional database alias override.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Metadata row for the requested field, or null if not found.
+         * @param _ - Parent resolver result (unused at root).
+         * @param name - Name of the field to retrieve metadata for.
+         * @param database - Optional database alias override.
+         * @param context - GraphQL context with loaders.
+         * @returns Metadata row for the requested field, or null if not found.
          */
         getMetaData: async (
             _: unknown,

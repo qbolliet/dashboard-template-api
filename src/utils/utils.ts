@@ -1,4 +1,4 @@
-/** Filtre structuré pour la construction d'une clause WHERE SQL. */
+/** Structured filter used to build a SQL WHERE clause. */
 interface StructuredFilter {
     key: string;
     operator: string;
@@ -12,15 +12,10 @@ interface StructuredFilter {
  * Rejects anything that starts with a digit or contains characters outside
  * the set [a-zA-Z0-9_] to prevent SQL injection via identifier names.
  *
- * Args:
- *     name: The candidate identifier to validate.
- *     context: Label used in the error message to describe the identifier type.
- *
- * Returns:
- *     The validated identifier, unchanged.
- *
- * Raises:
- *     Error: When the identifier contains unsafe characters or is not a string.
+ * @param name - The candidate identifier to validate.
+ * @param context - Label used in the error message to describe the identifier type.
+ * @returns The validated identifier, unchanged.
+ * @throws {Error} When the identifier contains unsafe characters or is not a string.
  */
 // Validation d'un identifiant SQL — protection contre les injections par nom de champ
 const validateIdentifier = (name: unknown, context: string = 'field'): string => {
@@ -39,12 +34,9 @@ const validateIdentifier = (name: unknown, context: string = 'field'): string =>
  * value-less operators such as IS NULL. String values are automatically
  * quoted and single-quote characters are escaped.
  *
- * Args:
- *     filters: Raw SQL predicate string (trusted upstream).
- *     structuredFilters: Typed filter objects to convert to SQL predicates.
- *
- * Returns:
- *     A complete WHERE clause string, or an empty string when no filters exist.
+ * @param filters - Raw SQL predicate string (trusted upstream).
+ * @param structuredFilters - Typed filter objects to convert to SQL predicates.
+ * @returns A complete WHERE clause string, or an empty string when no filters exist.
  */
 // Construction de la clause WHERE à partir des filtres bruts et structurés
 const buildWhereClause = (

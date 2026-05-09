@@ -18,7 +18,7 @@ const dbLogger = createContextLogger({
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-/** Statistiques du pool partagé retournées par getStatistics(). */
+/** Shared pool statistics returned by {@link DatabaseManager.getStatistics}. */
 interface PoolStats {
     available: number;
     using: number;
@@ -27,7 +27,7 @@ interface PoolStats {
     attachedCatalogs: string[];
 }
 
-/** Statistiques complètes du gestionnaire de bases de données. */
+/** Full statistics snapshot for the database manager. */
 interface DatabaseStats {
     sharedPool: PoolStats | null;
     defaultDatabase: string;
@@ -184,14 +184,9 @@ class DatabaseManager {
      * Get the shared connection pool.
      * Validates that the requested catalogId is allowed before returning the pool.
      *
-     * Args:
-     *     catalogId: Catalog to validate access for (null = default).
-     *
-     * Returns:
-     *     The shared connection pool.
-     *
-     * Raises:
-     *     Error: If catalogId is not in ALLOWED_DATABASES.
+     * @param catalogId - Catalog to validate access for (null = default).
+     * @returns The shared connection pool.
+     * @throws {Error} If catalogId is not in ALLOWED_DATABASES.
      */
     getPool(catalogId: string | null = null): DuckDBPool {
         const targetCatalog = catalogId ?? this.defaultDatabase;
@@ -213,11 +208,8 @@ class DatabaseManager {
     /**
      * Validate if a catalog ID is in the allowed list.
      *
-     * Args:
-     *     catalogId: Catalog identifier to validate.
-     *
-     * Returns:
-     *     True if the catalog is allowed.
+     * @param catalogId - Catalog identifier to validate.
+     * @returns True if the catalog is allowed.
      */
     isValidDatabase(catalogId: string): boolean {
         return this.allowedDatabases.includes(catalogId);
@@ -226,8 +218,7 @@ class DatabaseManager {
     /**
      * Get list of allowed catalog IDs.
      *
-     * Returns:
-     *     List of allowed catalog identifiers.
+     * @returns List of allowed catalog identifiers.
      */
     getAvailableDatabases(): string[] {
         return [...this.allowedDatabases];
@@ -236,8 +227,7 @@ class DatabaseManager {
     /**
      * Get default catalog ID.
      *
-     * Returns:
-     *     Default catalog identifier.
+     * @returns Default catalog identifier.
      */
     getDefaultDatabase(): string {
         return this.defaultDatabase;
@@ -247,11 +237,8 @@ class DatabaseManager {
      * Get the DuckLake schema name for a catalog.
      * Defaults to 'main' if not configured.
      *
-     * Args:
-     *     catalogId: Catalog identifier.
-     *
-     * Returns:
-     *     Schema name (e.g. 'main').
+     * @param catalogId - Catalog identifier.
+     * @returns Schema name (e.g. 'main').
      */
     getSchema(catalogId: string): string {
         return (
@@ -264,8 +251,7 @@ class DatabaseManager {
     /**
      * Check if cross-catalog queries are allowed.
      *
-     * Returns:
-     *     True if cross-catalog queries are allowed.
+     * @returns True if cross-catalog queries are allowed.
      */
     isCrossDatabaseAllowed(): boolean {
         return this.allowCrossDatabase;
@@ -275,15 +261,10 @@ class DatabaseManager {
      * Validate and resolve the catalog ID for a GraphQL request.
      * Priority: explicit parameter > HTTP header context > default catalog.
      *
-     * Args:
-     *     requestedDatabase: Catalog requested by the client.
-     *     contextDatabase: Catalog from request context (HTTP header).
-     *
-     * Returns:
-     *     Validated catalog ID to use.
-     *
-     * Raises:
-     *     Error: If the resolved catalog is not available.
+     * @param requestedDatabase - Catalog requested by the client.
+     * @param contextDatabase - Catalog from request context (HTTP header).
+     * @returns Validated catalog ID to use.
+     * @throws {Error} If the resolved catalog is not available.
      */
     validateDatabaseRouting(
         requestedDatabase: string | null = null,
@@ -325,8 +306,7 @@ class DatabaseManager {
     /**
      * Get connection statistics for the shared pool.
      *
-     * Returns:
-     *     Statistics for the shared pool and routing configuration.
+     * @returns Statistics for the shared pool and routing configuration.
      */
     getStatistics(): DatabaseStats {
         // Récupération des statistiques du pool partagé si disponible
@@ -352,8 +332,10 @@ class DatabaseManager {
 }
 
 // Création de l'instance singleton du gestionnaire de base de données
+/** Singleton instance of the database manager used throughout the application. */
 const databaseManager = new DatabaseManager();
 
+/** Closes all open connections by delegating to {@link DatabaseManager.close}. */
 // Fonction de fermeture des connexions avec logging
 const closeAllConnections = async (): Promise<void> => {
     await databaseManager.close();

@@ -9,7 +9,7 @@ import type { AggregationType } from './aggregated-facts.js';
 
 // ─── Interfaces des paramètres de requêtes cross-database ─────────────────────
 
-/** Paramètres de comparaison de la table des faits entre deux bases de données. */
+/** Parameters for comparing the fact table between two databases. */
 interface CompareFactsParams {
     databaseA: string;
     databaseB: string;
@@ -19,7 +19,7 @@ interface CompareFactsParams {
     sort?: SortItem[];
 }
 
-/** Paramètres de comparaison des faits agrégés entre deux bases de données. */
+/** Parameters for comparing aggregated facts between two databases. */
 interface CompareAggregatedFactsParams {
     databaseA: string;
     databaseB: string;
@@ -29,7 +29,7 @@ interface CompareAggregatedFactsParams {
     offset: number;
 }
 
-/** Paramètres de sélection d'options cross-database (intersection des valeurs). */
+/** Parameters for cross-database select option intersection queries. */
 interface CrossDatabaseSelectOptionsParams {
     fieldName: string;
     databases: string[];
@@ -38,7 +38,7 @@ interface CrossDatabaseSelectOptionsParams {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Ligne de comparaison entre deux bases de données (delta et delta%). */
+/** Comparison row between two databases (delta and delta%). */
 interface ComparisonRow {
     key: string;
     valueA: number | null;
@@ -47,7 +47,7 @@ interface ComparisonRow {
     deltaPercent: number | null;
 }
 
-/** Résultat paginé d'une comparaison cross-database. */
+/** Paginated result of a cross-database comparison. */
 interface ComparisonResult {
     data: ComparisonRow[];
     total: number;
@@ -56,7 +56,7 @@ interface ComparisonResult {
     totalPages: number;
 }
 
-/** Option de sélection issue d'une requête cross-database. */
+/** Select option from a cross-database query. */
 interface CrossDatabaseSelectOption {
     value: unknown;
     label?: unknown;
@@ -94,12 +94,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
      * Returns delta (B - A) and deltaPercent ((B - A) / A * 100) per row.
      * Pagination metadata (total, hasNextPage, etc.) is included in the result.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Parameters defining the two databases, join fields, and pagination.
-     *
-     * Returns:
-     *     Paginated comparison result with delta values.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Parameters defining the two databases, join fields, and pagination.
+     * @returns Paginated comparison result with delta values.
      */
     async compareFacts(
         connection: DuckDBConnection,
@@ -183,12 +180,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
      * Uses CTEs to pre-aggregate each side before joining, avoiding
      * Cartesian products. Returns delta and deltaPercent per group key.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Parameters defining databases, groupBy, aggregation, and pagination.
-     *
-     * Returns:
-     *     Paginated comparison result with aggregated delta values.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Parameters defining databases, groupBy, aggregation, and pagination.
+     * @returns Paginated comparison result with aggregated delta values.
      */
     async compareAggregatedFacts(
         connection: DuckDBConnection,
@@ -270,12 +264,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
      * Uses the primary catalog for labels and applies IN/INTERSECT subqueries
      * to restrict results to values present in all other catalogs.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Parameters defining the field, database list, and limit.
-     *
-     * Returns:
-     *     Array of options present in all provided catalogs.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Parameters defining the field, database list, and limit.
+     * @returns Array of options present in all provided catalogs.
      */
     async crossDatabaseSelectOptions(
         connection: DuckDBConnection,
@@ -335,8 +326,7 @@ class CrossDatabaseLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for fact table comparison between two databases.
  *
- * Returns:
- *     DataLoader keyed by CompareFactsParams, returning ComparisonResult.
+ * @returns DataLoader keyed by CompareFactsParams, returning ComparisonResult.
  */
 const createCompareFacts = () => {
     const loader = new CrossDatabaseLoader();
@@ -349,8 +339,7 @@ const createCompareFacts = () => {
 /**
  * Creates a DataLoader for aggregated fact comparison between two databases.
  *
- * Returns:
- *     DataLoader keyed by CompareAggregatedFactsParams, returning ComparisonResult.
+ * @returns DataLoader keyed by CompareAggregatedFactsParams, returning ComparisonResult.
  */
 const createCompareAggregatedFacts = () => {
     const loader = new CrossDatabaseLoader();
@@ -363,8 +352,7 @@ const createCompareAggregatedFacts = () => {
 /**
  * Creates a DataLoader for cross-database select option intersection queries.
  *
- * Returns:
- *     DataLoader keyed by CrossDatabaseSelectOptionsParams.
+ * @returns DataLoader keyed by CrossDatabaseSelectOptionsParams.
  */
 const createCrossDatabaseSelectOptions = () => {
     const loader = new CrossDatabaseLoader();

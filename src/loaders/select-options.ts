@@ -6,14 +6,14 @@ import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces des options de sélection ─────────────────────────────────────
 
-/** Paramètres d'une requête d'options de sélection. */
+/** Parameters for a select options query. */
 interface SelectOptionsParams {
     fieldName: string;
     limit: number;
     searchTerm?: string | null;
 }
 
-/** Option de sélection avec valeur et libellé. */
+/** Select option with value and label. */
 interface SelectOption {
     value: string;
     label: string;
@@ -32,8 +32,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
     /**
      * Creates a SelectOptionsLoader bound to a specific database.
      *
-     * Args:
-     *     databaseId: Catalog alias to query; null uses the default database.
+     * @param databaseId - Catalog alias to query; null uses the default database.
      */
     constructor(databaseId: string | null = null) {
         super({
@@ -53,12 +52,9 @@ class SelectOptionsLoader extends BaseQueryLoader {
      * Checks the metadata table to determine whether the field is categorical,
      * then delegates to loadFromDimension or loadFromFacts accordingly.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Object with fieldName, limit, and optional searchTerm.
-     *
-     * Returns:
-     *     Array of SelectOption objects, or empty array on error.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Object with fieldName, limit, and optional searchTerm.
+     * @returns Array of SelectOption objects, or empty array on error.
      */
     async loadSelectOptions(
         connection: DuckDBConnection,
@@ -88,14 +84,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
     /**
      * Loads options from the dimension table for a categorical field.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     fieldName: Name of the categorical field (table: dim_{fieldName}).
-     *     limit: Maximum number of options to return.
-     *     searchTerm: Optional substring filter applied to the label column.
-     *
-     * Returns:
-     *     Array of SelectOption with value and label from the dimension table.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param fieldName - Name of the categorical field (table: dim_{fieldName}).
+     * @param limit - Maximum number of options to return.
+     * @param searchTerm - Optional substring filter applied to the label column.
+     * @returns Array of SelectOption with value and label from the dimension table.
      */
     private async loadFromDimension(
         connection: DuckDBConnection,
@@ -131,14 +124,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
     /**
      * Loads distinct field values from the fact table for a non-categorical field.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     fieldName: Name of the field to extract distinct values from.
-     *     limit: Maximum number of options to return.
-     *     searchTerm: Optional substring filter on the cast value string.
-     *
-     * Returns:
-     *     Array of SelectOption where value and label are both the raw value.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param fieldName - Name of the field to extract distinct values from.
+     * @param limit - Maximum number of options to return.
+     * @param searchTerm - Optional substring filter on the cast value string.
+     * @returns Array of SelectOption where value and label are both the raw value.
      */
     private async loadFromFacts(
         connection: DuckDBConnection,
@@ -175,11 +165,8 @@ class SelectOptionsLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for select option queries.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by SelectOptionsParams, returning SelectOption arrays.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by SelectOptionsParams, returning SelectOption arrays.
  */
 const createSelectOptionsLoader = (databaseId: string | null = null) => {
     const loader = new SelectOptionsLoader(databaseId);

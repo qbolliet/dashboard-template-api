@@ -5,7 +5,7 @@ import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces de méta-données ───────────────────────────────────────────────
 
-/** Ligne de la table metadata retournée par DuckDB. */
+/** Row of the metadata table returned by DuckDB. */
 interface MetadataRow {
     name: string;
     is_categorical?: boolean;
@@ -26,8 +26,7 @@ class MetadataLoader extends BaseQueryLoader {
     /**
      * Creates a MetadataLoader bound to a specific database.
      *
-     * Args:
-     *     databaseId: Catalog alias to query; null uses the default database.
+     * @param databaseId - Catalog alias to query; null uses the default database.
      */
     constructor(databaseId: string | null = null) {
         super({
@@ -47,12 +46,9 @@ class MetadataLoader extends BaseQueryLoader {
      * Converts is_categorical and is_primary_key columns from integer
      * to boolean before returning.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     name: Field name to look up in the metadata table.
-     *
-     * Returns:
-     *     Metadata row for the given name, or null when not found.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param name - Field name to look up in the metadata table.
+     * @returns Metadata row for the given name, or null when not found.
      */
     async loadSingle(connection: DuckDBConnection, name: string): Promise<MetadataRow | null> {
         // Paramétrisation de la requête pour éviter les injections SQL
@@ -83,11 +79,8 @@ class MetadataLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for metadata lookups.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by field name, returning MetadataRow or null.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by field name, returning MetadataRow or null.
  */
 const createMetadataLoader = (databaseId: string | null = null) => {
     const loader = new MetadataLoader(databaseId);

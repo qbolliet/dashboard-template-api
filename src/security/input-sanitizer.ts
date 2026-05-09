@@ -7,7 +7,7 @@ import type { ContextLogger } from '../utils/logger.js';
 
 // ─── Interface de configuration ──────────────────────────────────────────────
 
-/** Configuration interne normalisée du sanitizer. */
+/** Normalized internal configuration for the input sanitizer. */
 interface InputSanitizerConfig {
     enableXSS: boolean;
     enableSQL: boolean;
@@ -32,8 +32,7 @@ class InputSanitizer {
     /**
      * Initializes the sanitizer from the SANITIZATION section of the config.
      *
-     * Args:
-     *     sanitizationConfig: Raw sanitization configuration from YAML.
+     * @param sanitizationConfig - Raw sanitization configuration from YAML.
      */
     constructor(sanitizationConfig: Partial<Record<string, unknown>> = {}) {
         // Normalisation de la configuration avec les valeurs par défaut
@@ -65,11 +64,8 @@ class InputSanitizer {
      * Arrays are processed element by element; objects are processed field
      * by field, applying custom sanitizers when configured.
      *
-     * Args:
-     *     input: Value to sanitize (primitive, array, or plain object).
-     *
-     * Returns:
-     *     Sanitized value preserving the original structure.
+     * @param input - Value to sanitize (primitive, array, or plain object).
+     * @returns Sanitized value preserving the original structure.
      */
     sanitizeAll(input: unknown): unknown {
         if (input === null || input === undefined) {
@@ -100,15 +96,10 @@ class InputSanitizer {
     /**
      * Sanitizes a single value based on its runtime type.
      *
-     * Args:
-     *     value: Value to sanitize.
-     *     fieldName: Field name used in error messages.
-     *
-     * Returns:
-     *     Sanitized value.
-     *
-     * Raises:
-     *     GraphQLError: When the value violates a length or format constraint.
+     * @param value - Value to sanitize.
+     * @param fieldName - Field name used in error messages.
+     * @returns Sanitized value.
+     * @throws {GraphQLError} When the value violates a length or format constraint.
      */
     sanitizeValue(value: unknown, fieldName: string = 'unknown'): unknown {
         if (value === null || value === undefined) {
@@ -164,11 +155,8 @@ class InputSanitizer {
     /**
      * Applies XSS filtering using the configured tag whitelist.
      *
-     * Args:
-     *     input: Raw string to filter.
-     *
-     * Returns:
-     *     XSS-safe string.
+     * @param input - Raw string to filter.
+     * @returns XSS-safe string.
      */
     private sanitizeXSS(input: string): string {
         return xss(input, this.xssOptions);
@@ -181,14 +169,9 @@ class InputSanitizer {
      * in pool.js. This method only targets comment sequences that cannot
      * appear legitimately in analytical values.
      *
-     * Args:
-     *     input: String to inspect.
-     *
-     * Returns:
-     *     The original string when no forbidden sequence is found.
-     *
-     * Raises:
-     *     GraphQLError: When a SQL comment sequence is detected.
+     * @param input - String to inspect.
+     * @returns The original string when no forbidden sequence is found.
+     * @throws {GraphQLError} When a SQL comment sequence is detected.
      */
     private sanitizeSQL(input: string): string {
         if (/--|\/\*/.test(input)) {
@@ -206,15 +189,10 @@ class InputSanitizer {
     /**
      * Validates that a number is finite and within the safe integer range.
      *
-     * Args:
-     *     value: Number to validate.
-     *     fieldName: Field name used in error messages.
-     *
-     * Returns:
-     *     The validated number.
-     *
-     * Raises:
-     *     GraphQLError: When the number is infinite, NaN, or out of safe range.
+     * @param value - Number to validate.
+     * @param fieldName - Field name used in error messages.
+     * @returns The validated number.
+     * @throws {GraphQLError} When the number is infinite, NaN, or out of safe range.
      */
     private sanitizeNumber(value: number, fieldName: string): number {
         if (!Number.isFinite(value)) {

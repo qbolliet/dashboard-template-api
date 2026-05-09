@@ -10,14 +10,14 @@ import type { StructuredFilter } from '../../utils/utils.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments communs des requêtes sur la table des faits (inclut le routage). */
+/** Common arguments for fact table queries, including database routing. */
 export interface FactTableArgs extends FactQueryParams {
     database?: string | null;
 }
 
 // ─── Interfaces des résultats enrichis ───────────────────────────────────────
 
-/** Résultat paginé de la table des faits. */
+/** Paginated result from a fact table query. */
 export interface PaginatedFactResult {
     data: Record<string, unknown>[];
     total: number;
@@ -44,16 +44,11 @@ const factResolvers = {
          * issuing the DataLoader call, then enriches every returned row with
          * its categorical dimension labels in a single bulk pass.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     args: Fact query parameters including limit, offset and database.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Paginated result object with enriched fact rows.
-         *
-         * Raises:
-         *     GraphQLError: When limit or offset exceed configured maximums.
+         * @param _ - Parent resolver result (unused at root).
+         * @param args - Fact query parameters including limit, offset and database.
+         * @param context - GraphQL context with loaders.
+         * @returns Paginated result object with enriched fact rows.
+         * @throws {GraphQLError} When limit or offset exceed configured maximums.
          */
         // Requête standard des faits avec pagination et comptage
         getFactTable: async (
@@ -104,13 +99,10 @@ const factResolvers = {
          * Supports the ARRAYS output format which transposes row objects into
          * column-ordered arrays for direct consumption by D3 charting code.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     args: Fact query parameters including optional format and database.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Result with enriched data in the requested format.
+         * @param _ - Parent resolver result (unused at root).
+         * @param args - Fact query parameters including optional format and database.
+         * @param context - GraphQL context with loaders.
+         * @returns Result with enriched data in the requested format.
          */
         // Requête des faits avec métadonnées optimisées pour D3
         getFactTableWithMetadata: async (

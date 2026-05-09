@@ -6,19 +6,19 @@ import type { CatalogMetadataRow } from '../../loaders/catalog.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments de la requête getDatabaseSchema. */
+/** Arguments for the getDatabaseSchema query. */
 export interface DatabaseSchemaArgs {
     database: string;
 }
 
-/** Arguments de la requête getSharedDimensions. */
+/** Arguments for the getSharedDimensions query. */
 export interface SharedDimensionsArgs {
     databases: string[];
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Entrée du catalogue d'une base de données (schéma + dimensions). */
+/** Catalog entry for a database, containing its schema and dimension names. */
 export interface DatabaseCatalogEntry {
     id: string;
     fields: CatalogMetadataRow[];
@@ -40,13 +40,10 @@ const catalogResolvers = {
          * Loads catalog metadata and dimension names for each database in
          * parallel, using empty arrays as graceful fallbacks on error.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     __: Query arguments (none).
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of database catalog entries.
+         * @param _ - Parent resolver result (unused at root).
+         * @param __ - Query arguments (none).
+         * @param context - GraphQL context with loaders.
+         * @returns Array of database catalog entries.
          */
         // Listage de toutes les bases de données disponibles avec leur schéma
         getDatabases: async (
@@ -83,13 +80,10 @@ const catalogResolvers = {
         /**
          * Fetches the schema (field list) of a specific database.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     database: Database alias to query.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of catalog metadata rows describing the database schema.
+         * @param _ - Parent resolver result (unused at root).
+         * @param database - Database alias to query.
+         * @param context - GraphQL context with loaders.
+         * @returns Array of catalog metadata rows describing the database schema.
          */
         // Récupération du schéma d'une base de données spécifique
         getDatabaseSchema: async (
@@ -107,16 +101,11 @@ const catalogResolvers = {
          * Validates each database alias before loading, then intersects the
          * dimension name sets to return only the common dimensions.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     databases: List of database aliases to compare.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of dimension names present in every specified database.
-         *
-         * Raises:
-         *     GraphQLError: When databases is empty or contains invalid aliases.
+         * @param _ - Parent resolver result (unused at root).
+         * @param databases - List of database aliases to compare.
+         * @param context - GraphQL context with loaders.
+         * @returns Array of dimension names present in every specified database.
+         * @throws {GraphQLError} When databases is empty or contains invalid aliases.
          */
         // Calcul de l'intersection des dimensions partagées entre plusieurs bases
         getSharedDimensions: async (

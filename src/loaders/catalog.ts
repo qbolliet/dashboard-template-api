@@ -6,7 +6,7 @@ import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces des résultats catalog ────────────────────────────────────────
 
-/** Ligne de la table metadata d'un catalogue DuckLake. */
+/** Row of the metadata table of a DuckLake catalog. */
 interface CatalogMetadataRow {
     name: string;
     is_categorical: boolean;
@@ -42,12 +42,9 @@ class CatalogMetadataLoader extends BaseQueryLoader {
     /**
      * Loads all metadata rows for a given catalog.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     catalogId: Catalog alias to query (e.g. 'project_a').
-     *
-     * Returns:
-     *     Array of CatalogMetadataRow with boolean is_categorical values.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param catalogId - Catalog alias to query (e.g. 'project_a').
+     * @returns Array of CatalogMetadataRow with boolean is_categorical values.
      */
     async loadAllMetadata(
         connection: DuckDBConnection,
@@ -91,12 +88,9 @@ class CatalogDimensionNamesLoader extends BaseQueryLoader {
     /**
      * Loads the names of all categorical fields for a given catalog.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     catalogId: Catalog alias to query.
-     *
-     * Returns:
-     *     Array of field names where is_categorical is true.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param catalogId - Catalog alias to query.
+     * @returns Array of field names where is_categorical is true.
      */
     async loadDimensionNames(
         connection: DuckDBConnection,
@@ -114,8 +108,7 @@ class CatalogDimensionNamesLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for catalog metadata queries.
  *
- * Returns:
- *     DataLoader keyed by catalog alias, returning CatalogMetadataRow arrays.
+ * @returns DataLoader keyed by catalog alias, returning CatalogMetadataRow arrays.
  */
 const createCatalogMetadataLoader = () => {
     const loader = new CatalogMetadataLoader();
@@ -128,8 +121,7 @@ const createCatalogMetadataLoader = () => {
 /**
  * Creates a DataLoader for catalog dimension name queries.
  *
- * Returns:
- *     DataLoader keyed by catalog alias, returning string arrays of dimension names.
+ * @returns DataLoader keyed by catalog alias, returning string arrays of dimension names.
  */
 const createCatalogDimensionNamesLoader = () => {
     const loader = new CatalogDimensionNamesLoader();

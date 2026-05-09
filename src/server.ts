@@ -22,7 +22,7 @@ import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Métriques opérationnelles collectées durant la vie du serveur. */
+/** Operational metrics collected over the server's lifetime. */
 interface ServerMetrics {
     startedAt: string;
     requests: {
@@ -33,7 +33,7 @@ interface ServerMetrics {
     maxStoredTimes: number;
 }
 
-/** Contexte Apollo Server injecté dans chaque resolver et plugin. */
+/** Apollo Server context injected into every resolver and plugin. */
 interface ServerContext {
     requestId: string;
     loaders: LoadersCollection;
@@ -46,19 +46,18 @@ interface ServerContext {
     [key: string]: unknown;
 }
 
-/** Erreur Express enrichie avec un code de statut HTTP optionnel. */
+/** Express error enriched with an optional HTTP status code. */
 interface ExpressError extends Error {
     status?: number;
 }
 
-/** Structure d'une réponse Apollo pour l'accès aux erreurs dans willSendResponse. */
+/** Apollo response body shape used to access errors in willSendResponse. */
 interface MutableSingleResult {
     singleResult?: {
         errors?: GraphQLFormattedError[];
     };
 }
 
-// Fonction de lancement du server
 /**
  * Starts the GraphQL API server with security and performance configurations.
  *
@@ -66,8 +65,7 @@ interface MutableSingleResult {
  * registers health/readiness/metrics endpoints, sets up Apollo Server with
  * security rules and plugins, then begins listening on the configured port.
  *
- * Returns:
- *     A promise that resolves once the server is listening.
+ * @returns A promise that resolves once the server is listening.
  */
 async function startServer(): Promise<void> {
     const app = express();

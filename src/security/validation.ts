@@ -4,7 +4,7 @@ import { config } from '../utils/config-loader.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Règle de validation pour les chaînes de caractères. */
+/** Validation rule for string inputs. */
 interface StringValidationRule {
     type:       'string';
     minLength:  number;
@@ -12,7 +12,7 @@ interface StringValidationRule {
     required?:  boolean;
 }
 
-/** Règle de validation pour les nombres. */
+/** Validation rule for numeric inputs. */
 interface NumberValidationRule {
     type:      'number';
     min:       number;
@@ -20,7 +20,7 @@ interface NumberValidationRule {
     required?: boolean;
 }
 
-/** Union des types de règle de validation acceptés. */
+/** Union of accepted validation rule types. */
 type ValidationRule = StringValidationRule | NumberValidationRule;
 
 // ─── Règles prédéfinies ───────────────────────────────────────────────────────
@@ -50,15 +50,10 @@ const ValidationRules = {
 /**
  * Validates an input value against a validation rule.
  *
- * Args:
- *     input: Value to validate (any type).
- *     rules: Validation rule defining the expected type and bounds.
- *
- * Returns:
- *     The validated input value, unchanged.
- *
- * Raises:
- *     GraphQLError: When the input is missing (required), mistyped, or out of bounds.
+ * @param input - Value to validate (any type).
+ * @param rules - Validation rule defining the expected type and bounds.
+ * @returns The validated input value, unchanged.
+ * @throws {GraphQLError} When the input is missing (required), mistyped, or out of bounds.
  */
 const validateInput = (
     input: unknown,
@@ -99,15 +94,10 @@ const validateInput = (
 /**
  * Validates a string against configured length constraints.
  *
- * Args:
- *     str: String value to validate.
- *     rules: StringValidationRule with minLength and maxLength.
- *
- * Returns:
- *     The validated string.
- *
- * Raises:
- *     GraphQLError: When the string is shorter than minLength or longer than maxLength.
+ * @param str - String value to validate.
+ * @param rules - StringValidationRule with minLength and maxLength.
+ * @returns The validated string.
+ * @throws {GraphQLError} When the string is shorter than minLength or longer than maxLength.
  */
 const validateString = (str: string, rules: StringValidationRule): string => {
     // Vérification de la longueur minimale
@@ -132,15 +122,10 @@ const validateString = (str: string, rules: StringValidationRule): string => {
 /**
  * Validates a number against configured range constraints.
  *
- * Args:
- *     num: Numeric value to validate.
- *     rules: NumberValidationRule with min and max bounds.
- *
- * Returns:
- *     The validated number.
- *
- * Raises:
- *     GraphQLError: When the number is non-finite or outside the allowed range.
+ * @param num - Numeric value to validate.
+ * @param rules - NumberValidationRule with min and max bounds.
+ * @returns The validated number.
+ * @throws {GraphQLError} When the number is non-finite or outside the allowed range.
  */
 const validateNumber = (num: number, rules: NumberValidationRule): number => {
     // Vérification de la finitude du nombre

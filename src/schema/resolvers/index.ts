@@ -9,6 +9,12 @@ import { catalogResolvers } from './catalog.js';
 import { crossDatabaseResolvers } from './cross-database.js';
 
 // Combinaison des différents resolvers
+/**
+ * Combined GraphQL resolvers for the entire API.
+ *
+ * Merges Query resolvers from every sub-module and attaches field resolvers
+ * for dimension label resolution on Fact and AggregatedFact types.
+ */
 const resolvers = {
     Query: {
         ...metadataResolvers.Query,

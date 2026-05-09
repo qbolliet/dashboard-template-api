@@ -6,7 +6,7 @@ import type { ContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Représentation minimale d'une requête HTTP nécessaire au rate limiter. */
+/** Minimal representation of an HTTP request required by the rate limiter. */
 interface HttpRequest {
     ip?: string;
     connection?: { remoteAddress?: string };
@@ -14,7 +14,7 @@ interface HttpRequest {
     headers: Record<string, string | string[] | undefined>;
 }
 
-/** Configuration interne normalisée du rate limiter. */
+/** Normalized internal configuration for the rate limiter. */
 interface RateLimiterConfig {
     maxRequests:        number;
     windowMs:           number;
@@ -26,7 +26,7 @@ interface RateLimiterConfig {
     trustedProxies:     Set<string>;
 }
 
-/** Données de suivi associées à un client dans le store. */
+/** Tracking data associated with a client entry in the store. */
 interface ClientData {
     requests:       number[];
     burstCount:     number;
@@ -34,7 +34,7 @@ interface ClientData {
     violations:     number;
 }
 
-/** Informations de rate limit renvoyées après une vérification réussie. */
+/** Rate-limit information returned after a successful limit check. */
 interface RateLimitInfo {
     limit:          number;
     remaining:      number;
@@ -63,8 +63,7 @@ class RateLimiter {
     /**
      * Initializes the rate limiter from the RATE_LIMIT section of the config.
      *
-     * Args:
-     *     rateLimitConfig: Raw rate-limit configuration from YAML.
+     * @param rateLimitConfig - Raw rate-limit configuration from YAML.
      */
     constructor(rateLimitConfig: Partial<Record<string, unknown>> = {}) {
         // Normalisation de la configuration avec les valeurs par défaut
@@ -91,14 +90,9 @@ class RateLimiter {
     /**
      * Checks and updates rate-limit counters for a given HTTP request.
      *
-     * Args:
-     *     req: Incoming HTTP request to evaluate.
-     *
-     * Returns:
-     *     RateLimitInfo with current counters and ISO reset timestamps.
-     *
-     * Raises:
-     *     GraphQLError: When the sustained or burst limit is exceeded.
+     * @param req - Incoming HTTP request to evaluate.
+     * @returns RateLimitInfo with current counters and ISO reset timestamps.
+     * @throws {GraphQLError} When the sustained or burst limit is exceeded.
      */
     async checkLimit(req: HttpRequest): Promise<RateLimitInfo> {
         // Court-circuit si la requête doit être ignorée
@@ -190,11 +184,8 @@ class RateLimiter {
      * Trusts x-forwarded-for only when the connecting IP is listed in
      * trustedProxies, preventing IP spoofing by arbitrary clients.
      *
-     * Args:
-     *     req: Incoming HTTP request.
-     *
-     * Returns:
-     *     SHA-256 hex hash of "{ip}:{user-agent}".
+     * @param req - Incoming HTTP request.
+     * @returns SHA-256 hex hash of "{ip}:{user-agent}".
      */
     private defaultKeyGenerator(req: HttpRequest): string {
         const remoteIp = req.connection?.remoteAddress ?? req.socket?.remoteAddress ?? 'unknown';

@@ -3,19 +3,19 @@ import type { GraphQLContext } from './types.js';
 
 // ─── Interfaces des objets parent ─────────────────────────────────────────────
 
-/** Détail d'une dimension résolu sur un fait. */
+/** Detail of a dimension resolved on a fact record. */
 interface DimensionDetail {
     name: string;
     value: unknown;
     label: unknown;
 }
 
-/** Objet fait (parent du field resolver dimensionDetails). */
+/** Fact object that serves as the parent for the dimensionDetails field resolver. */
 export interface FactParent extends Record<string, unknown> {
     dimensionDetails?: DimensionDetail[];
 }
 
-/** Objet fait agrégé (parent des field resolvers AggregatedFact). */
+/** Aggregated fact object that serves as the parent for AggregatedFact field resolvers. */
 interface AggregatedFactParent {
     key: unknown;
     keyLabel?: unknown;
@@ -23,7 +23,7 @@ interface AggregatedFactParent {
     [key: string]: unknown;
 }
 
-/** Fait agrégé enrichi avec le champ de regroupement garanti. */
+/** Aggregated fact enriched with a guaranteed groupBy field. */
 interface AggregatedFactWithGroupBy extends AggregatedFactParent {
     _groupByField: string;
 }
@@ -43,13 +43,10 @@ const fieldResolvers = {
          * Returns pre-loaded dimension details when bulk enrichment has
          * already occurred, otherwise falls back to raw field values.
          *
-         * Args:
-         *     parent: The fact record, potentially already enriched.
-         *     _args: Field arguments (none used).
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of dimension details with name, value and label.
+         * @param parent - The fact record, potentially already enriched.
+         * @param _args - Field arguments (none used).
+         * @param context - GraphQL context with loaders.
+         * @returns Array of dimension details with name, value and label.
          */
         // Résolution des détails des dimensions pour inclure un label dans la table des faits
         dimensionDetails: async (
@@ -96,13 +93,10 @@ const fieldResolvers = {
          * occurred. Falls back to a single loader call when the groupBy field
          * is categorical and the label has not been pre-loaded.
          *
-         * Args:
-         *     parent: The aggregated fact record.
-         *     _args: Field arguments (none used).
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Label string for the key, or the raw key value as fallback.
+         * @param parent - The aggregated fact record.
+         * @param _args - Field arguments (none used).
+         * @param context - GraphQL context with loaders.
+         * @returns Label string for the key, or the raw key value as fallback.
          */
         // Résolution du label pour les clés de faits agrégés
         keyLabel: async (
@@ -143,12 +137,9 @@ const fieldResolvers = {
  * Attaches the groupBy field name to each result so that field resolvers
  * can resolve labels without requiring a separate argument.
  *
- * Args:
- *     results: Raw aggregated results from the loader.
- *     groupByField: Field used for grouping.
- *
- * Returns:
- *     Enriched results with _groupByField set on every item.
+ * @param results - Raw aggregated results from the loader.
+ * @param groupByField - Field used for grouping.
+ * @returns Enriched results with _groupByField set on every item.
  */
 const enrichAggregatedFacts = (
     results: AggregatedFactParent[],

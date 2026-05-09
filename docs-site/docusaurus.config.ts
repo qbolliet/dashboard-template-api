@@ -43,6 +43,20 @@ const config: Config = {
           editUrl:
             'https://github.com/qbolliet/dashboard-template-api/tree/main/docs-site/',
           routeBasePath: '/',
+          // Remove TypeDoc module-summary doc items when a same-named category exists
+          // at the same level (prevents duplicates like "cache" doc + "cache" folder).
+          sidebarItemsGenerator: async ({ defaultSidebarItemsGenerator, ...args }) => {
+            const items = await defaultSidebarItemsGenerator({ defaultSidebarItemsGenerator, ...args });
+            const categoryLabels = new Set(
+              items
+                .filter((item) => item.type === 'category' && item.label)
+                .map((item) => item.label.toLowerCase())
+            );
+            return items.filter((item) => {
+              if (item.type !== 'doc' || !item.label) return true;
+              return !categoryLabels.has(item.label.toLowerCase());
+            });
+          },
         },
         blog: false,
         theme: {

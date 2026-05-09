@@ -5,21 +5,21 @@ import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces de dimension ──────────────────────────────────────────────────
 
-/** Ligne d'une table de dimension (colonnes value et label minimales). */
+/** Row of a dimension table (minimum value and label columns). */
 interface DimensionRecord {
     value: unknown;
     label: unknown;
     [key: string]: unknown;
 }
 
-/** Valeur résolue d'une dimension avec son libellé. */
+/** Resolved dimension value with its label. */
 interface DimensionValue {
     name: string;
     value: unknown;
     label: unknown;
 }
 
-/** Paramètres d'une recherche de valeur dans une table de dimension. */
+/** Parameters for a value lookup in a dimension table. */
 interface DimensionValueParams {
     dimensionName: string;
     value: unknown;
@@ -38,8 +38,7 @@ class DimensionLoader extends BaseQueryLoader {
     /**
      * Creates a DimensionLoader bound to a specific database.
      *
-     * Args:
-     *     databaseId: Catalog alias to query; null uses the default database.
+     * @param databaseId - Catalog alias to query; null uses the default database.
      */
     constructor(databaseId: string | null = null) {
         super({
@@ -56,12 +55,9 @@ class DimensionLoader extends BaseQueryLoader {
     /**
      * Loads all rows from a single dimension table.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     name: Dimension name (table looked up as dim_{name}).
-     *
-     * Returns:
-     *     Array of dimension records, or empty array on error.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param name - Dimension name (table looked up as dim_{name}).
+     * @returns Array of dimension records, or empty array on error.
      */
     async loadSingle(connection: DuckDBConnection, name: string): Promise<DimensionRecord[]> {
         try {
@@ -85,12 +81,9 @@ class DimensionLoader extends BaseQueryLoader {
      * Falls back to the raw value as label when the value is not found
      * in the dimension table or when the query fails.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Object with dimensionName and value to look up.
-     *
-     * Returns:
-     *     DimensionValue with name, value and resolved label.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Object with dimensionName and value to look up.
+     * @returns DimensionValue with name, value and resolved label.
      */
     async loadSingleValue(
         connection: DuckDBConnection,
@@ -124,12 +117,9 @@ class DimensionLoader extends BaseQueryLoader {
      * running all groups in parallel. Returns results in the same order
      * as the input params array.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Array of {dimensionName, value} lookup requests.
-     *
-     * Returns:
-     *     Array of DimensionValue, aligned with input params order.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Array of {dimensionName, value} lookup requests.
+     * @returns Array of DimensionValue, aligned with input params order.
      */
     async loadBatchValues(
         connection: DuckDBConnection,
@@ -179,11 +169,8 @@ class DimensionLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for loading complete dimension tables.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by dimension name, returning arrays of DimensionRecord.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by dimension name, returning arrays of DimensionRecord.
  */
 const createDimensionLoader = (databaseId: string | null = null) => {
     const loader = new DimensionLoader(databaseId);
@@ -200,11 +187,8 @@ const createDimensionLoader = (databaseId: string | null = null) => {
  * IN-query per group, significantly reducing database round-trips when
  * enriching multiple fact rows.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by DimensionValueParams, returning DimensionValue.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by DimensionValueParams, returning DimensionValue.
  */
 const createDimensionValueLoader = (databaseId: string | null = null) => {
     const loader = new DimensionLoader(databaseId);

@@ -10,8 +10,7 @@ import { resolvers } from './resolvers/index.js';
  * Combines the merged type definitions and resolvers into a single
  * GraphQLSchema instance passed to Apollo Server.
  *
- * Returns:
- *     A fully constructed GraphQLSchema ready for execution.
+ * @returns A fully constructed GraphQLSchema ready for execution.
  */
 // Construction du schéma exécutable à partir des typedefs et resolvers
 const schema: GraphQLSchema = makeExecutableSchema({

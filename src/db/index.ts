@@ -9,7 +9,12 @@ import {
 import { DuckDBPool } from './pool.js';
 import { DatabaseManager } from './database-manager.js';
 
-// Ré-exportation des fonctions d'intérêt
+/**
+ * Public database module API.
+ *
+ * Re-exports the shared pool instance, the database manager singleton,
+ * connection helpers, and the underlying pool and manager classes.
+ */
 export {
     dbPool,
     closeConnections,

@@ -11,13 +11,13 @@ import type { AggregatedFactParent } from './field-resolvers.js';
 
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
 
-/** Opérations d'agrégation SQL supportées. */
+/** Supported SQL aggregation operations. */
 type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
-/** Valeurs valides pour l'ordre de tri. */
+/** Valid values for sort order. */
 type SortOrder = 'ASC' | 'DESC';
 
-/** Critère de tri spécifique aux requêtes agrégées. */
+/** Sort criterion specific to aggregated fact queries. */
 interface AggregatedSortItem {
     field: 'key' | 'aggregatedValue';
     order: SortOrder;
@@ -25,7 +25,7 @@ interface AggregatedSortItem {
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments communs des requêtes getAggregatedFacts et getAggregatedFactsWithMetadata. */
+/** Common arguments for the getAggregatedFacts and getAggregatedFactsWithMetadata queries. */
 export interface AggregatedFactsArgs {
     fields?: string[];
     filters?: string | null;
@@ -40,7 +40,7 @@ export interface AggregatedFactsArgs {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Résultat agrégé avec métadonnées (utilisé par getAggregatedFactsWithMetadata). */
+/** Aggregated result with metadata, used by getAggregatedFactsWithMetadata. */
 export interface AggregatedWithMetadataResult {
     data: AggregatedFactParent[];
     [key: string]: unknown;
@@ -48,7 +48,7 @@ export interface AggregatedWithMetadataResult {
 
 // ─── Constantes de validation ─────────────────────────────────────────────────
 
-/** Liste exhaustive des opérations d'agrégation supportées. */
+/** Exhaustive list of supported aggregation operations. */
 const VALID_AGGREGATIONS: readonly AggregationType[] = [
     'SUM', 'AVG', 'MAX', 'MIN', 'COUNT', 'MEDIAN', 'MODE'
 ];
@@ -61,15 +61,12 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
  * Centralises argument validation to avoid duplication between the two
  * aggregated fact resolvers.
  *
- * Args:
- *     aggregation: Aggregation type to validate.
- *     groupBy: Group-by field (must be non-empty).
- *     offset: Pagination offset to validate.
- *     limit: Pagination limit to validate.
- *     sort: Sort items to validate (field and order).
- *
- * Raises:
- *     GraphQLError: When any argument fails validation.
+ * @param aggregation - Aggregation type to validate.
+ * @param groupBy - Group-by field (must be non-empty).
+ * @param offset - Pagination offset to validate.
+ * @param limit - Pagination limit to validate.
+ * @param sort - Sort items to validate (field and order).
+ * @throws {GraphQLError} When any argument fails validation.
  */
 // Validation centralisée des arguments des requêtes agrégées
 function validateAggregatedArgs(
@@ -128,16 +125,11 @@ const aggregatedFactsResolvers = {
          * Validates all arguments, loads aggregated data via DataLoader,
          * then enriches every row with its groupBy field and keyLabel.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     args: Aggregation query parameters.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of enriched aggregated fact rows.
-         *
-         * Raises:
-         *     GraphQLError: When validation fails or the loader times out.
+         * @param _ - Parent resolver result (unused at root).
+         * @param args - Aggregation query parameters.
+         * @param context - GraphQL context with loaders.
+         * @returns Array of enriched aggregated fact rows.
+         * @throws {GraphQLError} When validation fails or the loader times out.
          */
         getAggregatedFacts: async (
             _: unknown,
@@ -198,16 +190,11 @@ const aggregatedFactsResolvers = {
          * Applies the same validation and enrichment as getAggregatedFacts,
          * but also returns axis extents and statistics for chart configuration.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     args: Aggregation query parameters.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Object with enriched data array and D3 metadata.
-         *
-         * Raises:
-         *     GraphQLError: When validation fails or the loader times out.
+         * @param _ - Parent resolver result (unused at root).
+         * @param args - Aggregation query parameters.
+         * @param context - GraphQL context with loaders.
+         * @returns Object with enriched data array and D3 metadata.
+         * @throws {GraphQLError} When validation fails or the loader times out.
          */
         getAggregatedFactsWithMetadata: async (
             _: unknown,

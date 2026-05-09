@@ -16,7 +16,7 @@ import type { ContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
-/** Configuration interne normalisée de l'analyseur de complexité. */
+/** Normalized internal configuration for the complexity analyzer. */
 interface ComplexityAnalyzerConfig {
     maxAllowed: number;
     scalarCost: number;
@@ -27,7 +27,7 @@ interface ComplexityAnalyzerConfig {
     customScores: Record<string, number>;
 }
 
-/** Union des nœuds AST acceptés par l'analyseur récursif. */
+/** Union of AST node types accepted by the recursive complexity analyzer. */
 type ComplexityNode = FieldNode | InlineFragmentNode | FragmentDefinitionNode;
 
 // ─── Classe d'analyse de complexité ─────────────────────────────────────────
@@ -46,8 +46,7 @@ class QueryComplexityAnalyzer {
     /**
      * Initializes the analyzer with values from the YAML complexity config.
      *
-     * Args:
-     *     complexityConfig: Raw complexity section from SECURITY.COMPLEXITY.
+     * @param complexityConfig - Raw complexity section from SECURITY.COMPLEXITY.
      */
     constructor(complexityConfig: Partial<Record<string, unknown>> = {}) {
         // Fusion des options avec les valeurs par défaut
@@ -67,11 +66,8 @@ class QueryComplexityAnalyzer {
     /**
      * Calculates the complexity score for a GraphQL field resolver.
      *
-     * Args:
-     *     info: GraphQL resolve info for the current field.
-     *
-     * Returns:
-     *     Numeric complexity score, or 0 when resolve info is unavailable.
+     * @param info - GraphQL resolve info for the current field.
+     * @returns Numeric complexity score, or 0 when resolve info is unavailable.
      */
     calculate(info: GraphQLResolveInfo): number {
         if (!info?.fieldNodes?.[0]) {
@@ -103,15 +99,12 @@ class QueryComplexityAnalyzer {
     /**
      * Recursively computes the complexity contribution of an AST node.
      *
-     * Args:
-     *     node: AST node to analyze (field, inline fragment, or named fragment).
-     *     schema: Current GraphQL schema instance.
-     *     fragments: Named fragment definitions available in the document.
-     *     variables: Resolved variable values for the operation.
-     *     depth: Current recursion depth used for the depth cost factor.
-     *
-     * Returns:
-     *     Cumulative complexity score for this node and all its descendants.
+     * @param node - AST node to analyze (field, inline fragment, or named fragment).
+     * @param schema - Current GraphQL schema instance.
+     * @param fragments - Named fragment definitions available in the document.
+     * @param variables - Resolved variable values for the operation.
+     * @param depth - Current recursion depth used for the depth cost factor.
+     * @returns Cumulative complexity score for this node and all its descendants.
      */
     private calculateFieldComplexity(
         node: ComplexityNode,
@@ -176,12 +169,9 @@ class QueryComplexityAnalyzer {
      * Pagination limits, filters, and sort directives each carry a
      * configurable cost to reflect their execution overhead.
      *
-     * Args:
-     *     args: Argument AST nodes for the current field.
-     *     variables: Resolved variable values for the operation.
-     *
-     * Returns:
-     *     Complexity contribution from the given arguments.
+     * @param args - Argument AST nodes for the current field.
+     * @param variables - Resolved variable values for the operation.
+     * @returns Complexity contribution from the given arguments.
      */
     private calculateArgumentsComplexity(
         args: readonly ArgumentNode[],
@@ -220,11 +210,8 @@ class QueryComplexityAnalyzer {
     /**
      * Extracts a numeric value from an AST value node or a plain number.
      *
-     * Args:
-     *     node: An AST IntValue, FloatValue node, or a plain JavaScript number.
-     *
-     * Returns:
-     *     The numeric value, or 0 when the type is unrecognized.
+     * @param node - An AST IntValue, FloatValue node, or a plain JavaScript number.
+     * @returns The numeric value, or 0 when the type is unrecognized.
      */
     private extractNumericValue(node: ValueNode | number): number {
         if (typeof node === 'number') {

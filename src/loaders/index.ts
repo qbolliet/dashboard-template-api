@@ -33,18 +33,18 @@ import type {
     CrossDatabaseSelectOption
 } from './cross-database.js';
 import type DataLoader from 'dataloader';
-// Alias pour le type DataLoader avec clé de cache string (utilisé par tous les loaders de ce module)
+/** DataLoader alias with a string cache key, used by all loaders in this module. */
 type Loader<K, V> = DataLoader<K, V, string>;
 
 // ─── Interfaces des données d'amorçage ───────────────────────────────────────
 
-/** Paire clé/valeur générique pour l'amorçage d'un DataLoader. */
+/** Generic key/value pair for priming a DataLoader. */
 interface KeyValuePair<K, V> {
     key: K;
     value: V;
 }
 
-/** Données initiales optionnelles pour l'amorçage de l'ensemble des loaders. */
+/** Optional initial data for priming the full set of loaders. */
 interface PrimeData {
     metadata?: KeyValuePair<string, MetadataRow | null>[];
     dimensions?: KeyValuePair<string, DimensionRecord[]>[];
@@ -60,7 +60,7 @@ interface PrimeData {
 
 // ─── Interface de la collection de loaders ───────────────────────────────────
 
-/** Collection complète des loaders disponibles pour une requête GraphQL. */
+/** Complete collection of loaders available for a single GraphQL request. */
 interface LoadersCollection {
     metadata: Loader<string, MetadataRow | null>;
     dimension: Loader<string, DimensionRecord[]>;
@@ -88,12 +88,9 @@ interface LoadersCollection {
  * Instantiates one DataLoader per query type. Catalog and cross-database
  * loaders are shared and independent of databaseId.
  *
- * Args:
- *     databaseId: Catalog alias to use for all single-database loaders.
- *                 Null uses the configured default database.
- *
- * Returns:
- *     LoadersCollection with all loaders plus clearAll and prime helpers.
+ * @param databaseId - Catalog alias to use for all single-database loaders.
+ *   Null uses the configured default database.
+ * @returns LoadersCollection with all loaders plus clearAll and prime helpers.
  */
 const createLoaders = (databaseId: string | null = null): LoadersCollection => {
     // Initialisation des loaders de méta-données et dimensions
@@ -194,11 +191,8 @@ const createLoaders = (databaseId: string | null = null): LoadersCollection => {
  * Ensures per-request DataLoader instances to prevent data leaking
  * between concurrent requests while sharing the Redis cache layer.
  *
- * Args:
- *     databaseId: Catalog alias to use; null uses the default database.
- *
- * Returns:
- *     New LoadersCollection for the current request.
+ * @param databaseId - Catalog alias to use; null uses the default database.
+ * @returns New LoadersCollection for the current request.
  */
 const createLoadersForRequest = (databaseId: string | null = null): LoadersCollection => {
     return createLoaders(databaseId);

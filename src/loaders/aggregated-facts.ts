@@ -7,10 +7,10 @@ import type { StructuredFilter } from '../utils/utils.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
 
-/** Type d'agrégation SQL pris en charge. */
+/** Supported SQL aggregation type. */
 type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
-/** Paramètres d'une requête de faits agrégés. */
+/** Parameters for an aggregated fact query. */
 interface AggregatedQueryParams {
     fields?: string[];
     filters?: string | null;
@@ -27,7 +27,7 @@ interface AggregatedQueryParams {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Ligne d'un résultat de faits agrégés. */
+/** Row of an aggregated fact result. */
 interface AggregatedFactRow {
     key: string;
     aggregatedValue: number;
@@ -35,7 +35,7 @@ interface AggregatedFactRow {
     _groupByField: string;
 }
 
-/** Statistiques descriptives calculées sur les valeurs agrégées. */
+/** Descriptive statistics computed on aggregated values. */
 interface AggregatedStatistics {
     mean: number | null;
     median: number | null;
@@ -43,7 +43,7 @@ interface AggregatedStatistics {
     quartiles: number[] | null;
 }
 
-/** Métadonnées d'un résultat agrégé (extents, statistiques, pagination). */
+/** Metadata of an aggregated result (extents, statistics, pagination). */
 interface AggregatedMetadata {
     count: number;
     keyExtent: [number, number] | [string, string] | null;
@@ -57,13 +57,13 @@ interface AggregatedMetadata {
     totalPages?: number;
 }
 
-/** Résultat agrégé avec métadonnées. */
+/** Aggregated result with metadata. */
 interface AggregatedWithMetadata {
     data: AggregatedFactRow[];
     metadata: AggregatedMetadata;
 }
 
-/** Résultat agrégé paginé avec comptage total. */
+/** Paginated aggregated result with total count. */
 interface AggregatedWithCount {
     data: AggregatedFactRow[];
     totalGroups: number;
@@ -72,7 +72,7 @@ interface AggregatedWithCount {
     totalPages: number;
 }
 
-/** Union de tous les formats de résultat possibles pour les faits agrégés. */
+/** Union of all possible result formats for aggregated facts. */
 type AggregatedResult =
     | AggregatedFactRow[]
     | AggregatedWithMetadata
@@ -93,8 +93,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     /**
      * Creates an AggregatedFactsLoader bound to a specific database.
      *
-     * Args:
-     *     databaseId: Catalog alias to query; null uses the default database.
+     * @param databaseId - Catalog alias to query; null uses the default database.
      */
     constructor(databaseId: string | null = null) {
         super({
@@ -107,7 +106,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     }
 
     // Association des types d'agrégation à leurs fonctions SQL
-    /** Correspondance entre les types d'agrégation GraphQL et les fonctions SQL. */
+    /** Mapping between GraphQL aggregation types and SQL functions. */
     static AGGREGATION_MAP: Record<AggregationType, string> = {
         SUM: 'SUM',
         AVG: 'AVG',
@@ -126,15 +125,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
      * includeMetadata or includeCount are true, additional queries are
      * issued to compute statistics and total group count.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Query parameters controlling grouping, aggregation, and format.
-     *
-     * Returns:
-     *     Aggregated results in the requested format.
-     *
-     * Raises:
-     *     Error: When pagination parameters exceed configured limits.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Query parameters controlling grouping, aggregation, and format.
+     * @returns Aggregated results in the requested format.
+     * @throws {Error} When pagination parameters exceed configured limits.
      */
     async loadAggregatedFacts(
         connection: DuckDBConnection,
@@ -236,12 +230,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
     /**
      * Gets the total number of distinct groups for pagination purposes.
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     params: Query parameters (only filters and groupBy are used).
-     *
-     * Returns:
-     *     Total distinct group count.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param params - Query parameters (only filters and groupBy are used).
+     * @returns Total distinct group count.
      */
     async getTotalGroups(
         connection: DuckDBConnection,
@@ -267,13 +258,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
      * Fetches groupBy field metadata, computes key and value extents, and
      * calculates descriptive statistics (mean, median, stdDev, quartiles).
      *
-     * Args:
-     *     connection: Active DuckDB connection from the pool.
-     *     data: Array of aggregated fact rows already fetched.
-     *     params: Query parameters (only groupBy is used).
-     *
-     * Returns:
-     *     AggregatedMetadata object with extents, field info, and statistics.
+     * @param connection - Active DuckDB connection from the pool.
+     * @param data - Array of aggregated fact rows already fetched.
+     * @param params - Query parameters (only groupBy is used).
+     * @returns AggregatedMetadata object with extents, field info, and statistics.
      */
     async calculateMetadata(
         connection: DuckDBConnection,
@@ -325,12 +313,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
     /**
      * Calculates descriptive statistics for an array of numeric values.
      *
-     * Args:
-     *     values: Array of numeric aggregated values.
-     *
-     * Returns:
-     *     Object with mean, median, standard deviation, and quartiles.
-     *     All fields are null when values is empty.
+     * @param values - Array of numeric aggregated values.
+     * @returns Object with mean, median, standard deviation, and quartiles.
+     *   All fields are null when values is empty.
      */
     calculateStatistics(values: number[]): AggregatedStatistics {
         if (!values || values.length === 0) {
@@ -369,11 +354,8 @@ class AggregatedFactsLoader extends FactQueryLoader {
 /**
  * Creates a DataLoader for aggregated fact queries.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader keyed by AggregatedQueryParams, returning AggregatedResult.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader keyed by AggregatedQueryParams, returning AggregatedResult.
  */
 const createAggregatedFactsLoader = (databaseId: string | null = null) => {
     const loader = new AggregatedFactsLoader(databaseId);
@@ -386,11 +368,8 @@ const createAggregatedFactsLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for aggregated facts enriched with metadata.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader returning AggregatedWithMetadata results.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader returning AggregatedWithMetadata results.
  */
 const createAggregatedFactsWithMetadataLoader = (databaseId: string | null = null) => {
     const loader = new AggregatedFactsLoader(databaseId);
@@ -404,11 +383,8 @@ const createAggregatedFactsWithMetadataLoader = (databaseId: string | null = nul
 /**
  * Creates a DataLoader for aggregated facts with total group count.
  *
- * Args:
- *     databaseId: Catalog alias to query; null uses the default database.
- *
- * Returns:
- *     DataLoader returning AggregatedWithCount results.
+ * @param databaseId - Catalog alias to query; null uses the default database.
+ * @returns DataLoader returning AggregatedWithCount results.
  */
 const createAggregatedFactsWithCountLoader = (databaseId: string | null = null) => {
     const loader = new AggregatedFactsLoader(databaseId);

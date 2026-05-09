@@ -2,15 +2,13 @@
 import 'dotenv/config';
 import { startServer } from './server.js';
 
-// Point d'entrée principal de l'API GraphQL
 /**
  * Main entry point for the GraphQL API server.
  *
  * Starts the server and handles any uncaught startup exceptions by
  * logging the error and exiting the process with a non-zero code.
  *
- * Returns:
- *     A promise that resolves when the server is listening.
+ * @returns A promise that resolves when the server is listening.
  */
 async function main(): Promise<void> {
     try {

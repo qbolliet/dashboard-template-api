@@ -10,13 +10,13 @@ const cacheLogger = createContextLogger({ component: 'cache', module: 'redis' })
 
 // ─── Interfaces de configuration ─────────────────────────────────────────────
 
-/** Paramètres de la stratégie de reconnexion exponentielle. */
+/** Parameters for the exponential reconnection back-off strategy. */
 interface RetryStrategyConfig {
     BASE_DELAY: number;
     MAX_DELAY: number;
 }
 
-/** Options avancées de connexion au serveur Redis. */
+/** Advanced connection options for the Redis server. */
 interface RedisOptionsConfig {
     RETRY_STRATEGY: RetryStrategyConfig;
     MAX_RETRIES_PER_REQUEST: number;
@@ -24,19 +24,19 @@ interface RedisOptionsConfig {
     CONNECT_TIMEOUT: number;
 }
 
-/** Nœud individuel d'un cluster Redis (hôte + port). */
+/** Individual node of a Redis cluster (host + port). */
 interface RedisClusterNode {
     host: string;
     port: number;
 }
 
-/** Configuration du mode cluster Redis avec liste des nœuds. */
+/** Redis cluster mode configuration with the list of nodes. */
 interface RedisClusterConfig {
     ENABLED: boolean;
     NODES: RedisClusterNode[];
 }
 
-/** Configuration complète du client Redis (standalone ou cluster). */
+/** Complete Redis client configuration (standalone or cluster). */
 interface RedisConfig {
     HOST:        string;
     PORT:        number;
@@ -55,8 +55,7 @@ interface RedisConfig {
  * Reads all connection parameters from the application configuration and
  * attaches event listeners for connection lifecycle logging.
  *
- * Returns:
- *     A connected Redis (standalone) or Cluster instance.
+ * @returns A connected Redis (standalone) or Cluster instance.
  */
 const createRedisClient = (): Redis | Cluster => {
     // Extraction de la configuration Redis depuis la configuration globale

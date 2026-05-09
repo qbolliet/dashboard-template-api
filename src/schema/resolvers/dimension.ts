@@ -5,7 +5,7 @@ import type { GraphQLContext } from './types.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments de la requête getDimensionTable. */
+/** Arguments for the getDimensionTable query. */
 export interface DimensionTableArgs {
     name: string;
     database?: string | null;
@@ -23,14 +23,11 @@ const dimensionResolvers = {
         /**
          * Gets all records from a dimension table.
          *
-         * Args:
-         *     _: Parent resolver result (unused at root).
-         *     name: Name of the dimension table to load.
-         *     database: Optional database alias override.
-         *     context: GraphQL context with loaders.
-         *
-         * Returns:
-         *     Array of dimension records from the requested table.
+         * @param _ - Parent resolver result (unused at root).
+         * @param name - Name of the dimension table to load.
+         * @param database - Optional database alias override.
+         * @param context - GraphQL context with loaders.
+         * @returns Array of dimension records from the requested table.
          */
         getDimensionTable: async (
             _: unknown,

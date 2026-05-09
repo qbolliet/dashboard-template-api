@@ -15,15 +15,12 @@ const cacheLogger = createContextLogger({
 /**
  * Function that generates a Redis key pattern for a given database identifier.
  *
- * Args:
- *     dbId: Database identifier, or null/undefined to use 'default'.
- *
- * Returns:
- *     Redis glob pattern string.
+ * @param dbId - Database identifier, or null/undefined to use 'default'.
+ * @returns Redis glob pattern string.
  */
 type KeyPatternFn = (dbId?: string | null) => string;
 
-/** Dictionnaire des générateurs de motifs de clés Redis par type de cache. */
+/** Dictionary of Redis key-pattern generators indexed by cache type. */
 interface KeyPatterns {
     metadata:        KeyPatternFn;
     dimension:       KeyPatternFn;
@@ -31,20 +28,20 @@ interface KeyPatterns {
     facts:           KeyPatternFn;
     aggregatedFacts: KeyPatternFn;
     selectOptions:   KeyPatternFn;
-    /** Motif global — correspond à toutes les clés d'une base de données. */
+    /** Global pattern — matches all keys for a given database. */
     allDatabase:     KeyPatternFn;
 }
 
-/** Résultat d'une tentative d'invalidation pour une base de données. */
+/** Result of a single cache invalidation attempt for a database. */
 interface InvalidationResult {
     database: string;
     error?:   string;
 }
 
-/** Comptage des clés Redis par type de cache pour une base de données. */
+/** Redis key count per cache type for a single database. */
 type DatabaseStats = Record<string, number>;
 
-/** Statistiques globales de cache indexées par identifiant de base de données. */
+/** Global cache statistics indexed by database identifier. */
 type CacheStats = Record<string, DatabaseStats>;
 
 // ─── Gestionnaire d'invalidation de cache ────────────────────────────────────
@@ -82,14 +79,9 @@ class CacheInvalidationManager {
      * Avoids the blocking KEYS command by iterating with cursor-based SCAN,
      * collecting results in batches of 100.
      *
-     * Args:
-     *     pattern: Redis glob pattern to match (e.g. "metadata:db1:*").
-     *
-     * Returns:
-     *     Array of all matching Redis key strings.
-     *
-     * Raises:
-     *     Error: When the Redis SCAN command fails.
+     * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:*").
+     * @returns Array of all matching Redis key strings.
+     * @throws {Error} When the Redis SCAN command fails.
      */
     // SCAN itératif non-bloquant — évite le blocage de Redis sur de grands ensembles de clés
     async scanKeys(pattern: string): Promise<string[]> {
@@ -109,11 +101,8 @@ class CacheInvalidationManager {
      * Uses the 'allDatabase' key pattern to find and delete every cache entry
      * associated with the given database identifier.
      *
-     * Args:
-     *     databaseId: Database identifier. Defaults to 'default' when null.
-     *
-     * Raises:
-     *     Error: When the Redis DEL operation fails.
+     * @param databaseId - Database identifier. Defaults to 'default' when null.
+     * @throws {Error} When the Redis DEL operation fails.
      */
     async invalidateDatabase(databaseId: string | null = null): Promise<void> {
         // Utilisation de 'default' comme base de données par défaut si aucune n'est spécifiée
@@ -153,12 +142,9 @@ class CacheInvalidationManager {
     /**
      * Invalidate a specific cache type for a given database.
      *
-     * Args:
-     *     cacheType: Cache type key (metadata, dimension, facts, etc.).
-     *     databaseId: Database identifier. Defaults to 'default' when null.
-     *
-     * Raises:
-     *     Error: When the cache type is unknown or the Redis operation fails.
+     * @param cacheType - Cache type key (metadata, dimension, facts, etc.).
+     * @param databaseId - Database identifier. Defaults to 'default' when null.
+     * @throws {Error} When the cache type is unknown or the Redis operation fails.
      */
     async invalidateCacheType(cacheType: string, databaseId: string | null = null): Promise<void> {
         const dbId = databaseId ?? 'default';
@@ -200,8 +186,7 @@ class CacheInvalidationManager {
      * Individual database failures are logged and captured but do not abort
      * the remaining invalidations.
      *
-     * Raises:
-     *     Error: When the database list cannot be retrieved from config.
+     * @throws {Error} When the database list cannot be retrieved from config.
      */
     async invalidateAllDatabases(): Promise<void> {
         cacheLogger.cache('Starting global cache invalidation');
@@ -252,11 +237,8 @@ class CacheInvalidationManager {
     /**
      * Collect Redis key counts per cache type for all configured databases.
      *
-     * Returns:
-     *     Nested record mapping each database ID to a per-type key count map.
-     *
-     * Raises:
-     *     Error: When the Redis SCAN operation fails.
+     * @returns Nested record mapping each database ID to a per-type key count map.
+     * @throws {Error} When the Redis SCAN operation fails.
      */
     async getCacheStats(): Promise<CacheStats> {
         try {
@@ -307,10 +289,9 @@ const cacheInvalidationManager = new CacheInvalidationManager();
  * ADMIN_API_KEY environment variable. Access is denied by default when the
  * variable is not set (fail-safe behaviour).
  *
- * Args:
- *     req: Incoming HTTP request.
- *     res: HTTP response object.
- *     next: Next middleware function in the chain.
+ * @param req - Incoming HTTP request.
+ * @param res - HTTP response object.
+ * @param next - Next middleware function in the chain.
  */
 // Vérification de la clé API admin — refus systématique si non configurée (fail-safe)
 const requireAdminKey = (req: Request, res: Response, next: NextFunction): void => {
@@ -333,15 +314,14 @@ const requireAdminKey = (req: Request, res: Response, next: NextFunction): void 
 /**
  * Registers cache administration routes on an Express application.
  *
- * All routes are protected by the requireAdminKey middleware.
+ * All routes are protected by the `requireAdminKey` middleware.
  *
- * Routes:
- *     POST /api/cache/invalidate/:database — invalidate a single database cache.
- *     POST /api/cache/invalidate-all       — invalidate all database caches.
- *     GET  /api/cache/stats                — retrieve per-type key counts.
+ * Routes registered:
+ * - `POST /api/cache/invalidate/:database` — invalidate a single database cache.
+ * - `POST /api/cache/invalidate-all` — invalidate all database caches.
+ * - `GET  /api/cache/stats` — retrieve per-type key counts.
  *
- * Args:
- *     app: Express application instance to register routes on.
+ * @param app - Express application instance to register routes on.
  */
 const createCacheInvalidationRoutes = (app: Express): void => {
     // Route pour invalider le cache d'une base de données spécifique

@@ -5,7 +5,7 @@ import { config } from './config-loader.js';
 
 // ─── Interfaces du logger contextuel ────────────────────────────────────────
 
-/** Contexte de base transmis à chaque méthode de logging. */
+/** Base context passed to every logging method. */
 interface LogContext {
     requestId?: string;
     operationName?: string;
@@ -15,7 +15,7 @@ interface LogContext {
     [key: string]: unknown;
 }
 
-/** Interface du logger contextuel enrichi retourné par createContextLogger. */
+/** Interface for the enriched contextual logger returned by {@link createContextLogger}. */
 interface ContextLogger {
     operation: (message: string, context?: LogContext) => void;
     database:  (message: string, context?: LogContext) => void;
@@ -49,8 +49,7 @@ class LoggerFactory {
     /**
      * Instantiates a Winston logger with transports and format from config.
      *
-     * Returns:
-     *     A configured winston.Logger instance.
+     * @returns A configured winston.Logger instance.
      */
     // Création du logger Winston avec les transports et le format configurés
     private createLogger(): winston.Logger {
@@ -71,8 +70,7 @@ class LoggerFactory {
     /**
      * Builds the combined Winston format pipeline.
      *
-     * Returns:
-     *     A combined Winston format object.
+     * @returns A combined Winston format object.
      */
     // Construction du pipeline de formatage des logs
     private createFormat(): winston.Logform.Format {
@@ -134,8 +132,7 @@ class LoggerFactory {
     /**
      * Creates the list of active Winston transports from config.
      *
-     * Returns:
-     *     Array of configured transport instances.
+     * @returns Array of configured transport instances.
      */
     // Création des transports actifs selon la configuration
     private createTransports(): winston.transport[] {
@@ -188,8 +185,7 @@ class LoggerFactory {
      *
      * Errors and warnings are always logged regardless of sampling rate.
      *
-     * Returns:
-     *     A Winston format instance.
+     * @returns A Winston format instance.
      */
     // Format d'échantillonnage — réduction du volume de logs en production
     private createSamplingFormat(): winston.Logform.Format {
@@ -212,8 +208,7 @@ class LoggerFactory {
     /**
      * Creates a Winston format that redacts sensitive fields from log entries.
      *
-     * Returns:
-     *     A Winston format instance.
+     * @returns A Winston format instance.
      */
     // Format de sanitisation — masquage des champs sensibles (mots de passe, tokens, etc.)
     private createSanitizationFormat(): winston.Logform.Format {
@@ -251,8 +246,7 @@ class LoggerFactory {
      *
      * Sampling is only enabled in production and when explicitly configured.
      *
-     * Returns:
-     *     True when sampling should be applied.
+     * @returns True when sampling should be applied.
      */
     // Activation de l'échantillonnage uniquement en production et si configuré
     private shouldEnableSampling(): boolean {
@@ -262,11 +256,8 @@ class LoggerFactory {
     /**
      * Infers tags from log entry metadata for easier filtering.
      *
-     * Args:
-     *     info: Log entry metadata object.
-     *
-     * Returns:
-     *     Array of tag strings derived from the entry's properties.
+     * @param info - Log entry metadata object.
+     * @returns Array of tag strings derived from the entry's properties.
      */
     // Inférence des tags à partir des métadonnées de l'entrée de log
     private inferTags(info: LogContext & { level: string }): string[] {
@@ -287,11 +278,8 @@ class LoggerFactory {
     /**
      * Returns a context-bound logger with domain-specific methods.
      *
-     * Args:
-     *     baseContext: Context fields automatically merged into every log entry.
-     *
-     * Returns:
-     *     A ContextLogger with typed methods for each log domain.
+     * @param baseContext - Context fields automatically merged into every log entry.
+     * @returns A {@link ContextLogger} with typed methods for each log domain.
      */
     // Création d'un logger contextuel avec des méthodes spécialisées par domaine
     createContextLogger(baseContext: LogContext = {}): ContextLogger {
@@ -352,8 +340,15 @@ class LoggerFactory {
 
 // Instanciation de la fabrique et exposition du logger principal
 const loggerFactory = new LoggerFactory();
+/** Shared Winston logger instance for the application. */
 const logger = loggerFactory.logger;
 
+/**
+ * Creates a context-bound {@link ContextLogger} tied to a request or module context.
+ *
+ * @param context - Context fields merged into every log entry produced by the returned logger.
+ * @returns A {@link ContextLogger} with domain-specific logging methods.
+ */
 // Fonction de création d'un logger contextuel lié à un contexte de requête
 const createContextLogger = (context: LogContext): ContextLogger =>
     loggerFactory.createContextLogger(context);
