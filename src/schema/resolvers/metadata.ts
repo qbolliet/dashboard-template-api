@@ -22,11 +22,9 @@ const metadataResolvers = {
     Query: {
         /**
          * Fetches metadata for a given field name.
+         * Arguments follow {@link MetadataArgs}.
          *
          * @param _ - Parent resolver result (unused at root).
-         * @param name - Name of the field to retrieve metadata for.
-         * @param database - Optional database alias override.
-         * @param context - GraphQL context with loaders.
          * @returns Metadata row for the requested field, or null if not found.
          */
         getMetaData: async (

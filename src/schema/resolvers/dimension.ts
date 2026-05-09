@@ -22,11 +22,9 @@ const dimensionResolvers = {
     Query: {
         /**
          * Gets all records from a dimension table.
+         * Arguments follow {@link DimensionTableArgs}.
          *
          * @param _ - Parent resolver result (unused at root).
-         * @param name - Name of the dimension table to load.
-         * @param database - Optional database alias override.
-         * @param context - GraphQL context with loaders.
          * @returns Array of dimension records from the requested table.
          */
         getDimensionTable: async (

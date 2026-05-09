@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 // ─── Interfaces de configuration ────────────────────────────────────────────
 
 /** File transport configuration for the logger. */
-interface FileTransportConfig {
+export interface FileTransportConfig {
     enabled: boolean;
     directory: string;
     filename: string;
@@ -22,12 +22,12 @@ interface FileTransportConfig {
 }
 
 /** Console transport configuration for the logger. */
-interface ConsoleTransportConfig {
+export interface ConsoleTransportConfig {
     enabled: boolean;
 }
 
 /** Error file transport configuration for the logger. */
-interface ErrorTransportConfig {
+export interface ErrorTransportConfig {
     enabled: boolean;
     directory: string;
     filename: string;
@@ -234,7 +234,7 @@ export interface CatalogConfig {
 }
 
 /** S3 configuration for remote Parquet file storage. */
-interface S3Config {
+export interface S3Config {
     ENABLED: boolean;
     ACCESS_KEY?: string;
     SECRET_KEY?: string;
@@ -316,7 +316,7 @@ type ConfigRecord = Record<string, unknown>;
  * Supports environment-variable substitution using the `${VAR:-default}` syntax
  * and environment-specific overrides for development/production environments.
  */
-class ConfigLoader {
+export class ConfigLoader {
     private configDir: string;
     private config: AppConfig | null;
 

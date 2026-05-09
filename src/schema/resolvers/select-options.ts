@@ -39,13 +39,9 @@ const selectOptionsResolvers = {
     Query: {
         /**
          * Fetches available options for a single field.
+         * Arguments follow {@link SelectOptionsArgs}.
          *
          * @param _ - Parent resolver result (unused at root).
-         * @param fieldName - Name of the field to fetch options for.
-         * @param limit - Maximum number of options to return.
-         * @param searchTerm - Optional text filter applied server-side.
-         * @param database - Optional database alias override.
-         * @param context - GraphQL context with loaders.
          * @returns Array of select option objects.
          */
         getSelectOptions: async (
@@ -71,16 +67,10 @@ const selectOptionsResolvers = {
 
         /**
          * Fetches options for two fields simultaneously (group + options).
-         *
-         * Loads both option sets in parallel to minimise latency, then
-         * returns them as a structured object.
+         * Loads both option sets in parallel to minimise latency.
+         * Arguments follow {@link GroupedSelectOptionsArgs}.
          *
          * @param _ - Parent resolver result (unused at root).
-         * @param groupField - Field used as the grouping dimension.
-         * @param optionsField - Field whose options are listed inside each group.
-         * @param limit - Maximum number of options to return for each field.
-         * @param database - Optional database alias override.
-         * @param context - GraphQL context with loaders.
          * @returns Object with group and options arrays.
          */
         getGroupedSelectOptions: async (

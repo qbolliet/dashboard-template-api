@@ -32,7 +32,7 @@ interface PaginatedFactResult {
 }
 
 /** Paginated D3 result (metadata enriched with pagination data). */
-interface PaginatedD3Result extends D3QueryResult {
+export interface PaginatedD3Result extends D3QueryResult {
     metadata: D3QueryResult['metadata'] & {
         total: number;
         hasNextPage: boolean;

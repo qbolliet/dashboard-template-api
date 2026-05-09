@@ -19,7 +19,7 @@ const dbLogger = createContextLogger({
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
 /** Shared pool statistics returned by {@link DatabaseManager.getStatistics}. */
-interface PoolStats {
+export interface PoolStats {
     available: number;
     using: number;
     total: number;
@@ -28,7 +28,7 @@ interface PoolStats {
 }
 
 /** Full statistics snapshot for the database manager. */
-interface DatabaseStats {
+export interface DatabaseStats {
     sharedPool: PoolStats | null;
     defaultDatabase: string;
     allowedDatabases: string[];

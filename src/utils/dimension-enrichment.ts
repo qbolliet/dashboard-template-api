@@ -1,26 +1,26 @@
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
 /** Detail of a categorical dimension value loaded from the dimension loader. */
-interface DimensionDetail {
+export interface DimensionDetail {
     name: string;
     value: unknown;
     label: unknown;
 }
 
 /** Field metadata returned by the metadata loader. */
-interface FieldMetadata {
+export interface FieldMetadata {
     is_categorical?: boolean;
     [key: string]: unknown;
 }
 
 /** Load request for a single dimension value. */
-interface DimensionLoadRequest {
+export interface DimensionLoadRequest {
     dimensionName: string;
     value: unknown;
 }
 
 /** Set of DataLoader instances available in the GraphQL context. */
-interface Loaders {
+export interface Loaders {
     metadata: {
         load: (fieldName: string) => Promise<FieldMetadata | null>;
     };
@@ -30,7 +30,7 @@ interface Loaders {
 }
 
 /** Raw fact — an object whose keys are dimension names or measure values. */
-type Fact = Record<string, unknown>;
+export type Fact = Record<string, unknown>;
 
 /** Aggregated fact with a group-by key and an aggregated numeric value. */
 export interface AggregatedFact {

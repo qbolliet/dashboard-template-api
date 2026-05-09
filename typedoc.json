@@ -3,7 +3,7 @@
   "entryPointStrategy": "expand",
   "exclude": ["src/index.ts"],
   "tsconfig": "tsconfig.json",
-  "out": "docs-site/docs/code-reference",
+  "out": "docs-site/code-reference",
   "plugin": ["typedoc-plugin-markdown"],
   "readme": "none",
   "hideGenerator": true,
@@ -12,5 +12,6 @@
   "outputFileStrategy": "modules",
   "flattenOutputFiles": false,
   "entryFileName": "README",
-  "excludeReferences": true
+  "excludeReferences": true,
+  "cleanOutputDir": false
 }

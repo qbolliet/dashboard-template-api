@@ -34,7 +34,7 @@ import type {
 } from './cross-database.js';
 import type DataLoader from 'dataloader';
 /** DataLoader alias with a string cache key, used by all loaders in this module. */
-type Loader<K, V> = DataLoader<K, V, string>;
+export type Loader<K, V> = DataLoader<K, V, string>;
 
 // ─── Interfaces des données d'amorçage ───────────────────────────────────────
 

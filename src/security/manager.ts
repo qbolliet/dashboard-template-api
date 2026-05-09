@@ -47,7 +47,7 @@ interface GraphQLRequest {
 }
 
 /** Signature of an original GraphQL resolver function. */
-type ResolverFn = (
+export type ResolverFn = (
     root:    unknown,
     args:    Record<string, unknown>,
     context: GraphQLContext,
@@ -55,7 +55,7 @@ type ResolverFn = (
 ) => Promise<unknown> | unknown;
 
 /** Signature of the security middleware function that wraps a resolver. */
-type MiddlewareFn = (
+export type MiddlewareFn = (
     resolve: ResolverFn,
     root:    unknown,
     args:    Record<string, unknown>,

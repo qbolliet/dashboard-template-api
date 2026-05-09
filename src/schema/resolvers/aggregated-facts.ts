@@ -12,13 +12,13 @@ import type { AggregatedFactParent } from './field-resolvers.js';
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
 
 /** Supported SQL aggregation operations. */
-type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
+export type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
 /** Valid values for sort order. */
-type SortOrder = 'ASC' | 'DESC';
+export type SortOrder = 'ASC' | 'DESC';
 
 /** Sort criterion specific to aggregated fact queries. */
-interface AggregatedSortItem {
+export interface AggregatedSortItem {
     field: 'key' | 'aggregatedValue';
     order: SortOrder;
 }

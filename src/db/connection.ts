@@ -12,7 +12,7 @@ const dbLogger = createContextLogger({
  * Returns the shared DuckDB connection pool for the default catalog.
  * Provided for backward compatibility with code that does not pass a catalog ID.
  *
- * @returns The shared {@link DuckDBPool} instance.
+ * @returns The shared `DuckDBPool` instance.
  */
 const getDefaultPool = () => {
     return databaseManager.getPool();
