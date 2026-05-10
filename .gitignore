@@ -8,13 +8,11 @@ docs-site/.docusaurus/
 docs-site/static/schema.json
 docs-site/static/schema.graphql
 
-# TypeDoc generated files (regenerated in CI; keep only the placeholder index.md)
+# TypeDoc generated files (regenerated in CI)
 docs-site/code-reference/**
-!docs-site/code-reference/index.md
 
-# graphql-markdown generated files (regenerated in CI; keep only the placeholder index.md)
-docs-site/docs/graphql-api/**
-!docs-site/docs/graphql-api/index.md
+# graphql-markdown generated files (regenerated in CI)
+docs-site/graphql-api/**
 
 # TypeScript compiled output
 dist/

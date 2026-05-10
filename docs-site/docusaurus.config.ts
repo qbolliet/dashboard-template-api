@@ -51,19 +51,32 @@ const config: Config = {
               .map((item) => item.label.toLowerCase())
           );
           return items.filter((item) => {
-            if (item.type !== 'doc' || !item.label) return true;
-            return !categoryLabels.has(item.label.toLowerCase());
+            if (item.type !== 'doc') return true;
+            // TypeDoc files have no frontmatter, so item.label may be undefined.
+            // Fall back to item.id (last path segment) for matching.
+            const id = (item.id ?? '').split('/').pop()?.toLowerCase() ?? '';
+            const label = (item.label ?? '').toLowerCase();
+            return !categoryLabels.has(id) && !categoryLabels.has(label);
           });
         },
+      },
+    ],
+    [
+      '@docusaurus/plugin-content-docs',
+      {
+        id: 'graphqlApi',
+        path: 'graphql-api',
+        routeBasePath: 'graphql-api',
+        sidebarPath: './sidebars-graphql.ts',
       },
     ],
     [
       '@graphql-markdown/docusaurus',
       {
         schema: 'static/schema.graphql',
-        rootPath: './docs',
+        rootPath: '.',
         baseURL: 'graphql-api',
-        homepage: './docs/graphql-api/index.md',
+        homepage: './graphql-api/index.md',
         loaders: {
           GraphQLFileLoader: '@graphql-tools/graphql-file-loader',
         },
@@ -109,6 +122,7 @@ const config: Config = {
         },
         {
           type: 'docSidebar',
+          docsPluginId: 'graphqlApi',
           sidebarId: 'graphqlApi',
           position: 'left',
           label: 'GraphQL API',
