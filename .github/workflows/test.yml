@@ -1,0 +1,70 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      NODE_ENV: development
+      ENVIRONMENT: development
+      REDIS_HOST: localhost
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ""
+      ADMIN_API_KEY: ci-test-key
+      LOG_TO_FILE: "false"
+      DEFAULT_CATALOG_PATH: /tmp/test.ducklake
+      DEFAULT_DATA_PATH: /tmp/test_data/
+      DEFAULT_READ_ONLY: "false"
+      DEFAULT_SCHEMA: main
+      DEFAULT_DATABASE: default
+      ALLOWED_DATABASES: '["default"]'
+      S3_ENABLED: "false"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run type:check
+
+      - name: Build
+        run: npm run build
+
+      - name: Setup test data
+        run: npm run test:setup
+
+      - name: Run tests
+        run: npm test
