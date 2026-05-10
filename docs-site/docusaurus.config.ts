@@ -43,21 +43,32 @@ const config: Config = {
         sidebarPath: './sidebars-code-reference.ts',
         // Remove TypeDoc module-summary doc items when a same-named category exists
         // at the same level (prevents duplicates like "cache" doc + "cache" folder).
+        // Applied recursively so nested levels (e.g. schema/resolvers + schema/resolvers/)
+        // are deduplicated too.
         sidebarItemsGenerator: async ({ defaultSidebarItemsGenerator, ...args }) => {
           const items = await defaultSidebarItemsGenerator({ defaultSidebarItemsGenerator, ...args });
-          const categoryLabels = new Set(
-            items
-              .filter((item) => item.type === 'category' && item.label)
-              .map((item) => item.label.toLowerCase())
-          );
-          return items.filter((item) => {
-            if (item.type !== 'doc') return true;
-            // TypeDoc files have no frontmatter, so item.label may be undefined.
-            // Fall back to item.id (last path segment) for matching.
-            const id = (item.id ?? '').split('/').pop()?.toLowerCase() ?? '';
-            const label = (item.label ?? '').toLowerCase();
-            return !categoryLabels.has(id) && !categoryLabels.has(label);
-          });
+          const dedupe = (level) => {
+            const categoryLabels = new Set(
+              level
+                .filter((item) => item.type === 'category' && item.label)
+                .map((item) => item.label.toLowerCase())
+            );
+            return level
+              .filter((item) => {
+                if (item.type !== 'doc') return true;
+                // TypeDoc files have no frontmatter, so item.label may be undefined.
+                // Fall back to item.id (last path segment) for matching.
+                const id = (item.id ?? '').split('/').pop()?.toLowerCase() ?? '';
+                const label = (item.label ?? '').toLowerCase();
+                return !categoryLabels.has(id) && !categoryLabels.has(label);
+              })
+              .map((item) =>
+                item.type === 'category' && Array.isArray(item.items)
+                  ? { ...item, items: dedupe(item.items) }
+                  : item
+              );
+          };
+          return dedupe(items);
         },
       },
     ],

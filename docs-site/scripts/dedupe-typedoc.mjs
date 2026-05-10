@@ -1,23 +1,32 @@
 /**
- * Post-processes the typedoc-plugin-markdown output to remove "-1" suffixed
- * file names (e.g. cache/redis-1.md → cache/redis.md) caused by name
- * collisions between a parent module's exported member and a child sub-module.
+ * Post-processes the typedoc-plugin-markdown output:
  *
- * Renames each *-1.md file to its canonical name (when free) and rewrites
- * every Markdown link referencing the suffixed name across the output tree.
+ *   1. Resolves "-1" name collisions (e.g. cache/redis-1.md vs cache/redis.md):
+ *      - if the canonical file already exists, the duplicate is deleted (the
+ *        member is already documented in the parent module summary);
+ *      - otherwise the suffixed file is renamed to its canonical name.
+ *      Links pointing at the suffixed name are rewritten across the tree.
  *
- * Also injects Docusaurus frontmatter into the TypeDoc-generated README.md
- * so it appears as "Overview" in the sidebar at position 1.
+ *   2. Strips the TypeDoc breadcrumb header at the top of every generated file.
+ *      Docusaurus already provides breadcrumbs through the sidebar, and the
+ *      TypeDoc breadcrumb links to a `README.md` route that does not exist
+ *      (the landing page is `index.md`, copied from the templates folder).
+ *
+ *   3. Deletes the TypeDoc-generated README.md so it does not conflict with
+ *      the curated index.md copied later from docs-site/templates/.
  *
  * Usage: node docs-site/scripts/dedupe-typedoc.mjs
  */
 
-import { readdir, readFile, rename, writeFile, stat } from 'fs/promises';
+import { readdir, readFile, rename, writeFile, stat, unlink } from 'fs/promises';
 import { join, dirname, relative, sep, posix } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', 'code-reference');
+
+const BREADCRUMB_RE =
+  /^\[\*\*[^\]]+\*\*\]\([^)]*README\.md\)\s*\n\s*\n\*\*\*\s*\n\s*\n\[[^\]]+\]\([^)]*README\.md\)[^\n]*\n\s*\n/;
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -30,67 +39,59 @@ async function walk(dir) {
   return files;
 }
 
+async function exists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   const files = await walk(ROOT);
-  const renames = [];
+  const linkUpdates = [];
 
   for (const file of files) {
     if (!file.endsWith('-1.md')) continue;
     const canonical = file.replace(/-1\.md$/, '.md');
-    try {
-      await stat(canonical);
-      console.warn(`[dedupe-typedoc] skip ${file}: ${canonical} already exists`);
-      continue;
-    } catch {
-      // canonical doesn't exist — safe to rename
+    if (await exists(canonical)) {
+      await unlink(file);
+      console.log(`[dedupe-typedoc] deleted duplicate ${relative(ROOT, file)} (canonical exists)`);
+    } else {
+      await rename(file, canonical);
+      console.log(`[dedupe-typedoc] renamed ${relative(ROOT, file)} → ${relative(ROOT, canonical)}`);
     }
-    await rename(file, canonical);
-    renames.push({ from: file, to: canonical });
-    console.log(`[dedupe-typedoc] renamed ${relative(ROOT, file)} → ${relative(ROOT, canonical)}`);
+    linkUpdates.push({ from: file, to: canonical });
   }
 
-  if (renames.length === 0) {
-    console.log('[dedupe-typedoc] no -1 files found, nothing to do.');
-    return;
-  }
-
-  // Rewrite links referencing renamed files across the output tree.
   const allFiles = await walk(ROOT);
+
   for (const file of allFiles) {
     if (!file.endsWith('.md')) continue;
     const original = await readFile(file, 'utf8');
-    let updated = original;
-    for (const { from, to } of renames) {
+    let updated = original.replace(BREADCRUMB_RE, '');
+
+    for (const { from, to } of linkUpdates) {
       const oldRel = relative(dirname(file), from).split(sep).join(posix.sep);
       const newRel = relative(dirname(file), to).split(sep).join(posix.sep);
       if (!oldRel) continue;
       updated = updated.split(oldRel).join(newRel);
     }
+
     if (updated !== original) {
       await writeFile(file, updated);
-      console.log(`[dedupe-typedoc] updated links in ${relative(ROOT, file)}`);
     }
   }
-}
 
-async function addReadmeFrontmatter() {
-  const readmePath = join(ROOT, 'README.md');
-  try {
-    const content = await readFile(readmePath, 'utf8');
-    if (content.startsWith('---')) return;
-    await writeFile(
-      readmePath,
-      `---\nsidebar_label: Overview\nsidebar_position: 1\n---\n\n${content}`
-    );
-    console.log('[dedupe-typedoc] added frontmatter to README.md');
-  } catch {
-    // README.md may not exist on first run
+  const typedocReadme = join(ROOT, 'README.md');
+  if (await exists(typedocReadme)) {
+    await unlink(typedocReadme);
+    console.log('[dedupe-typedoc] removed TypeDoc-generated README.md');
   }
 }
 
-main()
-  .then(addReadmeFrontmatter)
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

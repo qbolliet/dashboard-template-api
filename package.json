@@ -23,7 +23,7 @@
     "docs:typedoc": "typedoc && node docs-site/scripts/dedupe-typedoc.mjs",
     "docs:schema": "node docs-site/scripts/generate-schema.mjs",
     "docs:graphql": "npm --prefix docs-site run graphql-to-doc",
-    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm run docs:graphql && npm --prefix docs-site run build"
+    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm run docs:graphql && node docs-site/scripts/copy-doc-templates.mjs && npm --prefix docs-site run build"
   },
   "repository": {
     "type": "git",
