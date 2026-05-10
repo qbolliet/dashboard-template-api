@@ -1,5 +1,7 @@
 # GraphQL DuckLake API
 
+[![Build Image](https://github.com/qbolliet/dashboard-template-api/actions/workflows/build-image.yml/badge.svg)](https://github.com/qbolliet/dashboard-template-api/actions/workflows/build-image.yml)
+[![Test](https://github.com/qbolliet/dashboard-template-api/actions/workflows/test.yml/badge.svg)](https://github.com/qbolliet/dashboard-template-api/actions/workflows/test.yml)
 [![Deploy Documentation](https://github.com/qbolliet/dashboard-template-api/actions/workflows/docs.yml/badge.svg)](https://github.com/qbolliet/dashboard-template-api/actions/workflows/docs.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -51,6 +53,32 @@ npm run dev                   # → http://localhost:4000/graphql
 
 ---
 
+## Deployment
+
+The API is published as a public OCI image and ships with a Helm chart for Kubernetes.
+
+**Image** (GitHub Container Registry):
+
+```bash
+docker pull ghcr.io/qbolliet/dashboard-template-api:latest
+```
+
+**Helm** (chart published on every release tag):
+
+```bash
+helm repo add dta https://raw.githubusercontent.com/qbolliet/dashboard-template-api/gh-pages-charts/
+helm install api dta/dashboard-template-api -f values.prod.yaml
+```
+
+The full deployment guide — Dockerfile internals, `values.yaml` reference, ingress + TLS, autoscaling, and how to invalidate the Redis cache from an external updater — lives at:
+
+- [Deployment overview](https://qbolliet.github.io/dashboard-template-api/deployment/overview)
+- [Docker](https://qbolliet.github.io/dashboard-template-api/deployment/docker)
+- [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/deployment/kubernetes-helm)
+- [Cache invalidation](https://qbolliet.github.io/dashboard-template-api/deployment/cache-invalidation)
+
+---
+
 ## Repository structure
 
 ```
@@ -79,7 +107,10 @@ dashboard-template-api/
 │   └── integration/          # End-to-end GraphQL tests
 ├── docs-site/                # Docusaurus documentation site
 ├── scripts/                  # Database update handler
-└── docs/                     # Additional operational docs
+├── docs/                     # Additional operational docs
+├── helm/                     # Helm chart for Kubernetes deployment
+│   └── dashboard-template-api/
+└── Dockerfile                # Multi-stage production image
 ```
 
 ---

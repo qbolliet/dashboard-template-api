@@ -52,28 +52,38 @@ npm run db:invalidate
 npm run db:stats
 ```
 
-## Configuration
+## Implementation
 
-### Cache Settings (`config/cache.yaml`)
-```yaml
-CACHE:
-  INVALIDATION:
-    GRACE_PERIOD: 60          # Wait time before invalidation
-    AUTO_INVALIDATE: true     # Enable automatic invalidation
-    BATCH_SIZE: 1000         # Keys to delete per batch
-    TIMEOUT: 30000           # Max time for invalidation
+The cache invalidation logic lives in [`src/cache/cache-invalidation.ts`](../src/cache/cache-invalidation.ts). It exposes a `CacheInvalidationManager` singleton that performs a non-blocking Redis `SCAN` + `DEL` over the per-database key patterns:
+
+```
+metadata:<db>:*
+dimension:<db>:*
+dimension-value:<db>:*
+facts:<db>:*
+aggregated-facts:<db>:*
+select-options:<db>:*
 ```
 
 ### Database Settings (`config/database.yaml`)
+
+DuckLake catalogs are configured under the `CATALOGS` section; routing (which DB IDs are accepted, default DB, cross-DB queries) is under `DATABASE_ROUTING`. Paths can be local (`../path/to.ducklake`) or S3 URIs (`s3://bucket/...`):
+
 ```yaml
-DATABASES:
+CATALOGS:
   default:
-    PATH: ../dashboard-template-database/outputs/database.db
-  macroeconomics:
-    PATH: ../dashboard-template-database/outputs/macroeconomics.db
-  public_finance:
-    PATH: ../dashboard-template-database/outputs/public_finance.db
+    PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
+    DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
+    READ_ONLY: ${DEFAULT_READ_ONLY:-true}
+    SCHEMA: ${DEFAULT_SCHEMA:-main}
+
+DATABASE_ROUTING:
+  DEFAULT_DATABASE: ${DEFAULT_DATABASE:-default}
+  ALLOWED_DATABASES: ${ALLOWED_DATABASES:-["default"]}
+  ALLOW_CROSS_DATABASE_QUERIES: ${ALLOW_CROSS_DATABASE_QUERIES:-false}
 ```
+
+For deployments where the updater runs outside the API process (e.g. a Python script in a separate repo, or a CI job), see the [Cache invalidation deployment guide](https://qbolliet.github.io/dashboard-template-api/deployment/cache-invalidation).
 
 ## API Endpoints
 

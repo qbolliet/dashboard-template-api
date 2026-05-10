@@ -16,6 +16,17 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Deployment',
+      collapsed: false,
+      items: [
+        'deployment/overview',
+        'deployment/docker',
+        'deployment/kubernetes-helm',
+        'deployment/cache-invalidation',
+      ],
+    },
+    {
+      type: 'category',
       label: 'API Guide',
       collapsed: false,
       items: [
