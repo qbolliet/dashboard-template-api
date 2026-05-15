@@ -35,4 +35,7 @@ coverage/*
 CLAUDE.md
 .claude/*
 
+# Dépendances Helm téléchargées
+helm/**/charts/*.tgz
+
 TODO
