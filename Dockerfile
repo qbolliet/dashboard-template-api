@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 FROM node:20-bookworm-slim AS deps
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -18,6 +19,7 @@ FROM node:20-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     PORT=4000 \
     LOG_TO_FILE=false
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl tini ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
