@@ -281,15 +281,11 @@ async function startServer(): Promise<void> {
             return {
                 // Validation de sécurité avant l'exécution de l'opération
                 async didResolveOperation({ operation, request: opRequest }): Promise<void> {
-                    try {
-                        await securityManager.validateRequest(
-                            operation as { name?: { value?: string }; operation?: string },
-                            opRequest as { query?: string },
-                            contextValue
-                        );
-                    } catch (error) {
-                        throw error;
-                    }
+                    await securityManager.validateRequest(
+                        operation as { name?: { value?: string }; operation?: string },
+                        opRequest as { query?: string },
+                        contextValue
+                    );
                 },
 
                 // Logging de la complétion de la requête et formatage en production

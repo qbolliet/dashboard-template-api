@@ -52,7 +52,7 @@ const fieldResolvers = {
         dimensionDetails: async (
             parent: FactParent,
             _args: Record<string, never>,
-            { loaders }: GraphQLContext
+            { loaders: _loaders }: GraphQLContext
         ): Promise<DimensionDetail[]> => {
             // Retour des dimensionDetails pré-chargées si disponibles
             if (parent && parent.dimensionDetails) {

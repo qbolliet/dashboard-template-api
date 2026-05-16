@@ -178,7 +178,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
         // Exécution de la requête et mise en forme des lignes
         const results = await connection.all(query);
-        let data: AggregatedFactRow[] = results.map(row => ({
+        const data: AggregatedFactRow[] = results.map(row => ({
             ...row,
             key: String(row.key),
             aggregatedValue: Number(row.aggregatedValue),

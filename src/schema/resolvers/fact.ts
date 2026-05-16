@@ -5,8 +5,6 @@ import { config } from '../../utils/config-loader.js';
 import { GraphQLError } from 'graphql';
 import type { GraphQLContext } from './types.js';
 import type { FactQueryParams } from '../../loaders/fact.js';
-import type { SortItem } from '../../loaders/base-loader.js';
-import type { StructuredFilter } from '../../utils/utils.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 

@@ -5,7 +5,7 @@ import { enrichAggregatedFacts } from './field-resolvers.js';
 import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
 import type { GraphQLContext } from './types.js';
-import type { AggregatedQueryParams, AggregatedResult } from '../../loaders/aggregated-facts.js';
+import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
 import type { StructuredFilter } from '../../utils/utils.js';
 import type { AggregatedFactParent } from './field-resolvers.js';
 
