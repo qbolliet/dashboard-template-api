@@ -48,37 +48,9 @@ All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) 
 
 ## Cache invalidation
 
-When a DuckLake file is updated, the cache must be invalidated to prevent stale data. Two mechanisms are provided:
+When a DuckLake file is updated, the cache must be invalidated to prevent stale data. The API exposes three admin-protected HTTP endpoints (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidate/:database`, `GET /api/cache/stats`) that perform a non-blocking Redis `SCAN` + `DEL` over the per-database key namespaces.
 
-### Manual invalidation
-
-```bash
-npm run db:update           # handles a database update event + invalidates cache
-npm run db:update:dry       # dry run — shows what would be invalidated
-npm run db:invalidate       # force-invalidate all cache keys immediately
-```
-
-### Automatic invalidation
-
-When `CACHE_AUTO_INVALIDATE=true` (default), the `handle-database-update.js` script:
-
-1. Waits `GRACE_PERIOD` seconds (60 s default) for in-flight queries to drain
-2. Deletes all cache keys matching the updated catalog's prefix in batches of `BATCH_SIZE`
-3. Times out after `TIMEOUT` ms if invalidation takes too long
-
-### Graceful invalidation flow
-
-```
-DB file updated
-  │
-  ├─ Wait GRACE_PERIOD seconds
-  │
-  ├─ Delete cache keys in batches (BATCH_SIZE)
-  │
-  └─ Log success / timeout
-```
-
-See `docs/DATABASE_UPDATES.md` for the full operational procedure.
+See the [Cache invalidation deployment guide](../deployment/cache-invalidation) for endpoint reference, in-cluster `CronJob` patterns, the Python updater example, monitoring and troubleshooting.
 
 ## HTTP cache headers
 

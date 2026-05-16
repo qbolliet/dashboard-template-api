@@ -89,5 +89,3 @@ npm run start:prod   # run compiled output with Node
 | `npm run test:setup` | Load test fixtures into DuckLake files |
 | `npm test` | Run all Jest tests |
 | `npm run test:coverage` | Run tests with coverage report |
-| `npm run db:update` | Handle a database file update (invalidates cache) |
-| `npm run db:stats` | Display Redis cache statistics |

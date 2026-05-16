@@ -48,8 +48,6 @@ npm run dev                   # → http://localhost:4000/graphql
 | `npm run test:setup` | Load test fixtures |
 | `npm test` | Run Jest test suite |
 | `npm run test:coverage` | Tests with coverage report |
-| `npm run db:update` | Handle database file update + cache invalidation |
-| `npm run db:stats` | Display Redis cache statistics |
 
 ---
 
