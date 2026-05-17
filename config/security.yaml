@@ -2,27 +2,27 @@ SECURITY:
   # Profondeur maximale des requêtes GraphQL
   MAX_QUERY_DEPTH:
     development: 15
-    production: 7  
+    production: 7
   # Configuration du rate limiting
   RATE_LIMIT:
     # Nombre maximum de requêtes par fenêtre
-    MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+    MAX_REQUESTS: 100
     # Durée de la fenêtre en millisecondes (15 minutes)
-    WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+    WINDOW_MS: 900000
     # Nombre maximum de requêtes en rafale
-    MAX_BURST_REQUESTS: ${RATE_LIMIT_BURST:-20}
+    MAX_BURST_REQUESTS: 20
     # Durée de la fenêtre de rafale (1 minute)
-    BURST_WINDOW_MS: ${RATE_LIMIT_BURST_WINDOW:-60000}
+    BURST_WINDOW_MS: 60000
     # Ignorer les requêtes échouées dans le comptage
     SKIP_FAILED_REQUESTS: false
     # IPs de proxy de confiance autorisées à transmettre x-forwarded-for
     # Ex: ['127.0.0.1'] pour un reverse-proxy local, ['*'] pour faire confiance à tous (déconseillé)
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
-    
+
   # Configuration de la complexité
   COMPLEXITY:
     # Complexité maximale autorisée
-    MAX_ALLOWED: ${MAX_QUERY_COMPLEXITY:-100}
+    MAX_ALLOWED: 100
     # Coûts par type d'opération
     SCALAR_COST: 0
     OBJECT_COST: 1
@@ -34,42 +34,42 @@ SECURITY:
       getFactTable: 5
       getAggregatedFacts: 10
       getFactTableWithMetadata: 8
-  
+
   # Configuration de la sanitization
   SANITIZATION:
     ENABLE_XSS: true
     ENABLE_SQL: true
-    MAX_STRING_LENGTH: ${MAX_INPUT_LENGTH:-1000}
+    MAX_STRING_LENGTH: 1000
     # Tags HTML autorisés (vide = aucun)
     ALLOWED_TAGS: []
     # Sanitizers personnalisés par champ
     CUSTOM_SANITIZERS: {}
-    
+
   # Configuration du monitoring
   MONITORING:
-    # Seuil pour les requêtes lentes (ms)
+    # Seuil pour les requêtes lentes (ms) — surchargeable via SLOW_QUERY_THRESHOLD pour debug
     SLOW_QUERY_THRESHOLD: ${SLOW_QUERY_THRESHOLD:-1000}
-    # Logger toutes les métriques (debug)
+    # Logger toutes les métriques (debug) — surchargeable via LOG_ALL_SECURITY_METRICS
     LOG_ALL_METRICS: ${LOG_ALL_SECURITY_METRICS:-false}
 
 # Configuration des timeouts basés sur la complexité
 TIMEOUTS:
   # Timeout de base en millisecondes
-  BASE_TIMEOUT: ${BASE_TIMEOUT:-5000}
+  BASE_TIMEOUT: 5000
   # Timeout additionnel par point de complexité
-  TIMEOUT_PER_COMPLEXITY: ${TIMEOUT_PER_COMPLEXITY:-100}
+  TIMEOUT_PER_COMPLEXITY: 100
   # Timeout maximum en millisecondes
-  MAX_TIMEOUT: ${MAX_TIMEOUT:-30000}
-  
+  MAX_TIMEOUT: 30000
+
 # Configuration des seuils de sécurité
 SECURITY_LIMITS:
   # Seuil de profondeur par défaut pour les requêtes simples
-  DEFAULT_DEPTH_LIMIT: ${DEFAULT_DEPTH_LIMIT:-5}
+  DEFAULT_DEPTH_LIMIT: 5
   # Longueur maximale des chaînes d'entrée
-  MAX_INPUT_LENGTH: ${MAX_INPUT_LENGTH:-1000}
+  MAX_INPUT_LENGTH: 1000
   # Facteur de complexité pour les listes
-  COMPLEXITY_LIST_FACTOR: ${COMPLEXITY_LIST_FACTOR:-10}
+  COMPLEXITY_LIST_FACTOR: 10
   # Facteur de complexité pour la profondeur
-  COMPLEXITY_DEPTH_FACTOR: ${COMPLEXITY_DEPTH_FACTOR:-1.5}
+  COMPLEXITY_DEPTH_FACTOR: 1.5
   # Constante pour le calcul de complexité
-  COMPLEXITY_CALCULATION_FACTOR: ${COMPLEXITY_CALCULATION_FACTOR:-0.1}
+  COMPLEXITY_CALCULATION_FACTOR: 0.1

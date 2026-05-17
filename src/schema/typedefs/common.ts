@@ -28,10 +28,10 @@ const commonTypeDefs: DocumentNode = gql`
   }
 
   type AggregatedFact {
-      key: String!
-      aggregatedValue: Float!
-      count: Int!
-      keyLabel: String
+    key: String!
+    aggregatedValue: Float!
+    count: Int!
+    keyLabel: String
   }
 
   input Filter {

@@ -10,16 +10,18 @@
     "dev": "tsx watch src/index.js",
     "build": "tsc",
     "type:check": "tsc --noEmit",
-    "lint": "eslint src/",
+    "lint": "eslint src/ --ext .ts,.js",
     "format": "prettier --write 'src/**/*.{js,ts}'",
+    "format:check": "prettier --check 'src/**/*.{js,ts}'",
+    "prepare": "husky",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
     "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
     "test:setup": "tsx tests/setup/setup-test-data.ts",
-    "db:update": "node scripts/handle-database-update.js",
-    "db:update:dry": "node scripts/handle-database-update.js --dry-run",
-    "db:invalidate": "curl -X POST http://localhost:4000/api/cache/invalidate-all || echo 'Server not running'",
-    "db:stats": "curl http://localhost:4000/api/cache/stats || echo 'Server not running'"
+    "docs:typedoc": "typedoc && node docs-site/scripts/dedupe-typedoc.mjs",
+    "docs:schema": "node docs-site/scripts/generate-schema.mjs",
+    "docs:graphql": "npm --prefix docs-site run graphql-to-doc",
+    "docs:build": "npm run docs:typedoc && npm run docs:schema && npm run docs:graphql && node docs-site/scripts/copy-doc-templates.mjs && npm --prefix docs-site run build"
   },
   "repository": {
     "type": "git",
@@ -32,6 +34,18 @@
   ],
   "author": "Quentin Bolliet",
   "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "lint-staged": {
+    "*.{js,ts}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ]
+  },
   "dependencies": {
     "@apollo/server": "^5.5.0",
     "@as-integrations/express5": "^1.1.2",
@@ -45,8 +59,6 @@
     "graphql": "^16.9.0",
     "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.1",
-    "js-yaml": "^4.1.0",
-    "sqlstring": "^2.3.3",
     "uuid": "^13.0.0",
     "winston": "^3.17.0",
     "winston-daily-rotate-file": "^5.0.0",
@@ -58,16 +70,22 @@
     "@types/compression": "^1.7.5",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
-    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
-    "@types/sqlstring": "^2.3.2",
     "@types/uuid": "^10.0.0",
+    "@commitlint/cli": "^19.6.0",
+    "@commitlint/config-conventional": "^19.6.0",
+    "@typescript-eslint/eslint-plugin": "^8.59.3",
+    "@typescript-eslint/parser": "^8.59.3",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.1",
-    "graphql-request": "^7.2.0",
+    "husky": "^9.1.7",
     "jest": "^30.3.0",
+    "lint-staged": "^15.2.10",
+    "prettier": "^3.4.0",
     "ts-jest": "^29.4.0",
     "tsx": "^4.19.0",
+    "typedoc": "^0.28.19",
+    "typedoc-plugin-markdown": "^4.11.0",
     "typescript": "^5.8.0"
   }
 }

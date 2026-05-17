@@ -24,7 +24,7 @@ LOGGING:
       compress: true
       
     error:
-      enabled: true
+      enabled: ${LOG_TO_FILE:-true}
       directory: ${LOG_DIR:-./logs}
       filename: 'error-%DATE%.log'
       level: error

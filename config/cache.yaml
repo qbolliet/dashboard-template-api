@@ -29,17 +29,6 @@ CACHE:
     AGGREGATED_FACTS: 300   
     SELECT_OPTIONS: 600
     COUNT_QUERIES: 300
-
-  # Cache invalidation settings for database updates
-  INVALIDATION:
-    # Time in seconds to wait after database update before invalidating cache
-    GRACE_PERIOD: ${CACHE_INVALIDATION_GRACE_PERIOD:-60}
-    # Enable automatic cache invalidation on database version changes
-    AUTO_INVALIDATE: ${CACHE_AUTO_INVALIDATE:-true}
-    # Batch size for key deletion during invalidation
-    BATCH_SIZE: ${CACHE_INVALIDATION_BATCH_SIZE:-1000}
-    # Maximum time to wait for cache invalidation to complete
-    TIMEOUT: ${CACHE_INVALIDATION_TIMEOUT:-30000}
   
   HTTP_CACHE:
     PUBLIC_PATHS: ['/graphql']

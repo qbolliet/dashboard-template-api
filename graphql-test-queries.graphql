@@ -1243,3 +1243,109 @@ query TestFactTableFormatArraysMacro {
     }
   }
 }
+
+# ============================================
+# 19. TESTS GETFIELDS (NOMS DE VARIABLES POUR MENUS SELECT)
+# ============================================
+#
+# getFields retourne les noms des champs de la table metadata au format
+# {value, label} (identique à getSelectOptions) afin d'alimenter
+# directement les menus <select> du frontend.
+#
+# Réutilise le loader catalogMetadata (cache Redis partagé avec
+# getDatabaseSchema) puis filtre en mémoire.
+#
+# Tous les filtres sont optionnels et combinables (AND):
+#   - database       : alias du catalogue (par défaut: catalogue courant)
+#   - sqlType        : type SQL exact, insensible à la casse (ex: "VARCHAR")
+#   - isCategorical  : true = champs catégoriels, false = champs continus
+#   - isPrimaryKey   : true/false pour inclure/exclure les clés primaires
+#   - namePattern    : sous-chaîne case-insensitive dans le nom (style LIKE)
+
+# Test 19.1: Tous les champs au format {value, label} (prêt pour <select>)
+query TestGetFieldsAll {
+  getFields {
+    value
+    label
+  }
+}
+
+# Test 19.2: Champs catégoriels uniquement (menus de dimensions)
+query TestGetFieldsCategorical {
+  getFields(isCategorical: true) {
+    value
+    label
+  }
+}
+
+# Test 19.3: Champs continus uniquement (axes numériques)
+query TestGetFieldsContinuous {
+  getFields(isCategorical: false) {
+    value
+    label
+  }
+}
+
+# Test 19.4: Filtrage par type SQL (ex: tous les champs VARCHAR)
+query TestGetFieldsBySqlType {
+  getFields(sqlType: "VARCHAR") {
+    value
+    label
+  }
+}
+
+# Test 19.5: Autocomplete sur le nom (sous-chaîne case-insensitive)
+query TestGetFieldsByNamePattern {
+  getFields(namePattern: "count") {
+    value
+    label
+  }
+}
+
+# Test 19.6: Exclusion des clés primaires
+query TestGetFieldsExcludePrimaryKeys {
+  getFields(isPrimaryKey: false) {
+    value
+    label
+  }
+}
+
+# Test 19.7: Filtres combinés (catégoriels + nom contenant "ind")
+query TestGetFieldsCombined {
+  getFields(isCategorical: true, namePattern: "ind") {
+    value
+    label
+  }
+}
+
+# Test 19.8: Sur un catalogue spécifique
+query TestGetFieldsOnDatabase {
+  getFields(database: "macroeconomics", isCategorical: true) {
+    value
+    label
+  }
+}
+
+# Test 19.9: Plusieurs sélections en parallèle (un menu par catégorie de type)
+query TestGetFieldsMultiAlias {
+  categoricalFields: getFields(isCategorical: true) {
+    value
+    label
+  }
+  numericFields: getFields(sqlType: "DOUBLE") {
+    value
+    label
+  }
+  textFields: getFields(sqlType: "VARCHAR") {
+    value
+    label
+  }
+}
+
+# Test 19.10: Catalogue inconnu — doit lever une erreur
+query TestGetFieldsInvalidDatabase {
+  getFields(database: "nonexistent_xyz") {
+    value
+    label
+  }
+}

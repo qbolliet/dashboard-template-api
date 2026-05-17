@@ -34,14 +34,14 @@ const baseTypeDefs: DocumentNode = gql`
  * to Apollo Server.
  */
 const typeDefs: DocumentNode = mergeTypeDefs([
-    baseTypeDefs,
-    commonTypeDefs,
-    dimensionTypeDefs,
-    factTypeDefs,
-    metadataTypeDefs,
-    selectTypeDefs,
-    catalogTypeDefs,
-    crossDatabaseTypeDefs,
+  baseTypeDefs,
+  commonTypeDefs,
+  dimensionTypeDefs,
+  factTypeDefs,
+  metadataTypeDefs,
+  selectTypeDefs,
+  catalogTypeDefs,
+  crossDatabaseTypeDefs,
 ]);
 
 // Réexportation du schéma fusionné

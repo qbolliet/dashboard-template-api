@@ -11,14 +11,14 @@ import type { DocumentNode } from 'graphql';
  * entry point for fetching a dimension table from a given catalog.
  */
 const dimensionTypeDefs: DocumentNode = gql`
-    type Dimension {
-        value: String
-        label: String
-    }
+  type Dimension {
+    value: String
+    label: String
+  }
 
-    type Query {
-        getDimensionTable(name: String!, database: String): [Dimension]
-    }
+  type Query {
+    getDimensionTable(name: String!, database: String): [Dimension]
+  }
 `;
 
 export { dimensionTypeDefs };

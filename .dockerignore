@@ -1,0 +1,52 @@
+# VCS / IDE
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+
+# Build output
+dist
+coverage
+.tsbuildinfo
+*.tsbuildinfo
+
+# Dependencies (re-installed in image)
+node_modules
+
+# Logs and runtime
+logs
+*.log
+npm-debug.log*
+data
+
+# Local env (never bake into image)
+.env
+.env.*
+!.env.example
+
+# Tests
+tests
+jest.config.js
+jest.config.cjs
+
+# Documentation
+docs
+docs-site
+
+# Helm / K8s / Docker (not needed inside image)
+helm
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Misc
+README.md
+TODO
+*.md
+!LICENSE
+typedoc.json
+.editorconfig
+.prettierrc*
+.eslintrc*
