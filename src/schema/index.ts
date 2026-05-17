@@ -14,8 +14,8 @@ import { resolvers } from './resolvers/index.js';
  */
 // Construction du schéma exécutable à partir des typedefs et resolvers
 const schema: GraphQLSchema = makeExecutableSchema({
-    typeDefs,
-    resolvers,
+  typeDefs,
+  resolvers,
 });
 
 // Ré-exportation du schéma

@@ -9,46 +9,46 @@ import type { StructuredFilter } from '../utils/utils.js';
 
 /** Parameters for a fact table query. */
 interface FactQueryParams {
-    fields?: string[];
-    filters?: string | null;
-    structuredFilters?: StructuredFilter[] | null;
-    limit: number;
-    offset: number;
-    sort?: SortItem[];
-    format?: 'default' | 'metadata' | 'json' | 'with-count' | 'ARRAYS';
-    includeCount?: boolean;
+  fields?: string[];
+  filters?: string | null;
+  structuredFilters?: StructuredFilter[] | null;
+  limit: number;
+  offset: number;
+  sort?: SortItem[];
+  format?: 'default' | 'metadata' | 'json' | 'with-count' | 'ARRAYS';
+  includeCount?: boolean;
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
 /** Standard paginated result with total count. */
 interface PaginatedFactResult {
-    data: Record<string, unknown>[] | unknown[][];
+  data: Record<string, unknown>[] | unknown[][];
+  total: number;
+  hasNextPage: boolean;
+  currentPage: number;
+  totalPages: number;
+  generatedAt: string;
+}
+
+/** Paginated D3 result (metadata enriched with pagination data). */
+export interface PaginatedD3Result extends D3QueryResult {
+  metadata: D3QueryResult['metadata'] & {
     total: number;
     hasNextPage: boolean;
     currentPage: number;
     totalPages: number;
     generatedAt: string;
-}
-
-/** Paginated D3 result (metadata enriched with pagination data). */
-export interface PaginatedD3Result extends D3QueryResult {
-    metadata: D3QueryResult['metadata'] & {
-        total: number;
-        hasNextPage: boolean;
-        currentPage: number;
-        totalPages: number;
-        generatedAt: string;
-    };
+  };
 }
 
 /** Union of all possible formats returned by loadFacts. */
 type FactQueryResult =
-    | Record<string, unknown>[]
-    | unknown[][]
-    | D3QueryResult
-    | PaginatedFactResult
-    | PaginatedD3Result;
+  | Record<string, unknown>[]
+  | unknown[][]
+  | D3QueryResult
+  | PaginatedFactResult
+  | PaginatedD3Result;
 
 // Classe de chargement de la table des faits
 /**
@@ -58,127 +58,126 @@ type FactQueryResult =
  * and optional count enrichment for pagination.
  */
 class FactLoader extends FactQueryLoader {
+  // Initialisation avec la configuration spécifique aux faits
+  /**
+   * Creates a FactLoader bound to a specific database.
+   *
+   * @param databaseId - Catalog alias to query; null uses the default database.
+   */
+  constructor(databaseId: string | null = null) {
+    super({
+      batchSize: config.API.LOADERS.BATCH_SIZE,
+      cachePrefix: 'facts',
+      cache: true,
+      cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
+      databaseId,
+    });
+  }
 
-    // Initialisation avec la configuration spécifique aux faits
-    /**
-     * Creates a FactLoader bound to a specific database.
-     *
-     * @param databaseId - Catalog alias to query; null uses the default database.
-     */
-    constructor(databaseId: string | null = null) {
-        super({
-            batchSize: config.API.LOADERS.BATCH_SIZE,
-            cachePrefix: 'facts',
-            cache: true,
-            cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
-            databaseId
-        });
-    }
+  // Méthode de chargement basée sur les paramètres de requête
+  /**
+   * Loads fact data based on query parameters.
+   *
+   * Builds a parameterized SQL query and returns results in the requested
+   * format. When includeCount is true, a separate COUNT query is issued
+   * and the result is wrapped with pagination metadata.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param params - Query parameters controlling fields, filters, and format.
+   * @returns Query results in the requested format, optionally with count.
+   * @throws {Error} When pagination parameters exceed configured limits.
+   */
+  async loadFacts(connection: DuckDBConnection, params: FactQueryParams): Promise<FactQueryResult> {
+    const {
+      fields,
+      filters,
+      structuredFilters,
+      limit,
+      offset,
+      sort,
+      format = 'default',
+      includeCount = false,
+    } = params;
 
-    // Méthode de chargement basée sur les paramètres de requête
-    /**
-     * Loads fact data based on query parameters.
-     *
-     * Builds a parameterized SQL query and returns results in the requested
-     * format. When includeCount is true, a separate COUNT query is issued
-     * and the result is wrapped with pagination metadata.
-     *
-     * @param connection - Active DuckDB connection from the pool.
-     * @param params - Query parameters controlling fields, filters, and format.
-     * @returns Query results in the requested format, optionally with count.
-     * @throws {Error} When pagination parameters exceed configured limits.
-     */
-    async loadFacts(connection: DuckDBConnection, params: FactQueryParams): Promise<FactQueryResult> {
-        const {
-            fields,
-            filters,
-            structuredFilters,
-            limit,
-            offset,
-            sort,
-            format = 'default',
-            includeCount = false
-        } = params;
+    // Validation des paramètres de pagination
+    this.validatePagination(limit, offset);
 
-        // Validation des paramètres de pagination
-        this.validatePagination(limit, offset);
+    // Construction des clauses SQL
+    const selectClause = this.buildSelectClause(fields);
+    const whereClause = buildWhereClause(filters, structuredFilters);
+    const sortClause = this.buildSortClause(sort);
 
-        // Construction des clauses SQL
-        const selectClause = this.buildSelectClause(fields);
-        const whereClause = buildWhereClause(filters, structuredFilters);
-        const sortClause = this.buildSortClause(sort);
-
-        const query = `
+    const query = `
             SELECT ${selectClause} FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
             ${sortClause}
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-        // Récupération des données selon le format demandé
-        let data: FactQueryResult;
-        switch (format) {
-            case 'metadata':
-                // Format enrichi avec métadonnées D3 (colonnes, extents)
-                data = await connection.getWithMetadata(query);
-                break;
-            case 'json':
-                // Format tableau de tableaux optimisé pour les gros datasets
-                data = await connection.getAsJsonArray(query);
-                break;
-            default:
-                // Format par défaut — tableau d'objets
-                data = await connection.all(query);
-        }
-
-        // Enrichissement avec le comptage total si demandé
-        if (includeCount || format === 'with-count') {
-            const total = await this.getCount(connection, { filters, structuredFilters });
-
-            // Enrichissement des métadonnées D3 si déjà présentes
-            if (format === 'metadata' && (data as D3QueryResult).metadata) {
-                const d3Data = data as D3QueryResult;
-                (data as PaginatedD3Result).metadata = {
-                    ...d3Data.metadata,
-                    total,
-                    hasNextPage: offset + limit < total,
-                    currentPage: Math.floor(offset / limit) + 1,
-                    totalPages: Math.ceil(total / limit),
-                    generatedAt: new Date().toISOString()
-                };
-            } else {
-                // Wrapper en objet paginé pour les autres formats
-                data = {
-                    data: Array.isArray(data) ? data : ((data as D3QueryResult)?.data || []),
-                    total,
-                    hasNextPage: offset + limit < total,
-                    currentPage: Math.floor(offset / limit) + 1,
-                    totalPages: Math.ceil(total / limit),
-                    generatedAt: new Date().toISOString()
-                } as PaginatedFactResult;
-            }
-        }
-
-        return data;
+    // Récupération des données selon le format demandé
+    let data: FactQueryResult;
+    switch (format) {
+      case 'metadata':
+        // Format enrichi avec métadonnées D3 (colonnes, extents)
+        data = await connection.getWithMetadata(query);
+        break;
+      case 'json':
+        // Format tableau de tableaux optimisé pour les gros datasets
+        data = await connection.getAsJsonArray(query);
+        break;
+      default:
+        // Format par défaut — tableau d'objets
+        data = await connection.all(query);
     }
 
-    // Méthode de comptage du nombre total d'observations correspondant aux filtres
-    /**
-     * Gets the total count of rows matching the given filters.
-     *
-     * @param connection - Active DuckDB connection from the pool.
-     * @param filters - Object containing raw and structured filter parameters.
-     * @returns Total row count as a number.
-     */
-    async getCount(
-        connection: DuckDBConnection,
-        { filters, structuredFilters }: Pick<FactQueryParams, 'filters' | 'structuredFilters'>
-    ): Promise<number> {
-        const whereClause = buildWhereClause(filters, structuredFilters);
-        const countQuery = `SELECT COUNT(*) as total FROM ${this.qualifyTable('fact_table')} ${whereClause}`;
-        const result = await connection.all(countQuery);
-        return result[0].total as number;
+    // Enrichissement avec le comptage total si demandé
+    if (includeCount || format === 'with-count') {
+      const total = await this.getCount(connection, { filters, structuredFilters });
+
+      // Enrichissement des métadonnées D3 si déjà présentes
+      if (format === 'metadata' && (data as D3QueryResult).metadata) {
+        const d3Data = data as D3QueryResult;
+        (data as PaginatedD3Result).metadata = {
+          ...d3Data.metadata,
+          total,
+          hasNextPage: offset + limit < total,
+          currentPage: Math.floor(offset / limit) + 1,
+          totalPages: Math.ceil(total / limit),
+          generatedAt: new Date().toISOString(),
+        };
+      } else {
+        // Wrapper en objet paginé pour les autres formats
+        data = {
+          data: Array.isArray(data) ? data : (data as D3QueryResult)?.data || [],
+          total,
+          hasNextPage: offset + limit < total,
+          currentPage: Math.floor(offset / limit) + 1,
+          totalPages: Math.ceil(total / limit),
+          generatedAt: new Date().toISOString(),
+        } as PaginatedFactResult;
+      }
     }
+
+    return data;
+  }
+
+  // Méthode de comptage du nombre total d'observations correspondant aux filtres
+  /**
+   * Gets the total count of rows matching the given filters.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param filters - Object containing raw and structured filter parameters.
+   * @returns Total row count as a number.
+   */
+  async getCount(
+    connection: DuckDBConnection,
+    { filters, structuredFilters }: Pick<FactQueryParams, 'filters' | 'structuredFilters'>,
+  ): Promise<number> {
+    const whereClause = buildWhereClause(filters, structuredFilters);
+    const countQuery = `SELECT COUNT(*) as total FROM ${this.qualifyTable('fact_table')} ${whereClause}`;
+    const result = await connection.all(countQuery);
+    return result[0].total as number;
+  }
 }
 
 // Fonction de création d'un loader pour la table des faits
@@ -189,10 +188,10 @@ class FactLoader extends FactQueryLoader {
  * @returns DataLoader keyed by FactQueryParams, returning FactQueryResult.
  */
 const createFactLoader = (databaseId: string | null = null) => {
-    const loader = new FactLoader(databaseId);
-    return loader.createLoader<FactQueryParams, FactQueryResult>(
-        (connection, params) => loader.loadFacts(connection, params)
-    );
+  const loader = new FactLoader(databaseId);
+  return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
+    loader.loadFacts(connection, params),
+  );
 };
 
 // Fonction de création d'un loader pour la table des faits avec comptage total
@@ -203,10 +202,10 @@ const createFactLoader = (databaseId: string | null = null) => {
  * @returns DataLoader returning paginated fact results with total count.
  */
 const createFactWithCountLoader = (databaseId: string | null = null) => {
-    const loader = new FactLoader(databaseId);
-    return loader.createLoader<FactQueryParams, FactQueryResult>(
-        (connection, params) => loader.loadFacts(connection, { ...params, includeCount: true })
-    );
+  const loader = new FactLoader(databaseId);
+  return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
+    loader.loadFacts(connection, { ...params, includeCount: true }),
+  );
 };
 
 // Fonction de création d'un loader pour la table des faits avec métadonnées D3
@@ -217,11 +216,10 @@ const createFactWithCountLoader = (databaseId: string | null = null) => {
  * @returns DataLoader returning D3-formatted facts with column metadata and count.
  */
 const createFactWithMetadataLoader = (databaseId: string | null = null) => {
-    const loader = new FactLoader(databaseId);
-    return loader.createLoader<FactQueryParams, FactQueryResult>(
-        (connection, params) =>
-            loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true })
-    );
+  const loader = new FactLoader(databaseId);
+  return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
+    loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true }),
+  );
 };
 
 export { createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader, FactLoader };

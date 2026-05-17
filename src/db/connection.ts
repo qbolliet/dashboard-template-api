@@ -4,8 +4,8 @@ import { createContextLogger } from '../utils/logger.js';
 
 // Création du logger contextualisé pour ce module
 const dbLogger = createContextLogger({
-    component: 'database',
-    module: 'connection'
+  component: 'database',
+  module: 'connection',
 });
 
 /**
@@ -15,7 +15,7 @@ const dbLogger = createContextLogger({
  * @returns The shared `DuckDBPool` instance.
  */
 const getDefaultPool = () => {
-    return databaseManager.getPool();
+  return databaseManager.getPool();
 };
 
 /**
@@ -29,15 +29,9 @@ const dbPool = getDefaultPool();
  * Thin wrapper around {@link closeAllConnections} retained for backward compatibility.
  */
 const closeConnections = async (): Promise<void> => {
-    dbLogger.database('Closing all database connections (legacy function)');
-    await closeAllConnections();
+  dbLogger.database('Closing all database connections (legacy function)');
+  await closeAllConnections();
 };
 
 // Exportation pour compatibilité et nouvelles fonctionnalités
-export {
-    dbPool,
-    closeConnections,
-    databaseManager,
-    closeAllConnections,
-    getDefaultPool
-};
+export { dbPool, closeConnections, databaseManager, closeAllConnections, getDefaultPool };

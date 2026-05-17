@@ -16,17 +16,17 @@ import { crossDatabaseResolvers } from './cross-database.js';
  * for dimension label resolution on Fact and AggregatedFact types.
  */
 const resolvers = {
-    Query: {
-        ...metadataResolvers.Query,
-        ...dimensionResolvers.Query,
-        ...factResolvers.Query,
-        ...aggregatedFactsResolvers.Query,
-        ...selectOptionsResolvers.Query,
-        ...catalogResolvers.Query,
-        ...crossDatabaseResolvers.Query
-    },
-    // Ajout des field resolvers pour la résolution des labels
-    ...fieldResolvers
+  Query: {
+    ...metadataResolvers.Query,
+    ...dimensionResolvers.Query,
+    ...factResolvers.Query,
+    ...aggregatedFactsResolvers.Query,
+    ...selectOptionsResolvers.Query,
+    ...catalogResolvers.Query,
+    ...crossDatabaseResolvers.Query,
+  },
+  // Ajout des field resolvers pour la résolution des labels
+  ...fieldResolvers,
 };
 
 // Ré-exportation de la combinaison

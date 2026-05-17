@@ -8,24 +8,24 @@ import type { SelectOption } from '../../loaders/select-options.js';
 
 /** Arguments for the getSelectOptions query. */
 export interface SelectOptionsArgs {
-    fieldName: string;
-    limit?: number;
-    searchTerm?: string;
-    database?: string | null;
+  fieldName: string;
+  limit?: number;
+  searchTerm?: string;
+  database?: string | null;
 }
 
 /** Arguments for the getGroupedSelectOptions query. */
 export interface GroupedSelectOptionsArgs {
-    groupField: string;
-    optionsField: string;
-    limit?: number;
-    database?: string | null;
+  groupField: string;
+  optionsField: string;
+  limit?: number;
+  database?: string | null;
 }
 
 /** Grouped result of select options (group + options arrays). */
 export interface GroupedSelectOptions {
-    group: SelectOption[];
-    options: SelectOption[];
+  group: SelectOption[];
+  options: SelectOption[];
 }
 
 // Resolver pour la sélection des options
@@ -36,69 +36,69 @@ export interface GroupedSelectOptions {
  * with optional full-text search filtering via searchTerm.
  */
 const selectOptionsResolvers = {
-    Query: {
-        /**
-         * Fetches available options for a single field.
-         * Arguments follow {@link SelectOptionsArgs}.
-         *
-         * @param _ - Parent resolver result (unused at root).
-         * @returns Array of select option objects.
-         */
-        getSelectOptions: async (
-            _: unknown,
-            {
-                fieldName,
-                limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
-                searchTerm = '',
-                database
-            }: SelectOptionsArgs,
-            { loaders, getLoadersForDatabase }: GraphQLContext
-        ) => {
-            // Sélection du loader adapté à la base de données cible
-            const targetLoaders = getLoadersForDatabase(database);
-            const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+  Query: {
+    /**
+     * Fetches available options for a single field.
+     * Arguments follow {@link SelectOptionsArgs}.
+     *
+     * @param _ - Parent resolver result (unused at root).
+     * @returns Array of select option objects.
+     */
+    getSelectOptions: async (
+      _: unknown,
+      {
+        fieldName,
+        limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
+        searchTerm = '',
+        database,
+      }: SelectOptionsArgs,
+      { loaders, getLoadersForDatabase }: GraphQLContext,
+    ) => {
+      // Sélection du loader adapté à la base de données cible
+      const targetLoaders = getLoadersForDatabase(database);
+      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
 
-            return withTimeout(
-                loader.load({ fieldName, limit, searchTerm }),
-                config.API.TIMEOUTS.SELECT_OPTIONS,
-                'Select options fetch timeout'
-            );
-        },
+      return withTimeout(
+        loader.load({ fieldName, limit, searchTerm }),
+        config.API.TIMEOUTS.SELECT_OPTIONS,
+        'Select options fetch timeout',
+      );
+    },
 
-        /**
-         * Fetches options for two fields simultaneously (group + options).
-         * Loads both option sets in parallel to minimise latency.
-         * Arguments follow {@link GroupedSelectOptionsArgs}.
-         *
-         * @param _ - Parent resolver result (unused at root).
-         * @returns Object with group and options arrays.
-         */
-        getGroupedSelectOptions: async (
-            _: unknown,
-            {
-                groupField,
-                optionsField,
-                limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
-                database
-            }: GroupedSelectOptionsArgs,
-            { loaders, getLoadersForDatabase }: GraphQLContext
-        ): Promise<GroupedSelectOptions> => {
-            // Sélection du loader adapté à la base de données cible
-            const targetLoaders = getLoadersForDatabase(database);
-            const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+    /**
+     * Fetches options for two fields simultaneously (group + options).
+     * Loads both option sets in parallel to minimise latency.
+     * Arguments follow {@link GroupedSelectOptionsArgs}.
+     *
+     * @param _ - Parent resolver result (unused at root).
+     * @returns Object with group and options arrays.
+     */
+    getGroupedSelectOptions: async (
+      _: unknown,
+      {
+        groupField,
+        optionsField,
+        limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
+        database,
+      }: GroupedSelectOptionsArgs,
+      { loaders, getLoadersForDatabase }: GraphQLContext,
+    ): Promise<GroupedSelectOptions> => {
+      // Sélection du loader adapté à la base de données cible
+      const targetLoaders = getLoadersForDatabase(database);
+      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
 
-            // Chargement en parallèle des deux ensembles d'options
-            const [groupOptions, fieldOptions] = await Promise.all([
-                loader.load({ fieldName: groupField, limit }),
-                loader.load({ fieldName: optionsField, limit })
-            ]);
+      // Chargement en parallèle des deux ensembles d'options
+      const [groupOptions, fieldOptions] = await Promise.all([
+        loader.load({ fieldName: groupField, limit }),
+        loader.load({ fieldName: optionsField, limit }),
+      ]);
 
-            return {
-                group: groupOptions,
-                options: fieldOptions
-            };
-        }
-    }
+      return {
+        group: groupOptions,
+        options: fieldOptions,
+      };
+    },
+  },
 };
 
 export { selectOptionsResolvers };

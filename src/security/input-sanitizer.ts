@@ -9,11 +9,11 @@ import type { ContextLogger } from '../utils/logger.js';
 
 /** Normalized internal configuration for the input sanitizer. */
 interface InputSanitizerConfig {
-    enableXSS: boolean;
-    enableSQL: boolean;
-    maxStringLength: number;
-    allowedTags: string[];
-    customSanitizers: Record<string, (value: unknown) => unknown>;
+  enableXSS: boolean;
+  enableSQL: boolean;
+  maxStringLength: number;
+  allowedTags: string[];
+  customSanitizers: Record<string, (value: unknown) => unknown>;
 }
 
 // ─── Classe de sanitisation ──────────────────────────────────────────────────
@@ -25,190 +25,191 @@ interface InputSanitizerConfig {
  * and maximum string length. Processes nested objects and arrays recursively.
  */
 class InputSanitizer {
-    private config: InputSanitizerConfig;
-    private logger: ContextLogger;
-    private xssOptions: IFilterXSSOptions;
+  private config: InputSanitizerConfig;
+  private logger: ContextLogger;
+  private xssOptions: IFilterXSSOptions;
 
-    /**
-     * Initializes the sanitizer from the SANITIZATION section of the config.
-     *
-     * @param sanitizationConfig - Raw sanitization configuration from YAML.
-     */
-    constructor(sanitizationConfig: Partial<Record<string, unknown>> = {}) {
-        // Normalisation de la configuration avec les valeurs par défaut
-        this.config = {
-            enableXSS:        (sanitizationConfig['ENABLE_XSS']        as boolean)  !== false,
-            enableSQL:        (sanitizationConfig['ENABLE_SQL']        as boolean)  !== false,
-            maxStringLength:  (sanitizationConfig['MAX_STRING_LENGTH'] as number)   ?? 1000,
-            allowedTags:      (sanitizationConfig['ALLOWED_TAGS']      as string[]) ?? [],
-            customSanitizers: (sanitizationConfig['CUSTOM_SANITIZERS'] as Record<string, (v: unknown) => unknown>) ?? {}
-        };
+  /**
+   * Initializes the sanitizer from the SANITIZATION section of the config.
+   *
+   * @param sanitizationConfig - Raw sanitization configuration from YAML.
+   */
+  constructor(sanitizationConfig: Partial<Record<string, unknown>> = {}) {
+    // Normalisation de la configuration avec les valeurs par défaut
+    this.config = {
+      enableXSS: (sanitizationConfig['ENABLE_XSS'] as boolean) !== false,
+      enableSQL: (sanitizationConfig['ENABLE_SQL'] as boolean) !== false,
+      maxStringLength: (sanitizationConfig['MAX_STRING_LENGTH'] as number) ?? 1000,
+      allowedTags: (sanitizationConfig['ALLOWED_TAGS'] as string[]) ?? [],
+      customSanitizers:
+        (sanitizationConfig['CUSTOM_SANITIZERS'] as Record<string, (v: unknown) => unknown>) ?? {},
+    };
 
-        // Initialisation du logger contextuel
-        this.logger = createContextLogger({ component: 'security', module: 'sanitizer' });
+    // Initialisation du logger contextuel
+    this.logger = createContextLogger({ component: 'security', module: 'sanitizer' });
 
-        // Construction de la liste blanche XSS à partir des tags autorisés
-        this.xssOptions = {
-            whiteList: this.config.allowedTags.reduce<Record<string, string[]>>((acc, tag) => {
-                acc[tag] = [];
-                return acc;
-            }, {}),
-            stripIgnoreTag:     true,
-            stripIgnoreTagBody: ['script', 'style']
-        };
+    // Construction de la liste blanche XSS à partir des tags autorisés
+    this.xssOptions = {
+      whiteList: this.config.allowedTags.reduce<Record<string, string[]>>((acc, tag) => {
+        acc[tag] = [];
+        return acc;
+      }, {}),
+      stripIgnoreTag: true,
+      stripIgnoreTagBody: ['script', 'style'],
+    };
+  }
+
+  /**
+   * Sanitizes all fields of an input value recursively.
+   *
+   * Arrays are processed element by element; objects are processed field
+   * by field, applying custom sanitizers when configured.
+   *
+   * @param input - Value to sanitize (primitive, array, or plain object).
+   * @returns Sanitized value preserving the original structure.
+   */
+  sanitizeAll(input: unknown): unknown {
+    if (input === null || input === undefined) {
+      return input;
     }
 
-    /**
-     * Sanitizes all fields of an input value recursively.
-     *
-     * Arrays are processed element by element; objects are processed field
-     * by field, applying custom sanitizers when configured.
-     *
-     * @param input - Value to sanitize (primitive, array, or plain object).
-     * @returns Sanitized value preserving the original structure.
-     */
-    sanitizeAll(input: unknown): unknown {
-        if (input === null || input === undefined) {
-            return input;
-        }
-
-        // Traitement récursif des tableaux
-        if (Array.isArray(input)) {
-            return input.map((item) => this.sanitizeAll(item));
-        }
-
-        if (typeof input === 'object') {
-            const sanitized: Record<string, unknown> = {};
-            for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-                // Application d'un sanitizer personnalisé si défini pour ce champ
-                if (this.config.customSanitizers[key]) {
-                    sanitized[key] = this.config.customSanitizers[key](value);
-                } else {
-                    sanitized[key] = this.sanitizeValue(value, key);
-                }
-            }
-            return sanitized;
-        }
-
-        return this.sanitizeValue(input);
+    // Traitement récursif des tableaux
+    if (Array.isArray(input)) {
+      return input.map((item) => this.sanitizeAll(item));
     }
 
-    /**
-     * Sanitizes a single value based on its runtime type.
-     *
-     * @param value - Value to sanitize.
-     * @param fieldName - Field name used in error messages.
-     * @returns Sanitized value.
-     * @throws {GraphQLError} When the value violates a length or format constraint.
-     */
-    sanitizeValue(value: unknown, fieldName: string = 'unknown'): unknown {
-        if (value === null || value === undefined) {
-            return value;
+    if (typeof input === 'object') {
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+        // Application d'un sanitizer personnalisé si défini pour ce champ
+        if (this.config.customSanitizers[key]) {
+          sanitized[key] = this.config.customSanitizers[key](value);
+        } else {
+          sanitized[key] = this.sanitizeValue(value, key);
         }
-
-        // Traitement des chaînes de caractères
-        if (typeof value === 'string') {
-            // Vérification de la longueur maximale autorisée
-            if (value.length > this.config.maxStringLength) {
-                throw new GraphQLError(`Field ${fieldName} exceeds maximum length`, {
-                    extensions: {
-                        code:      'INPUT_TOO_LONG',
-                        field:     fieldName,
-                        maxLength: this.config.maxStringLength
-                    }
-                });
-            }
-
-            let sanitized = value;
-
-            // Filtrage des attaques XSS
-            if (this.config.enableXSS) {
-                sanitized = this.sanitizeXSS(sanitized);
-            }
-
-            // Détection des séquences de commentaires SQL
-            if (this.config.enableSQL) {
-                sanitized = this.sanitizeSQL(sanitized);
-            }
-
-            return sanitized;
-        }
-
-        // Validation des nombres
-        if (typeof value === 'number') {
-            return this.sanitizeNumber(value, fieldName);
-        }
-
-        // Valeur booléenne — aucune transformation nécessaire
-        if (typeof value === 'boolean') {
-            return value;
-        }
-
-        // Objet ou tableau imbriqué — délégation récursive
-        if (typeof value === 'object') {
-            return this.sanitizeAll(value);
-        }
-
-        return value;
+      }
+      return sanitized;
     }
 
-    /**
-     * Applies XSS filtering using the configured tag whitelist.
-     *
-     * @param input - Raw string to filter.
-     * @returns XSS-safe string.
-     */
-    private sanitizeXSS(input: string): string {
-        return xss(input, this.xssOptions);
+    return this.sanitizeValue(input);
+  }
+
+  /**
+   * Sanitizes a single value based on its runtime type.
+   *
+   * @param value - Value to sanitize.
+   * @param fieldName - Field name used in error messages.
+   * @returns Sanitized value.
+   * @throws {GraphQLError} When the value violates a length or format constraint.
+   */
+  sanitizeValue(value: unknown, fieldName: string = 'unknown'): unknown {
+    if (value === null || value === undefined) {
+      return value;
     }
 
-    /**
-     * Detects SQL comment sequences (-- and /*) and rejects the input.
-     *
-     * Primary SQL injection protection relies on DuckDB prepared statements
-     * in pool.js. This method only targets comment sequences that cannot
-     * appear legitimately in analytical values.
-     *
-     * @param input - String to inspect.
-     * @returns The original string when no forbidden sequence is found.
-     * @throws {GraphQLError} When a SQL comment sequence is detected.
-     */
-    private sanitizeSQL(input: string): string {
-        if (/--|\/\*/.test(input)) {
-            // Journalisation de la tentative d'injection
-            this.logger.security('SQL comment sequence detected in input', {
-                input: input.substring(0, 50) + '...'
-            });
-            throw new GraphQLError('Invalid input detected', {
-                extensions: { code: 'SQL_INJECTION_PREVENTED' }
-            });
-        }
-        return input;
+    // Traitement des chaînes de caractères
+    if (typeof value === 'string') {
+      // Vérification de la longueur maximale autorisée
+      if (value.length > this.config.maxStringLength) {
+        throw new GraphQLError(`Field ${fieldName} exceeds maximum length`, {
+          extensions: {
+            code: 'INPUT_TOO_LONG',
+            field: fieldName,
+            maxLength: this.config.maxStringLength,
+          },
+        });
+      }
+
+      let sanitized = value;
+
+      // Filtrage des attaques XSS
+      if (this.config.enableXSS) {
+        sanitized = this.sanitizeXSS(sanitized);
+      }
+
+      // Détection des séquences de commentaires SQL
+      if (this.config.enableSQL) {
+        sanitized = this.sanitizeSQL(sanitized);
+      }
+
+      return sanitized;
     }
 
-    /**
-     * Validates that a number is finite and within the safe integer range.
-     *
-     * @param value - Number to validate.
-     * @param fieldName - Field name used in error messages.
-     * @returns The validated number.
-     * @throws {GraphQLError} When the number is infinite, NaN, or out of safe range.
-     */
-    private sanitizeNumber(value: number, fieldName: string): number {
-        if (!Number.isFinite(value)) {
-            throw new GraphQLError(`Invalid number for field ${fieldName}`, {
-                extensions: { code: 'INVALID_NUMBER', field: fieldName }
-            });
-        }
-
-        if (value > Number.MAX_SAFE_INTEGER || value < Number.MIN_SAFE_INTEGER) {
-            throw new GraphQLError(`Number out of safe range for field ${fieldName}`, {
-                extensions: { code: 'NUMBER_OUT_OF_RANGE', field: fieldName }
-            });
-        }
-
-        return value;
+    // Validation des nombres
+    if (typeof value === 'number') {
+      return this.sanitizeNumber(value, fieldName);
     }
+
+    // Valeur booléenne — aucune transformation nécessaire
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    // Objet ou tableau imbriqué — délégation récursive
+    if (typeof value === 'object') {
+      return this.sanitizeAll(value);
+    }
+
+    return value;
+  }
+
+  /**
+   * Applies XSS filtering using the configured tag whitelist.
+   *
+   * @param input - Raw string to filter.
+   * @returns XSS-safe string.
+   */
+  private sanitizeXSS(input: string): string {
+    return xss(input, this.xssOptions);
+  }
+
+  /**
+   * Detects SQL comment sequences (-- and /*) and rejects the input.
+   *
+   * Primary SQL injection protection relies on DuckDB prepared statements
+   * in pool.js. This method only targets comment sequences that cannot
+   * appear legitimately in analytical values.
+   *
+   * @param input - String to inspect.
+   * @returns The original string when no forbidden sequence is found.
+   * @throws {GraphQLError} When a SQL comment sequence is detected.
+   */
+  private sanitizeSQL(input: string): string {
+    if (/--|\/\*/.test(input)) {
+      // Journalisation de la tentative d'injection
+      this.logger.security('SQL comment sequence detected in input', {
+        input: input.substring(0, 50) + '...',
+      });
+      throw new GraphQLError('Invalid input detected', {
+        extensions: { code: 'SQL_INJECTION_PREVENTED' },
+      });
+    }
+    return input;
+  }
+
+  /**
+   * Validates that a number is finite and within the safe integer range.
+   *
+   * @param value - Number to validate.
+   * @param fieldName - Field name used in error messages.
+   * @returns The validated number.
+   * @throws {GraphQLError} When the number is infinite, NaN, or out of safe range.
+   */
+  private sanitizeNumber(value: number, fieldName: string): number {
+    if (!Number.isFinite(value)) {
+      throw new GraphQLError(`Invalid number for field ${fieldName}`, {
+        extensions: { code: 'INVALID_NUMBER', field: fieldName },
+      });
+    }
+
+    if (value > Number.MAX_SAFE_INTEGER || value < Number.MIN_SAFE_INTEGER) {
+      throw new GraphQLError(`Number out of safe range for field ${fieldName}`, {
+        extensions: { code: 'NUMBER_OUT_OF_RANGE', field: fieldName },
+      });
+    }
+
+    return value;
+  }
 }
 
 export { InputSanitizer };
