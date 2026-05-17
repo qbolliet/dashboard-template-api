@@ -29,6 +29,15 @@ const catalogTypeDefs: DocumentNode = gql`
     "Retourne tous les champs (métadonnées) d'un catalogue"
     getDatabaseSchema(database: String): [Metadata!]!
 
+    "Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire ou sous-chaîne du nom (pour alimenter des menus select)"
+    getFields(
+      database: String
+      sqlType: String
+      isCategorical: Boolean
+      isPrimaryKey: Boolean
+      namePattern: String
+    ): [SelectOption!]!
+
     "Retourne les dimensions communes à plusieurs catalogues (utile pour les requêtes cross-database)"
     getSharedDimensions(databases: [String!]!): [String!]!
   }
