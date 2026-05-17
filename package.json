@@ -51,7 +51,7 @@
     "@as-integrations/express5": "^1.1.2",
     "@duckdb/node-api": "^1.5.2-r.1",
     "@graphql-tools/merge": "^9.1.9",
-    "@graphql-tools/schema": "^10.0.16",
+    "@graphql-tools/schema": "^10.0.33",
     "compression": "^1.7.5",
     "dataloader": "^2.2.3",
     "dotenv": "^16.4.7",
