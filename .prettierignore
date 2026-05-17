@@ -1,0 +1,12 @@
+dist/
+coverage/
+node_modules/
+docs-site/build/
+docs-site/code-reference/
+docs-site/.docusaurus/
+docs-site/node_modules/
+helm/dashboard-template-api/charts/
+*.tsbuildinfo
+package-lock.json
+docs-site/package-lock.json
+CHANGELOG.md
