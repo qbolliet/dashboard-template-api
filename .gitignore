@@ -11,8 +11,9 @@ docs-site/static/schema.graphql
 # TypeDoc generated files (regenerated in CI)
 docs-site/code-reference/**
 
-# graphql-markdown generated files (regenerated in CI)
+# graphql-markdown generated files (regenerated in CI), except the static homepage placeholder
 docs-site/graphql-api/**
+!docs-site/graphql-api/index.md
 
 # TypeScript compiled output
 dist/
