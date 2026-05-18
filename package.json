@@ -60,7 +60,7 @@
     "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.1",
     "uuid": "^13.0.0",
-    "winston": "^3.17.0",
+    "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
     "xss": "^1.0.15",
     "yaml": "^2.7.0"
@@ -86,6 +86,6 @@
     "tsx": "^4.19.0",
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.11.0",
-    "typescript": "^5.8.0"
+    "typescript": "^6.0.3"
   }
 }
