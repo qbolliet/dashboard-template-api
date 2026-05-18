@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.1](https://github.com/qbolliet/dashboard-template-api/compare/v1.1.0...v1.1.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **ci:** add missing GraphQL API docs generation step before Docusaurus build ([60b2b1c](https://github.com/qbolliet/dashboard-template-api/commit/60b2b1c9711defe5bb91e756a57f5b0db14eedec))
+* **ci:** fix GraphQL API docs generation in CI pipeline ([20fe644](https://github.com/qbolliet/dashboard-template-api/commit/20fe6449308c6247bdb604dd9f07067c513771fb))
+
 ## [1.1.0](https://github.com/qbolliet/dashboard-template-api/compare/v1.0.0...v1.1.0) (2026-05-17)
 
 
