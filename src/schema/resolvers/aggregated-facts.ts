@@ -186,7 +186,7 @@ const aggregatedFactsResolvers = {
         if ((error as Error).message === 'Aggregated facts fetch timeout') {
           throw error;
         }
-        throw new Error('Failed to fetch aggregated facts');
+        throw new Error('Failed to fetch aggregated facts', { cause: error });
       }
     },
 
@@ -253,7 +253,7 @@ const aggregatedFactsResolvers = {
         if ((error as Error).message === 'Aggregated facts fetch timeout') {
           throw error;
         }
-        throw new Error('Failed to fetch aggregated facts');
+        throw new Error('Failed to fetch aggregated facts', { cause: error });
       }
     },
   },
