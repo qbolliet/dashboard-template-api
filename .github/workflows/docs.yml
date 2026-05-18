@@ -48,6 +48,10 @@ jobs:
         working-directory: docs-site
         run: npm ci
 
+      # Generate GraphQL API docs from schema.graphql (outputs to docs-site/graphql-api/)
+      - name: Generate GraphQL API docs
+        run: npm run docs:graphql
+
       - name: Build documentation site
         working-directory: docs-site
         run: npm run build
