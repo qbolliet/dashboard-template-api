@@ -222,7 +222,6 @@ async function startServer(): Promise<void> {
 
     // Vérification du pool DuckDB
     try {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
       const stats = databaseManager.getStatistics() as { sharedPool: unknown };
       checks['database'] = { status: 'ok', pool: stats.sharedPool };
     } catch (err) {
@@ -253,7 +252,6 @@ async function startServer(): Promise<void> {
     const sorted = [...times].sort((a, b) => a - b);
     const p95 = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.95)] : 0;
     const p99 = sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.99)] : 0;
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
     const dbStats = databaseManager.getStatistics() as { sharedPool: unknown };
 
     res.json({
@@ -408,7 +406,6 @@ async function startServer(): Promise<void> {
         let validatedDatabase: string | null = null;
         if (headerDatabase) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             validatedDatabase = databaseManager.validateDatabaseRouting(null, headerDatabase) as
               | string
               | null;
@@ -427,7 +424,6 @@ async function startServer(): Promise<void> {
           databaseManager,
           requestDatabase: validatedDatabase,
           getLoadersForDatabase: (databaseId: string | null): LoadersCollection | null => {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access
             const targetDb = databaseManager.validateDatabaseRouting(
               databaseId,
               validatedDatabase,
