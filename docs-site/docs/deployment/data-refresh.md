@@ -1,9 +1,9 @@
 ---
-title: Cache invalidation
+title: Data refresh
 sidebar_position: 4
 ---
 
-# Cache invalidation
+# Data refresh
 
 When DuckLake catalogs are refreshed (typically by a nightly external process), the API must do **two** things before subsequent queries see the new data:
 
@@ -20,21 +20,28 @@ Because the catalog is attached once and held in memory, invalidating Redis alon
 
 ## Architecture
 
+After refreshing the DuckLake files, the external updater drives the two refresh steps through two authenticated endpoints, **in order**: first `POST /api/catalog/reload`, then `POST /api/cache/invalidate-all`.
+
 ```
-┌──────────────────────┐          ┌──────────────────────────┐
-│ External updater     │          │  API (Kubernetes / Docker)│
-│ (Python script,      │          │                          │
-│  cron, CI job…)      │          │  POST /api/cache/        │
-│                      │ ───────▶ │       invalidate-all     │
-│  1. Refresh DuckLake │   x-admin-key                       │
-│  2. Call API         │          │                          │
-└──────────────────────┘          │  ┌────────────────────┐  │
-                                  │  │ Redis SCAN + DEL   │  │
-                                  │  │ per database       │  │
-                                  │  │ namespace          │  │
-                                  │  └────────────────────┘  │
-                                  └──────────────────────────┘
+┌──────────────────────┐            ┌────────────────────────────────┐
+│ External updater     │            │  API (Kubernetes / Docker)     │
+│ (Python script,      │            │                                │
+│  cron, CI job…)      │  ① ──────▶ │  POST /api/catalog/reload      │
+│                      │  x-admin-key   ┌──────────────────────────┐ │
+│  1. Refresh DuckLake │            │   │ Rebuild in-memory DuckDB │ │
+│  2. Reload catalog   │            │   │ instance + re-attach     │ │
+│  3. Invalidate cache │            │   │ catalogs (latest state)  │ │
+│                      │            │   └──────────────────────────┘ │
+│                      │  ② ──────▶ │  POST /api/cache/              │
+│                      │  x-admin-key        invalidate-all          │
+│                      │            │   ┌──────────────────────────┐ │
+│                      │            │   │ Redis SCAN + DEL         │ │
+│                      │            │   │ per database namespace   │ │
+│                      │            │   └──────────────────────────┘ │
+└──────────────────────┘            └────────────────────────────────┘
 ```
+
+Step ① rebuilds the shared in-memory DuckDB instance so the new catalog is served (the swap is zero-interruption — see [Endpoints](#endpoints)). Step ② then flushes Redis so cache misses recompute against the freshly attached catalog.
 
 Cache isolation is per-database: each catalog has its own Redis key namespace, so invalidating one catalog never affects another. Invalidation is a non-blocking `SCAN` + `DEL` pass over the per-database key patterns:
 
