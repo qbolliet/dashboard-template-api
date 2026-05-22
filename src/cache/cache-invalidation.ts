@@ -385,5 +385,10 @@ const createCacheInvalidationRoutes = (app: Express): void => {
   });
 };
 
-export { cacheInvalidationManager, CacheInvalidationManager, createCacheInvalidationRoutes };
+export {
+  cacheInvalidationManager,
+  CacheInvalidationManager,
+  createCacheInvalidationRoutes,
+  requireAdminKey,
+};
 export type { KeyPatterns, KeyPatternFn, InvalidationResult, DatabaseStats, CacheStats };

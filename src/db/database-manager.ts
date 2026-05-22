@@ -271,6 +271,33 @@ class DatabaseManager {
   }
 
   /**
+   * Reload all attached catalogs against their latest state on disk / S3.
+   *
+   * Rebuilds the shared DuckDB instance so the API picks up data refreshed by an
+   * external process (e.g. a nightly DuckLake update) without a pod restart.
+   * In-flight requests drain on the old instance; new requests use the fresh
+   * catalog. Resolves once the new instance is ready.
+   *
+   * @throws {Error} If the shared pool is not initialized or the rebuild fails.
+   */
+  async reloadCatalogs(): Promise<void> {
+    if (!this.sharedPool) {
+      throw new Error('Shared pool is not initialized.');
+    }
+
+    // Logging
+    dbLogger.database('Reloading catalogs on shared pool');
+
+    // Re-chargement des catalogues
+    await this.sharedPool.reload();
+
+    // Logging
+    dbLogger.database('Catalogs reloaded successfully', {
+      attachedCatalogs: this.sharedPool.catalogs.map((c) => c.alias),
+    });
+  }
+
+  /**
    * Close the shared pool and all its connections.
    */
   async close(): Promise<void> {

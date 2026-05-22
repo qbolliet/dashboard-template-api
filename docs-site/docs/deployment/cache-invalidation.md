@@ -5,9 +5,18 @@ sidebar_position: 4
 
 # Cache invalidation
 
-When DuckLake catalogs are refreshed (typically by a nightly external process), the API's Redis cache must be invalidated so that subsequent queries see the new data.
+When DuckLake catalogs are refreshed (typically by a nightly external process), the API must do **two** things before subsequent queries see the new data:
 
-The API is responsible for cache state. The external updater is only responsible for refreshing DuckLake files and triggering invalidation via HTTP — no shared filesystem or shared library is needed.
+1. **Reload the catalog** — the API attaches each DuckLake catalog to a single in-memory DuckDB instance **once, at startup**, and keeps that instance for the whole process lifetime. A running pod therefore keeps serving the snapshot it attached; it does **not** pick up a refreshed catalog automatically. `POST /api/catalog/reload` rebuilds the instance against the latest catalog (on disk or S3).
+2. **Invalidate the Redis cache** — Redis is an external service that survives both the catalog reload and any pod restart. Until it is flushed, the API keeps serving cached results computed from the old catalog.
+
+The order matters: **reload first, invalidate second** (see [Refresh sequence](#refresh-sequence)).
+
+The API is responsible for catalog and cache state. The external updater is only responsible for refreshing DuckLake files and triggering reload + invalidation via HTTP — no shared filesystem or shared library is needed.
+
+:::caution Why a reload is required
+Because the catalog is attached once and held in memory, invalidating Redis alone is not enough: the next query repopulates the cache from the **same stale in-memory catalog**.
+:::
 
 ## Architecture
 
@@ -44,11 +53,26 @@ The implementation lives in [`src/cache/cache-invalidation.ts`](https://github.c
 
 All admin endpoints require the `x-admin-key` header set to `ADMIN_API_KEY`. Without a valid key every endpoint returns `401`. If `ADMIN_API_KEY` is unset on the server, every endpoint returns `503` (fail-safe — invalidation cannot run on an unauthenticated deployment).
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/api/cache/invalidate-all` | Invalidate every database namespace |
-| `POST` | `/api/cache/invalidate/:database` | Invalidate one database (e.g. `default`, `macroeconomics`) |
-| `GET`  | `/api/cache/stats` | Per-database / per-type cache key counts |
+| Method | Path                              | Purpose                                                                                                                          |
+| ------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/catalog/reload`             | Rebuild the in-memory DuckDB instance and re-attach all catalogs at their latest state. Resolves once the new catalog is serving |
+| `POST` | `/api/cache/invalidate-all`       | Invalidate every database namespace                                                                                              |
+| `POST` | `/api/cache/invalidate/:database` | Invalidate one database (e.g. `default`, `macroeconomics`)                                                                       |
+| `GET`  | `/api/cache/stats`                | Per-database / per-type cache key counts                                                                                         |
+
+`/api/catalog/reload` rebuilds the shared instance with zero interruption: the new instance is built first (if it fails — S3 unreachable, corrupt catalog — the old one keeps serving and the call returns `500`), then swapped in atomically, then the old instance is drained in the background so in-flight requests finish cleanly.
+
+## Refresh sequence
+
+After the external process has finished writing the new DuckLake catalog and data, run the two admin calls **in this order**:
+
+```
+1. Updater writes new DuckLake catalog + Parquet (to disk or S3)
+2. POST /api/catalog/reload          ← wait for 200 (new catalog now serving)
+3. POST /api/cache/invalidate-all    ← only after the reload returns
+```
+
+Reloading **before** invalidating guarantees that when Redis is flushed, every cache miss is recomputed against the new catalog. If you invalidated first, an incoming request could repopulate the cache from the old in-memory catalog during the window before the reload completes.
 
 ## Calling from outside the cluster
 
@@ -62,15 +86,18 @@ import requests
 
 API_URL = os.environ["DTA_API_URL"]                 # e.g. https://api.mydomain.org
 ADMIN_KEY = os.environ["DTA_ADMIN_KEY"]
+HEADERS = {"x-admin-key": ADMIN_KEY}
 
 # After refreshing DuckLake catalogs:
-r = requests.post(
-    f"{API_URL}/api/cache/invalidate-all",
-    headers={"x-admin-key": ADMIN_KEY},
-    timeout=30,
-)
+# 1. Reload the catalog (the API holds it in memory until told otherwise).
+#    Use a generous timeout: this re-attaches every catalog (S3 reads).
+r = requests.post(f"{API_URL}/api/catalog/reload", headers=HEADERS, timeout=120)
 r.raise_for_status()
-print(r.json())   # {"success": true, "invalidated": 1234, ...}
+
+# 2. Only once the reload succeeded, flush Redis so misses recompute on new data.
+r = requests.post(f"{API_URL}/api/cache/invalidate-all", headers=HEADERS, timeout=30)
+r.raise_for_status()
+print(r.json())   # {"success": true, ...}
 ```
 
 Per-database invalidation:
@@ -87,15 +114,20 @@ for db in ("default", "macroeconomics"):
 ### bash / cron
 
 ```bash
-curl -fsS -X POST \
-  -H "x-admin-key: $ADMIN_API_KEY" \
+# Reload the catalog first, then invalidate the cache.
+curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+  https://api.mydomain.org/api/catalog/reload
+curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
   https://api.mydomain.org/api/cache/invalidate-all
 ```
 
-A typical crontab entry on the host running the updater:
+A typical crontab entry on the host running the updater (note the `&&` chain so
+the cache is only flushed once the refresh and reload succeed):
 
 ```cron
 30 2 * * *  /usr/local/bin/refresh-ducklake.sh && \
+            curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+              https://api.mydomain.org/api/catalog/reload && \
             curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
               https://api.mydomain.org/api/cache/invalidate-all \
             >> /var/log/dta-cache-invalidate.log 2>&1
@@ -124,7 +156,7 @@ metadata:
   name: ducklake-refresh
   namespace: dta
 spec:
-  schedule: "30 2 * * *"
+  schedule: '30 2 * * *'
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -139,13 +171,17 @@ spec:
               image: curlimages/curl:8.10.1
               envFrom:
                 - secretRef:
-                    name: api-secrets        # provides ADMIN_API_KEY
-              command: ["/bin/sh", "-c"]
+                    name: api-secrets # provides ADMIN_API_KEY
+              command: ['/bin/sh', '-c']
               args:
                 - >
                   set -eu;
                   echo "Refreshing DuckLake catalogs...";
                   # ...your DuckLake refresh step here...
+                  echo "Reloading catalog...";
+                  curl -fsS -X POST
+                  -H "x-admin-key: $ADMIN_API_KEY"
+                  http://api:80/api/catalog/reload;
                   echo "Invalidating cache...";
                   curl -fsS -X POST
                   -H "x-admin-key: $ADMIN_API_KEY"
@@ -173,24 +209,24 @@ API_URL = os.environ.get("DTA_API_URL", "http://api:80")
 ADMIN_KEY = os.environ["ADMIN_API_KEY"]      # injected via envFrom: secretRef: api-secrets
 
 def refresh_and_invalidate(databases: list[str] | None = None) -> None:
-    """Refresh DuckLake catalogs then invalidate cache."""
+    """Refresh DuckLake catalogs, reload the API catalog, then invalidate cache."""
+    headers = {"x-admin-key": ADMIN_KEY}
+
     refresh_ducklake_catalogs(databases)     # your own logic
 
+    # Reload the in-memory catalog first (rebuilds the shared DuckDB instance).
+    requests.post(f"{API_URL}/api/catalog/reload", headers=headers, timeout=120).raise_for_status()
+
+    # Then flush Redis so cache misses recompute against the new catalog.
     if databases:
         for db in databases:
-            r = requests.post(
-                f"{API_URL}/api/cache/invalidate/{db}",
-                headers={"x-admin-key": ADMIN_KEY},
-                timeout=30,
-            )
-            r.raise_for_status()
+            requests.post(
+                f"{API_URL}/api/cache/invalidate/{db}", headers=headers, timeout=30
+            ).raise_for_status()
     else:
-        r = requests.post(
-            f"{API_URL}/api/cache/invalidate-all",
-            headers={"x-admin-key": ADMIN_KEY},
-            timeout=30,
-        )
-        r.raise_for_status()
+        requests.post(
+            f"{API_URL}/api/cache/invalidate-all", headers=headers, timeout=30
+        ).raise_for_status()
 ```
 
 The associated Pod spec snippet:
@@ -202,19 +238,19 @@ spec:
       image: registry.example.com/ducklake-updater:1.0.0
       env:
         - name: DTA_API_URL
-          value: "http://api:80"
+          value: 'http://api:80'
       envFrom:
         - secretRef:
-            name: api-secrets        # provides ADMIN_API_KEY
+            name: api-secrets # provides ADMIN_API_KEY
 ```
 
 ## When to use which
 
-| Setup | Recommended trigger |
-|-------|--------------------|
-| Updater outside the cluster (CI, external host) | `POST` to `https://api.mydomain.org/api/cache/invalidate-all` via Ingress |
-| Updater inside the same cluster (CronJob, Job, Pod) | `POST` to `http://<release>:80/api/cache/invalidate-all` via Service ClusterIP DNS |
-| Local development on the same host as the API | `curl` to `http://localhost:4000/api/cache/invalidate-all` with `x-admin-key: $ADMIN_API_KEY` |
+| Setup                                               | Recommended trigger                                                                           |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Updater outside the cluster (CI, external host)     | `POST` to `https://api.mydomain.org/api/cache/invalidate-all` via Ingress                     |
+| Updater inside the same cluster (CronJob, Job, Pod) | `POST` to `http://<release>:80/api/cache/invalidate-all` via Service ClusterIP DNS            |
+| Local development on the same host as the API       | `curl` to `http://localhost:4000/api/cache/invalidate-all` with `x-admin-key: $ADMIN_API_KEY` |
 
 ## Stats
 
@@ -227,8 +263,11 @@ Returns per-database, per-type cache key counts — useful for monitoring cache-
 
 ## Monitoring
 
-Key log messages emitted by the API during invalidation (Winston, JSON format):
+Key log messages emitted by the API during a refresh (Winston, JSON format):
 
+- `Reloading DuckDB instance (re-attaching catalogs)` — reload request received
+- `DuckDB instance reloaded successfully` — new catalog attached and serving
+- `Force-closing in-flight connections after drain timeout` — a request outlived the 30s drain window during reload (investigate slow queries)
 - `Starting cache invalidation` — invalidation request received and authenticated
 - `Invalidated <N> cache entries` — confirms keys deleted successfully
 - `Cache invalidation failed` — requires investigation (Redis connectivity, timeout, etc.)

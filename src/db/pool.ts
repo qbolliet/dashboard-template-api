@@ -19,6 +19,8 @@ export interface PoolConfig {
   maxConnections: number;
   acquireTimeout: number;
   retryDelay: number;
+  /** Max wait (ms) for in-flight requests to drain on reload before force-close. */
+  drainTimeout?: number;
 }
 
 /** Query result with column metadata, intended for D3 visualization. */
@@ -74,6 +76,13 @@ class DuckDBPool {
   readonly catalogs: CatalogEntry[];
   private instance: DuckDBInstance | null;
   private instancePromise: Promise<DuckDBInstance> | null;
+  // Connexions de l'ancienne instance en cours de drainage après un reload
+  private draining: ConnectionWrapper[];
+  // Garde anti-concurrence pour reload() (déduplique les appels simultanés)
+  private reloadPromise: Promise<void> | null;
+  // Délai max d'attente du drainage des requêtes en vol avant fermeture forcée.
+  // Doit dépasser le plus long timeout de requête (cf. API.TIMEOUTS, max 15s).
+  private readonly drainTimeout: number;
 
   // Initialisation
   constructor(poolConfig: PoolConfig) {
@@ -93,28 +102,27 @@ class DuckDBPool {
     this.instance = null;
     // Promise de garde pour éviter les initialisations concurrentes (lazy singleton)
     this.instancePromise = null;
+    // Ensemble des connexions de l'ancienne instance en attente de fermeture
+    this.draining = [];
+    // Garde de reload en cours
+    this.reloadPromise = null;
+    // Délai de drainage configurable (défaut 30s, > timeout max de requête)
+    this.drainTimeout = poolConfig.drainTimeout ?? 30000;
   }
 
   /**
-   * Initialize the single shared DuckDB instance and attach all DuckLake catalogs.
-   * Uses a lazy singleton pattern: safe to call multiple times from concurrent
-   * acquire() calls — the first call initializes, subsequent calls wait on the
-   * same Promise.
+   * Build a fresh DuckDB instance with all DuckLake catalogs attached.
+   * Pure factory: does not mutate pool state, so a failure here leaves any
+   * currently-serving instance untouched (used by both lazy init and reload).
    *
-   * @returns The shared DuckDB instance.
+   * @returns A newly created DuckDB instance with every catalog attached.
    */
-  async initializeInstance(): Promise<DuckDBInstance> {
-    // Retour immédiat si l'instance est déjà prête
-    if (this.instance) return this.instance;
-    // Réutilisation de la Promise en cours si l'initialisation est déjà démarrée
-    if (this.instancePromise) return this.instancePromise;
+  private async buildInstance(): Promise<DuckDBInstance> {
+    // Création d'une instance DuckDB en mémoire partagée
+    const instance = await DuckDBInstance.create(':memory:');
+    const conn = await instance.connect();
 
-    // Démarrage de l'initialisation unique
-    this.instancePromise = (async (): Promise<DuckDBInstance> => {
-      // Création d'une instance DuckDB en mémoire partagée
-      const instance = await DuckDBInstance.create(':memory:');
-      const conn = await instance.connect();
-
+    try {
       // Chargement de ducklake
       await conn.run('LOAD ducklake;');
 
@@ -154,14 +162,147 @@ class DuckDBPool {
         const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
         await conn.run(`ATTACH 'ducklake:${catalog.path}' AS "${catalog.alias}"${optionClause}`);
       }
-
+    } finally {
       conn.closeSync();
-      // Stockage de l'instance pour les appels suivants
-      this.instance = instance;
-      return instance;
+    }
+
+    return instance;
+  }
+
+  /**
+   * Initialize the single shared DuckDB instance and attach all DuckLake catalogs.
+   * Uses a lazy singleton pattern: safe to call multiple times from concurrent
+   * acquire() calls — the first call initializes, subsequent calls wait on the
+   * same Promise.
+   *
+   * @returns The shared DuckDB instance.
+   */
+  async initializeInstance(): Promise<DuckDBInstance> {
+    // Retour immédiat si l'instance est déjà prête
+    if (this.instance) return this.instance;
+    // Réutilisation de la Promise en cours si l'initialisation est déjà démarrée
+    if (this.instancePromise) return this.instancePromise;
+
+    // Démarrage de l'initialisation unique
+    this.instancePromise = (async (): Promise<DuckDBInstance> => {
+      try {
+        const instance = await this.buildInstance();
+        // Stockage de l'instance pour les appels suivants
+        this.instance = instance;
+        return instance;
+      } catch (error) {
+        // Réinitialisation de la garde pour autoriser une nouvelle tentative
+        // (sinon une Promise rejetée serait mise en cache et casserait le pool)
+        this.instancePromise = null;
+        throw error;
+      }
     })();
 
     return this.instancePromise;
+  }
+
+  /**
+   * Rebuild the shared instance against the latest catalog state on disk / S3.
+   *
+   * Used after an external process refreshes the DuckLake catalogs: the running
+   * pool keeps serving the snapshot it attached at startup, so a reload is needed
+   * to pick up new data without restarting the pod.
+   *
+   * Zero-interruption strategy:
+   *  1. Build the new instance first — if it fails (S3 down, corrupt catalog),
+   *     the old instance keeps serving and the error propagates to the caller.
+   *  2. Atomically swap it in so new acquisitions use the fresh catalog.
+   *  3. Drain and close the old instance in the background, letting in-flight
+   *     requests finish on a clean per-request boundary.
+   *
+   * Resolves only once the new instance is ready, so callers can safely sequence
+   * a cache invalidation afterwards.
+   */
+  async reload(): Promise<void> {
+    // Déduplication des reloads concurrents
+    if (this.reloadPromise) return this.reloadPromise;
+
+    this.reloadPromise = (async (): Promise<void> => {
+      const dbLogger = createContextLogger({ component: 'database', module: 'pool' });
+      try {
+        dbLogger.database('Reloading DuckDB instance (re-attaching catalogs)', {
+          catalogs: this.catalogs.map((c) => c.alias),
+        });
+
+        // 1. Construction de la nouvelle instance AVANT toute mutation d'état
+        const newInstance = await this.buildInstance();
+
+        // 2. Bascule atomique : les nouvelles acquisitions utilisent le catalogue à jour
+        const oldInstance = this.instance;
+        const oldConnections = this.pool;
+        this.instance = newInstance;
+        this.instancePromise = Promise.resolve(newInstance);
+        this.pool = [];
+
+        // 3. Drainage et fermeture de l'ancienne instance en arrière-plan
+        void this.drainAndClose(oldInstance, oldConnections);
+
+        dbLogger.database('DuckDB instance reloaded successfully', {
+          drainingConnections: oldConnections.length,
+        });
+      } finally {
+        // Libération de la garde, succès comme échec
+        this.reloadPromise = null;
+      }
+    })();
+
+    return this.reloadPromise;
+  }
+
+  /**
+   * Wait for in-flight requests on a retired instance to finish, then close it.
+   * Connections still in use are tracked in {@link draining} so that release()
+   * can flag them done; after the drain window elapses they are force-closed.
+   *
+   * @param oldInstance - The retired DuckDB instance to close.
+   * @param oldConnections - Connections bound to the retired instance.
+   */
+  private async drainAndClose(
+    oldInstance: DuckDBInstance | null,
+    oldConnections: ConnectionWrapper[],
+  ): Promise<void> {
+    const dbLogger = createContextLogger({ component: 'database', module: 'pool' });
+
+    // Suivi des connexions en drainage pour que release() puisse les marquer libres
+    this.draining.push(...oldConnections);
+
+    // Attente que les requêtes en vol se terminent, plafonnée par drainTimeout
+    const deadline = Date.now() + this.drainTimeout;
+    while (oldConnections.some((c) => c.inUse) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
+    }
+
+    const stillBusy = oldConnections.filter((c) => c.inUse).length;
+    if (stillBusy > 0) {
+      dbLogger.warn('Force-closing in-flight connections after drain timeout', {
+        stillBusy,
+        drainTimeout: this.drainTimeout,
+      });
+    }
+
+    // Fermeture des anciennes connexions puis de l'ancienne instance
+    const results = await Promise.allSettled(oldConnections.map((c) => c.close()));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        dbLogger.error(`Failed to close drained connection #${i}`, result.reason);
+      }
+    });
+
+    if (oldInstance) {
+      try {
+        oldInstance.closeSync();
+      } catch (error) {
+        dbLogger.error('Failed to close retired DuckDB instance', error);
+      }
+    }
+
+    // Retrait des connexions drainées du suivi
+    this.draining = this.draining.filter((c) => !oldConnections.includes(c));
   }
 
   /**
@@ -381,6 +522,13 @@ class DuckDBPool {
     if (connIndex >= 0) {
       // Marquage comme disponible pour la prochaine acquisition
       this.pool[connIndex].inUse = false;
+      return;
+    }
+    // Connexion appartenant à une instance retirée (reload en cours) : on la marque
+    // libre pour que le drainage puisse la fermer dès la fin de la requête en vol.
+    const drainIndex = this.draining.findIndex((conn) => conn.conn === connection.conn);
+    if (drainIndex >= 0) {
+      this.draining[drainIndex].inUse = false;
     }
   }
 
@@ -390,8 +538,10 @@ class DuckDBPool {
   async close(): Promise<void> {
     const dbLogger = createContextLogger({ component: 'database' });
 
-    // allSettled pour fermer toutes les connexions même si l'une échoue
-    const results = await Promise.allSettled(this.pool.map((conn) => conn.close()));
+    // allSettled pour fermer toutes les connexions même si l'une échoue,
+    // y compris celles encore en cours de drainage après un reload
+    const allConnections = [...this.pool, ...this.draining];
+    const results = await Promise.allSettled(allConnections.map((conn) => conn.close()));
     results.forEach((result, i) => {
       if (result.status === 'rejected') {
         dbLogger.error(`Failed to close pool connection #${i}`, result.reason);
@@ -409,6 +559,7 @@ class DuckDBPool {
 
     // Réinitialisation complète du pool
     this.pool = [];
+    this.draining = [];
     this.instance = null;
     this.instancePromise = null;
   }
