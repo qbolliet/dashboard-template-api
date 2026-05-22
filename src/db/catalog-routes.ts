@@ -1,7 +1,7 @@
 // Routes d'administration du catalogue DuckLake (rechargement après mise à jour externe)
 import type { Request, Response, Express } from 'express';
 import { databaseManager } from './index.js';
-import { requireAdminKey } from '../cache/cache-invalidation.js';
+import { requireAdminKey } from '../security/admin-auth.js';
 import { createContextLogger } from '../utils/logger.js';
 
 // Logger spécifique au module de rechargement du catalogue

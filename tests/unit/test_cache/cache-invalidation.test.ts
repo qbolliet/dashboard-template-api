@@ -2,8 +2,8 @@
  * Unit tests for cache-invalidation.js (src/cache/cache-invalidation.js).
  *
  * Verifies CacheInvalidationManager key patterns, scan/delete operations,
- * multi-database invalidation, cache stats collection, the requireAdminKey
- * middleware, and Express route registration via createCacheInvalidationRoutes.
+ * multi-database invalidation, cache stats collection, and Express route
+ * registration via createCacheInvalidationRoutes.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -14,37 +14,37 @@ import { jest } from '@jest/globals';
 /** Client Redis mocké — méthodes utilisées par CacheInvalidationManager. */
 interface MockRedis {
   scan: jest.Mock;
-  del:  jest.Mock;
+  del: jest.Mock;
 }
 
 /** Configuration de la stratégie de reconnexion Redis. */
 interface RetryStrategyConfig {
   BASE_DELAY: number;
-  MAX_DELAY:  number;
+  MAX_DELAY: number;
 }
 
 /** Options de connexion Redis. */
 interface RedisOptions {
-  RETRY_STRATEGY:          RetryStrategyConfig;
+  RETRY_STRATEGY: RetryStrategyConfig;
   MAX_RETRIES_PER_REQUEST: number;
-  ENABLE_READY_CHECK:      boolean;
-  CONNECT_TIMEOUT:         number;
+  ENABLE_READY_CHECK: boolean;
+  CONNECT_TIMEOUT: number;
 }
 
 /** Configuration du cluster Redis. */
 interface ClusterConfig {
   ENABLED: boolean;
-  NODES:   unknown[];
+  NODES: unknown[];
 }
 
 /** Configuration Redis complète. */
 interface RedisConfig {
-  HOST:       string;
-  PORT:       number;
-  PASSWORD:   null;
+  HOST: string;
+  PORT: number;
+  PASSWORD: null;
   KEY_PREFIX: string;
-  OPTIONS:    RedisOptions;
-  CLUSTER:    ClusterConfig;
+  OPTIONS: RedisOptions;
+  CLUSTER: ClusterConfig;
 }
 
 /** Section cache de la configuration globale. */
@@ -59,29 +59,29 @@ interface DatabaseRoutingConfig {
 
 /** Configuration globale mockée — reflète la structure YAML de config/. */
 interface MockConfig {
-  CACHE:            CacheConfig;
+  CACHE: CacheConfig;
   DATABASE_ROUTING: DatabaseRoutingConfig;
 }
 
 /** Fonctions de génération de patterns de clés Redis par type de cache. */
 interface KeyPatterns {
-  metadata:        (db?: string | null) => string;
-  dimension:       (db?: string | null) => string;
-  dimensionValue:  (db?: string | null) => string;
-  facts:           (db?: string | null) => string;
+  metadata: (db?: string | null) => string;
+  dimension: (db?: string | null) => string;
+  dimensionValue: (db?: string | null) => string;
+  facts: (db?: string | null) => string;
   aggregatedFacts: (db?: string | null) => string;
-  selectOptions:   (db?: string | null) => string;
-  allDatabase:     (db?: string | null) => string;
+  selectOptions: (db?: string | null) => string;
+  allDatabase: (db?: string | null) => string;
 }
 
 /** Instance du gestionnaire d'invalidation du cache. */
 interface CacheInvalidationManagerInstance {
-  keyPatterns:            KeyPatterns;
-  scanKeys:               (pattern: string) => Promise<string[]>;
-  invalidateDatabase:     (db?: string | null) => Promise<void>;
-  invalidateCacheType:    (type: string, db?: string) => Promise<void>;
+  keyPatterns: KeyPatterns;
+  scanKeys: (pattern: string) => Promise<string[]>;
+  invalidateDatabase: (db?: string | null) => Promise<void>;
+  invalidateCacheType: (type: string, db?: string) => Promise<void>;
   invalidateAllDatabases: () => Promise<void>;
-  getCacheStats:          () => Promise<Record<string, Record<string, number>>>;
+  getCacheStats: () => Promise<Record<string, Record<string, number>>>;
 }
 
 /** Constructeur du gestionnaire d'invalidation du cache. */
@@ -91,27 +91,27 @@ interface CacheInvalidationManagerConstructor {
 
 /** Module cache-invalidation.js après import dynamique. */
 interface CacheInvalidationModule {
-  CacheInvalidationManager:     CacheInvalidationManagerConstructor;
-  cacheInvalidationManager:     CacheInvalidationManagerInstance;
+  CacheInvalidationManager: CacheInvalidationManagerConstructor;
+  cacheInvalidationManager: CacheInvalidationManagerInstance;
   createCacheInvalidationRoutes: (app: MockApp) => void;
 }
 
 /** Application Express mockée — enregistrement des routes POST et GET. */
 interface MockApp {
   post: jest.Mock;
-  get:  jest.Mock;
+  get: jest.Mock;
 }
 
 /** Réponse HTTP mockée — simulation de res.status().json(). */
 interface MockResponse {
   status: jest.Mock;
-  json:   jest.Mock;
+  json: jest.Mock;
 }
 
 /** Requête HTTP mockée — simulation de req.headers et req.params. */
 interface MockRequest {
   headers: Record<string, string>;
-  params:  Record<string, string>;
+  params: Record<string, string>;
 }
 
 // ─── État des mocks ───────────────────────────────────────────────────────────
@@ -119,22 +119,22 @@ interface MockRequest {
 // Objet Redis partagé — référence stable réutilisée par tous les tests
 const mockRedis: MockRedis = {
   scan: jest.fn(),
-  del:  jest.fn(),
+  del: jest.fn(),
 };
 
 // Configuration mockée — reflète la structure YAML de config/
 const mockConfig: MockConfig = {
   CACHE: {
     REDIS: {
-      HOST:       'localhost',
-      PORT:       6379,
-      PASSWORD:   null,
+      HOST: 'localhost',
+      PORT: 6379,
+      PASSWORD: null,
       KEY_PREFIX: 'test:',
       OPTIONS: {
-        RETRY_STRATEGY:          { BASE_DELAY: 50, MAX_DELAY: 2000 },
+        RETRY_STRATEGY: { BASE_DELAY: 50, MAX_DELAY: 2000 },
         MAX_RETRIES_PER_REQUEST: 3,
-        ENABLE_READY_CHECK:      true,
-        CONNECT_TIMEOUT:         10000,
+        ENABLE_READY_CHECK: true,
+        CONNECT_TIMEOUT: 10000,
       },
       CLUSTER: { ENABLED: false, NODES: [] },
     },
@@ -148,7 +148,7 @@ const mockConfig: MockConfig = {
 
 // Substitution du module cache avant tout import dynamique
 jest.unstable_mockModule('../../../src/cache/index.js', () => ({
-  redis:             mockRedis,
+  redis: mockRedis,
   createRedisClient: jest.fn(),
 }));
 
@@ -161,8 +161,8 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     cache: jest.fn(),
-    info:  jest.fn(),
-    warn:  jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
     error: jest.fn(),
   }),
 }));
@@ -170,16 +170,13 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 // ─── Import dynamique ─────────────────────────────────────────────────────────
 
 // Variables déclarées avant beforeAll — remplies après résolution des mocks
-let CacheInvalidationManager:     CacheInvalidationManagerConstructor;
-let cacheInvalidationManager:     CacheInvalidationManagerInstance;
+let CacheInvalidationManager: CacheInvalidationManagerConstructor;
+let cacheInvalidationManager: CacheInvalidationManagerInstance;
 let createCacheInvalidationRoutes: (app: MockApp) => void;
 
 beforeAll(async () => {
-  ({
-    CacheInvalidationManager,
-    cacheInvalidationManager,
-    createCacheInvalidationRoutes,
-  } = await import('../../../src/cache/cache-invalidation.js') as unknown as CacheInvalidationModule);
+  ({ CacheInvalidationManager, cacheInvalidationManager, createCacheInvalidationRoutes } =
+    (await import('../../../src/cache/cache-invalidation.js')) as unknown as CacheInvalidationModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -197,8 +194,13 @@ describe('CacheInvalidationManager', () => {
   describe('constructor', () => {
     test('exposes key-pattern functions for all cache types', () => {
       const expected: Array<keyof KeyPatterns> = [
-        'metadata', 'dimension', 'dimensionValue', 'facts',
-        'aggregatedFacts', 'selectOptions', 'allDatabase',
+        'metadata',
+        'dimension',
+        'dimensionValue',
+        'facts',
+        'aggregatedFacts',
+        'selectOptions',
+        'allDatabase',
       ];
       for (const type of expected) {
         expect(manager.keyPatterns[type]).toBeInstanceOf(Function);
@@ -238,7 +240,7 @@ describe('CacheInvalidationManager', () => {
     test('accumulates keys across multiple scan pages', async () => {
       mockRedis.scan
         .mockResolvedValueOnce(['42', ['key1', 'key2']])
-        .mockResolvedValueOnce(['0',  ['key3', 'key4']]);
+        .mockResolvedValueOnce(['0', ['key3', 'key4']]);
 
       const keys = await manager.scanKeys('*:main:*');
 
@@ -315,8 +317,9 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('throws for an unknown cache type', async () => {
-      await expect(manager.invalidateCacheType('unknown', 'main'))
-        .rejects.toThrow('Unknown cache type: unknown');
+      await expect(manager.invalidateCacheType('unknown', 'main')).rejects.toThrow(
+        'Unknown cache type: unknown',
+      );
     });
 
     test('uses "default" when database is not specified', async () => {
@@ -336,7 +339,14 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('handles all supported cache types without error', async () => {
-      const types = ['metadata', 'dimension', 'dimensionValue', 'facts', 'aggregatedFacts', 'selectOptions'];
+      const types = [
+        'metadata',
+        'dimension',
+        'dimensionValue',
+        'facts',
+        'aggregatedFacts',
+        'selectOptions',
+      ];
       for (const type of types) {
         mockRedis.scan.mockResolvedValueOnce(['0', []]);
         await expect(manager.invalidateCacheType(type, 'main')).resolves.not.toThrow();
@@ -365,7 +375,8 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('does not throw when individual databases fail', async () => {
-      jest.spyOn(manager, 'invalidateDatabase')
+      jest
+        .spyOn(manager, 'invalidateDatabase')
         .mockResolvedValueOnce(undefined)
         .mockRejectedValueOnce(new Error('test db error'))
         .mockResolvedValueOnce(undefined);
@@ -393,11 +404,26 @@ describe('CacheInvalidationManager', () => {
       // Ordre : metadata, dimension, dimensionValue, facts, aggregatedFacts, selectOptions
       const scanResults: [string, string[]][] = [
         // main : 2, 1, 0, 3, 0, 1
-        ['0', ['m1', 'm2']], ['0', ['d1']], ['0', []], ['0', ['f1', 'f2', 'f3']], ['0', []], ['0', ['s1']],
+        ['0', ['m1', 'm2']],
+        ['0', ['d1']],
+        ['0', []],
+        ['0', ['f1', 'f2', 'f3']],
+        ['0', []],
+        ['0', ['s1']],
         // test : 1, 0, 0, 1, 0, 0
-        ['0', ['m3']], ['0', []], ['0', []], ['0', ['f4']], ['0', []], ['0', []],
+        ['0', ['m3']],
+        ['0', []],
+        ['0', []],
+        ['0', ['f4']],
+        ['0', []],
+        ['0', []],
         // analytics : tout à 0
-        ['0', []], ['0', []], ['0', []], ['0', []], ['0', []], ['0', []],
+        ['0', []],
+        ['0', []],
+        ['0', []],
+        ['0', []],
+        ['0', []],
+        ['0', []],
       ];
       for (const result of scanResults) {
         mockRedis.scan.mockResolvedValueOnce(result);
@@ -406,9 +432,30 @@ describe('CacheInvalidationManager', () => {
       const stats = await manager.getCacheStats();
 
       expect(stats).toEqual({
-        main:      { metadata: 2, dimension: 1, dimensionValue: 0, facts: 3, aggregatedFacts: 0, selectOptions: 1 },
-        test:      { metadata: 1, dimension: 0, dimensionValue: 0, facts: 1, aggregatedFacts: 0, selectOptions: 0 },
-        analytics: { metadata: 0, dimension: 0, dimensionValue: 0, facts: 0, aggregatedFacts: 0, selectOptions: 0 },
+        main: {
+          metadata: 2,
+          dimension: 1,
+          dimensionValue: 0,
+          facts: 3,
+          aggregatedFacts: 0,
+          selectOptions: 1,
+        },
+        test: {
+          metadata: 1,
+          dimension: 0,
+          dimensionValue: 0,
+          facts: 1,
+          aggregatedFacts: 0,
+          selectOptions: 0,
+        },
+        analytics: {
+          metadata: 0,
+          dimension: 0,
+          dimensionValue: 0,
+          facts: 0,
+          aggregatedFacts: 0,
+          selectOptions: 0,
+        },
       });
     });
 
@@ -420,77 +467,17 @@ describe('CacheInvalidationManager', () => {
   });
 });
 
-// ─── Middleware requireAdminKey ────────────────────────────────────────────────
-
-describe('requireAdminKey middleware', () => {
-  // Signature du middleware Express — (req, res, next)
-  let adminMiddleware: (req: MockRequest, res: MockResponse, next: jest.Mock) => void;
-  const next: jest.Mock = jest.fn();
-
-  // Constructeurs de stubs légers pour req et res
-  const makeReq = (headers: Record<string, string> = {}): MockRequest => ({ headers, params: {} });
-  const makeRes = (): MockResponse => {
-    const res = { status: jest.fn(), json: jest.fn() } as MockResponse;
-    (res.status as jest.Mock).mockReturnValue(res);
-    return res;
-  };
-
-  beforeEach(() => {
-    jest.resetAllMocks();
-    delete process.env.ADMIN_API_KEY;
-    const mockApp: MockApp = { post: jest.fn(), get: jest.fn() };
-    createCacheInvalidationRoutes(mockApp);
-    // Récupération du premier middleware POST — correspond à requireAdminKey
-    adminMiddleware = mockApp.post.mock.calls[0][1] as typeof adminMiddleware;
-  });
-
-  afterEach(() => {
-    delete process.env.ADMIN_API_KEY;
-  });
-
-  test('returns 503 when ADMIN_API_KEY env var is not set', () => {
-    const res = makeRes();
-    adminMiddleware(makeReq(), res, next);
-
-    expect(res.status).toHaveBeenCalledWith(503);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('returns 401 when x-admin-key header is absent', () => {
-    process.env.ADMIN_API_KEY = 'secret';
-    const res = makeRes();
-    adminMiddleware(makeReq({}), res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('returns 401 when x-admin-key is wrong', () => {
-    process.env.ADMIN_API_KEY = 'secret';
-    const res = makeRes();
-    adminMiddleware(makeReq({ 'x-admin-key': 'wrong' }), res, next);
-
-    expect(res.status).toHaveBeenCalledWith(401);
-    expect(next).not.toHaveBeenCalled();
-  });
-
-  test('calls next() when x-admin-key matches ADMIN_API_KEY', () => {
-    process.env.ADMIN_API_KEY = 'secret';
-    const res = makeRes();
-    adminMiddleware(makeReq({ 'x-admin-key': 'secret' }), res, next);
-
-    expect(next).toHaveBeenCalled();
-    expect(res.status).not.toHaveBeenCalled();
-  });
-});
-
 // ─── Routes d'invalidation du cache ──────────────────────────────────────────
 
 describe('createCacheInvalidationRoutes', () => {
   let mockApp: MockApp;
 
   // Constructeurs de stubs pour les objets req/res Express
-  const makeReq = (overrides: Partial<MockRequest> = {}): MockRequest => ({ params: {}, headers: {}, ...overrides });
+  const makeReq = (overrides: Partial<MockRequest> = {}): MockRequest => ({
+    params: {},
+    headers: {},
+    ...overrides,
+  });
   const makeRes = (): MockResponse => {
     const res = { status: jest.fn(), json: jest.fn() } as MockResponse;
     (res.status as jest.Mock).mockReturnValue(res);
@@ -528,7 +515,9 @@ describe('createCacheInvalidationRoutes', () => {
     let handler: (req: MockRequest, res: MockResponse) => Promise<void>;
 
     beforeEach(() => {
-      const call = mockApp.post.mock.calls.find((c: unknown[]) => c[0] === '/api/cache/invalidate/:database');
+      const call = mockApp.post.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/cache/invalidate/:database',
+      );
       handler = call![2] as typeof handler;
     });
 
@@ -540,12 +529,14 @@ describe('createCacheInvalidationRoutes', () => {
 
       expect(cacheInvalidationManager.invalidateDatabase).toHaveBeenCalledWith('main');
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, database: 'main', timestamp: expect.any(String) })
+        expect.objectContaining({ success: true, database: 'main', timestamp: expect.any(String) }),
       );
     });
 
     test('returns 500 on invalidation error', async () => {
-      jest.spyOn(cacheInvalidationManager, 'invalidateDatabase').mockRejectedValueOnce(new Error('boom'));
+      jest
+        .spyOn(cacheInvalidationManager, 'invalidateDatabase')
+        .mockRejectedValueOnce(new Error('boom'));
       const res = makeRes();
 
       await handler(makeReq({ params: { database: 'main' } }), res);
@@ -561,24 +552,30 @@ describe('createCacheInvalidationRoutes', () => {
     let handler: (req: MockRequest, res: MockResponse) => Promise<void>;
 
     beforeEach(() => {
-      const call = mockApp.post.mock.calls.find((c: unknown[]) => c[0] === '/api/cache/invalidate-all');
+      const call = mockApp.post.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/cache/invalidate-all',
+      );
       handler = call![2] as typeof handler;
     });
 
     test('returns success with timestamp', async () => {
-      jest.spyOn(cacheInvalidationManager, 'invalidateAllDatabases').mockResolvedValueOnce(undefined);
+      jest
+        .spyOn(cacheInvalidationManager, 'invalidateAllDatabases')
+        .mockResolvedValueOnce(undefined);
       const res = makeRes();
 
       await handler(makeReq(), res);
 
       expect(cacheInvalidationManager.invalidateAllDatabases).toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, timestamp: expect.any(String) })
+        expect.objectContaining({ success: true, timestamp: expect.any(String) }),
       );
     });
 
     test('returns 500 on global invalidation error', async () => {
-      jest.spyOn(cacheInvalidationManager, 'invalidateAllDatabases').mockRejectedValueOnce(new Error('fail'));
+      jest
+        .spyOn(cacheInvalidationManager, 'invalidateAllDatabases')
+        .mockRejectedValueOnce(new Error('fail'));
       const res = makeRes();
 
       await handler(makeReq(), res);
@@ -599,7 +596,14 @@ describe('createCacheInvalidationRoutes', () => {
 
     test('returns stats with timestamp', async () => {
       const mockStats: Record<string, Record<string, number>> = {
-        main: { metadata: 2, dimension: 0, dimensionValue: 0, facts: 5, aggregatedFacts: 1, selectOptions: 0 },
+        main: {
+          metadata: 2,
+          dimension: 0,
+          dimensionValue: 0,
+          facts: 5,
+          aggregatedFacts: 1,
+          selectOptions: 0,
+        },
       };
       jest.spyOn(cacheInvalidationManager, 'getCacheStats').mockResolvedValueOnce(mockStats);
       const res = makeRes();
@@ -607,12 +611,14 @@ describe('createCacheInvalidationRoutes', () => {
       await handler(makeReq(), res);
 
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ stats: mockStats, timestamp: expect.any(String) })
+        expect.objectContaining({ stats: mockStats, timestamp: expect.any(String) }),
       );
     });
 
     test('returns 500 on stats collection error', async () => {
-      jest.spyOn(cacheInvalidationManager, 'getCacheStats').mockRejectedValueOnce(new Error('stats failed'));
+      jest
+        .spyOn(cacheInvalidationManager, 'getCacheStats')
+        .mockRejectedValueOnce(new Error('stats failed'));
       const res = makeRes();
 
       await handler(makeReq(), res);
@@ -637,9 +643,9 @@ describe('CacheInvalidationManager — additional scenarios', () => {
     mockRedis.del.mockResolvedValue(2);
 
     const ops = [
-      manager.invalidateCacheType('metadata',  'main'),
+      manager.invalidateCacheType('metadata', 'main'),
       manager.invalidateCacheType('dimension', 'test'),
-      manager.invalidateCacheType('facts',     'analytics'),
+      manager.invalidateCacheType('facts', 'analytics'),
     ];
 
     await expect(Promise.all(ops)).resolves.not.toThrow();

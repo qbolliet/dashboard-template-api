@@ -57,7 +57,7 @@ jest.unstable_mockModule('../../../src/db/index.js', () => ({
   databaseManager: mockDatabaseManager,
 }));
 
-jest.unstable_mockModule('../../../src/cache/cache-invalidation.js', () => ({
+jest.unstable_mockModule('../../../src/security/admin-auth.js', () => ({
   requireAdminKey: mockRequireAdminKey,
 }));
 

@@ -22,18 +22,14 @@ const sidebars: SidebarsConfig = {
         'deployment/overview',
         'deployment/docker',
         'deployment/kubernetes-helm',
-        'deployment/cache-invalidation',
+        'deployment/data-refresh',
       ],
     },
     {
       type: 'category',
       label: 'API Guide',
       collapsed: false,
-      items: [
-        'api-guide/overview',
-        'api-guide/queries',
-        'api-guide/examples',
-      ],
+      items: ['api-guide/overview', 'api-guide/queries', 'api-guide/examples'],
     },
     {
       type: 'category',

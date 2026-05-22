@@ -1,8 +1,9 @@
 // Utilitaires d'invalidation de cache pour les mises à jour de base de données
-import type { Request, Response, NextFunction, Express } from 'express';
+import type { Request, Response, Express } from 'express';
 import { redis } from './index.js';
 import { createContextLogger } from '../utils/logger.js';
 import { config } from '../utils/config-loader.js';
+import { requireAdminKey } from '../security/admin-auth.js';
 
 // Initialisation du logger spécifique au module d'invalidation de cache
 const cacheLogger = createContextLogger({
@@ -283,35 +284,6 @@ class CacheInvalidationManager {
 // Création de l'instance singleton du gestionnaire d'invalidation de cache
 const cacheInvalidationManager = new CacheInvalidationManager();
 
-// ─── Middleware d'authentification admin ──────────────────────────────────────
-
-/**
- * Express middleware that enforces API key authentication for admin endpoints.
- *
- * The caller must provide a valid `x-admin-key` header matching the
- * ADMIN_API_KEY environment variable. Access is denied by default when the
- * variable is not set (fail-safe behaviour).
- *
- * @param req - Incoming HTTP request.
- * @param res - HTTP response object.
- * @param next - Next middleware function in the chain.
- */
-// Vérification de la clé API admin — refus systématique si non configurée (fail-safe)
-const requireAdminKey = (req: Request, res: Response, next: NextFunction): void => {
-  const adminKey = process.env.ADMIN_API_KEY;
-  if (!adminKey) {
-    // Aucune clé configurée — refus par défaut pour sécuriser l'endpoint
-    res.status(503).json({ error: 'Admin endpoint not configured (ADMIN_API_KEY missing)' });
-    return;
-  }
-  const provided = req.headers['x-admin-key'];
-  if (!provided || provided !== adminKey) {
-    res.status(401).json({ error: 'Unauthorized: valid x-admin-key header required' });
-    return;
-  }
-  next();
-};
-
 // ─── Routes d'administration du cache ────────────────────────────────────────
 
 /**
@@ -385,10 +357,5 @@ const createCacheInvalidationRoutes = (app: Express): void => {
   });
 };
 
-export {
-  cacheInvalidationManager,
-  CacheInvalidationManager,
-  createCacheInvalidationRoutes,
-  requireAdminKey,
-};
+export { cacheInvalidationManager, CacheInvalidationManager, createCacheInvalidationRoutes };
 export type { KeyPatterns, KeyPatternFn, InvalidationResult, DatabaseStats, CacheStats };
