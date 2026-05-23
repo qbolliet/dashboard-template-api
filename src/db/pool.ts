@@ -5,12 +5,27 @@ import { createContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
+/** Postgres connection used by a Postgres-backed DuckLake catalog. */
+export interface PostgresConnection {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+}
+
 /** DuckLake catalog entry to attach to the shared DuckDB instance. */
 export interface CatalogEntry {
-  path: string;
   alias: string;
   readOnly: boolean;
+  /** Catalog source: static `.ducklake` file or Postgres-backed catalog. */
+  type: 'file' | 'postgres';
+  /** Path to the `.ducklake` file (local path or remote URI). Set when type is 'file'. */
+  path?: string;
+  /** Data directory/URI for Parquet files (local path or s3:// URI). */
   dataPath?: string;
+  /** Postgres connection. Set when type is 'postgres'. */
+  postgres?: PostgresConnection;
 }
 
 /** Configuration for the DuckDB connection pool. */
@@ -45,6 +60,66 @@ export interface ConnectionWrapper {
   close: () => Promise<void>;
 }
 
+// ─── Helpers SQL (purs, testables sans BD) ──────────────────────────────────────
+
+/** SQL string escaping: double single quotes to prevent injection. */
+export const escapeSqlString = (v: string | undefined | null): string =>
+  (v ?? '').replace(/'/g, "''");
+
+/** Sanitize an alias into a safe SQL secret-name suffix ([a-zA-Z0-9_]). */
+const sanitizeSecretSuffix = (alias: string): string => alias.replace(/[^a-zA-Z0-9_]/g, '_');
+
+/**
+ * Build the SQL statements that attach a single DuckLake catalog.
+ *
+ * Pure function (no I/O) so it can be unit-tested without a live database.
+ * For Postgres catalogs, the first statement creates a `TYPE postgres` secret so
+ * that user/password never appear in the ATTACH connection string (which is
+ * logged): the string carries only db/host/port and DuckDB resolves credentials
+ * from the secret.
+ *
+ * @param catalog - The catalog entry to attach.
+ * @returns Ordered SQL statements to execute (secret creation, then ATTACH).
+ */
+export const buildCatalogSql = (catalog: CatalogEntry): string[] => {
+  // Options communes de l'ATTACH (chemin de données + lecture seule)
+  const options: string[] = [];
+  if (catalog.dataPath) {
+    options.push(`DATA_PATH '${escapeSqlString(catalog.dataPath)}'`);
+    options.push('OVERRIDE_DATA_PATH TRUE');
+  }
+  if (catalog.readOnly) {
+    options.push('READ_ONLY');
+  }
+  const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
+
+  // Catalogue adossé à Postgres : secret d'identifiants + ATTACH sans secret
+  if (catalog.type === 'postgres') {
+    const pg = catalog.postgres;
+    if (!pg) {
+      throw new Error(`Postgres catalog '${catalog.alias}' is missing connection settings.`);
+    }
+    const secretName = `_api_pg_${sanitizeSecretSuffix(catalog.alias)}`;
+    const secretSql =
+      `CREATE OR REPLACE SECRET ${secretName} (` +
+      `TYPE postgres, ` +
+      `HOST '${escapeSqlString(pg.host)}', ` +
+      `PORT ${pg.port}, ` +
+      `DATABASE '${escapeSqlString(pg.database)}', ` +
+      `USER '${escapeSqlString(pg.user)}', ` +
+      `PASSWORD '${escapeSqlString(pg.password)}')`;
+    // Chaîne de connexion sans identifiants (résolus via le secret ci-dessus)
+    const connStr = `postgres:dbname=${pg.database} host=${pg.host} port=${pg.port}`;
+    const attachSql = `ATTACH 'ducklake:${escapeSqlString(connStr)}' AS "${catalog.alias}"${optionClause}`;
+    return [secretSql, attachSql];
+  }
+
+  // Catalogue fichier (.ducklake) — comportement historique
+  return [
+    `ATTACH 'ducklake:${escapeSqlString(catalog.path ?? '')}' AS "${catalog.alias}"${optionClause}`,
+  ];
+};
+
 // ─── Classe DuckDBPool ────────────────────────────────────────────────────────
 
 /**
@@ -56,8 +131,8 @@ export interface ConnectionWrapper {
  * Example:
  *   const pool = new DuckDBPool({
  *     catalogs: [
- *       { path: '/abs/a.ducklake', alias: 'project_a', readOnly: true, dataPath: '/abs/data/a/' },
- *       { path: '/abs/b.ducklake', alias: 'project_b', readOnly: true, dataPath: '/abs/data/b/' }
+ *       { type: 'file', path: '/abs/a.ducklake', alias: 'project_a', readOnly: true, dataPath: '/abs/data/a/' },
+ *       { type: 'file', path: '/abs/b.ducklake', alias: 'project_b', readOnly: true, dataPath: '/abs/data/b/' }
  *     ],
  *     maxConnections: 5,
  *     acquireTimeout: 10000,
@@ -129,38 +204,32 @@ class DuckDBPool {
       // Support S3 : chargement de httpfs si activé dans la config
       if (config.S3?.ENABLED) {
         await conn.run('INSTALL httpfs FROM core; LOAD httpfs;');
-        // Échappement SQL des valeurs de configuration S3
-        const esc = (v: string | undefined | null): string => (v ?? '').replace(/'/g, "''");
         const secretParts: string[] = [
           `TYPE S3`,
-          `REGION '${esc(config.S3?.REGION ?? 'eu-west-1')}'`,
+          `REGION '${escapeSqlString(config.S3?.REGION ?? 'eu-west-1')}'`,
         ];
         if (config.S3?.ACCESS_KEY) {
-          secretParts.push(`KEY_ID '${esc(config.S3.ACCESS_KEY)}'`);
+          secretParts.push(`KEY_ID '${escapeSqlString(config.S3.ACCESS_KEY)}'`);
         }
         if (config.S3?.SECRET_KEY) {
-          secretParts.push(`SECRET '${esc(config.S3.SECRET_KEY)}'`);
+          secretParts.push(`SECRET '${escapeSqlString(config.S3.SECRET_KEY)}'`);
         }
         if (config.S3?.ENDPOINT) {
-          secretParts.push(`ENDPOINT '${esc(config.S3.ENDPOINT)}'`);
+          secretParts.push(`ENDPOINT '${escapeSqlString(config.S3.ENDPOINT)}'`);
         }
         await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
       }
 
-      // Attachement de chaque catalogue DuckLake avec son alias et ses options
+      // Support Postgres : chargement de l'extension si au moins un catalogue l'utilise
+      if (this.catalogs.some((c) => c.type === 'postgres')) {
+        await conn.run('INSTALL postgres FROM core; LOAD postgres;');
+      }
+
+      // Attachement de chaque catalogue DuckLake (fichier ou Postgres)
       for (const catalog of this.catalogs) {
-        const options: string[] = [];
-        // Chemin du répertoire de données Parquet associé au catalogue
-        if (catalog.dataPath) {
-          options.push(`DATA_PATH '${catalog.dataPath}'`);
-          options.push('OVERRIDE_DATA_PATH TRUE');
+        for (const statement of buildCatalogSql(catalog)) {
+          await conn.run(statement);
         }
-        // Mode lecture seule pour les catalogues de production
-        if (catalog.readOnly) {
-          options.push('READ_ONLY');
-        }
-        const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
-        await conn.run(`ATTACH 'ducklake:${catalog.path}' AS "${catalog.alias}"${optionClause}`);
       }
     } finally {
       conn.closeSync();

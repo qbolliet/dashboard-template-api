@@ -1,15 +1,32 @@
+# Chaque catalogue peut être adossé soit à un fichier `.ducklake` (TYPE: file,
+# cas statique), soit à une base Postgres (TYPE: postgres, catalogue mis à jour à
+# chaud par un writer externe). Pour un catalogue Postgres, renseigner le bloc
+# POSTGRES (les identifiants transitent par un secret DuckDB, pas par les logs)
+# et faire pointer DATA_PATH vers le stockage des Parquet (souvent s3://...).
 CATALOGS:
   default:
+    TYPE: ${DEFAULT_CATALOG_TYPE:-file}
     PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
     DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
     READ_ONLY: ${DEFAULT_READ_ONLY:-true}
     SCHEMA: ${DEFAULT_SCHEMA:-main}
+    # Utilisé uniquement quand TYPE=postgres
+    POSTGRES:
+      HOST: ${DEFAULT_PG_HOST:-}
+      PORT: ${DEFAULT_PG_PORT:-5432}
+      DATABASE: ${DEFAULT_PG_DATABASE:-}
+      USER: ${DEFAULT_PG_USER:-}
+      PASSWORD: ${DEFAULT_PG_PASSWORD:-}
   macroeconomics:
+    # Convention pour activer Postgres : MACROECONOMICS_CATALOG_TYPE=postgres
+    # + bloc POSTGRES (cf. clés MACROECONOMICS_PG_HOST / _PORT / _DATABASE / _USER / _PASSWORD)
+    TYPE: ${MACROECONOMICS_CATALOG_TYPE:-file}
     PATH: ${MACROECONOMICS_CATALOG_PATH:-../dashboard-template-database/outputs/macroeconomics.ducklake}
     DATA_PATH: ${MACROECONOMICS_DATA_PATH:-../dashboard-template-database/outputs/macroeconomics_data/}
     READ_ONLY: ${MACROECONOMICS_READ_ONLY:-true}
     SCHEMA: ${MACROECONOMICS_SCHEMA:-main}
   public_finance:
+    TYPE: ${PUBLIC_FINANCE_CATALOG_TYPE:-file}
     PATH: ${PUBLIC_FINANCE_CATALOG_PATH:-../dashboard-template-database/outputs/public_finance.ducklake}
     DATA_PATH: ${PUBLIC_FINANCE_DATA_PATH:-../dashboard-template-database/outputs/public_finance_data/}
     READ_ONLY: ${PUBLIC_FINANCE_READ_ONLY:-true}
