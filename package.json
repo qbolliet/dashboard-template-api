@@ -1,6 +1,6 @@
 {
   "name": "dashboard-template-api",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "GraphQL API for DuckDB schema database",
   "main": "index.js",
   "type": "module",
