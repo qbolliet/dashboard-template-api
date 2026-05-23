@@ -14,80 +14,84 @@ import { jest } from '@jest/globals';
 /** Résultat de requête mocké — simulation de DuckDBQueryResult. */
 interface MockQueryResult {
   getRowObjectsJson: jest.Mock;
-  getRowsJson:       jest.Mock;
-  columnNames:       jest.Mock;
+  getRowsJson: jest.Mock;
+  columnNames: jest.Mock;
 }
 
 /** Connexion DuckDB mockée — simulation de DuckDBConnection. */
 interface MockDuckConnection {
-  run:       jest.Mock;
-  prepare:   jest.Mock;
+  run: jest.Mock;
+  prepare: jest.Mock;
   closeSync: jest.Mock;
 }
 
 /** Instance DuckDB mockée — simulation de DuckDBInstance. */
 interface MockDuckInstance {
-  connect:   jest.Mock;
+  connect: jest.Mock;
   closeSync: jest.Mock;
 }
 
 /** Statement préparé mocké — retourné par mockDuckConn.prepare(). */
 interface MockPreparedStatement {
-  bindNull:    jest.Mock;
+  bindNull: jest.Mock;
   bindVarchar: jest.Mock;
   bindInteger: jest.Mock;
-  bindDouble:  jest.Mock;
+  bindDouble: jest.Mock;
   bindBoolean: jest.Mock;
-  run:         jest.Mock;
+  run: jest.Mock;
 }
 
 /** Configuration passée au constructeur DuckDBPool. */
 interface PoolConfig {
-  catalogs:        CatalogConfig[];
-  maxConnections:  number;
-  acquireTimeout:  number;
-  retryDelay:      number;
+  catalogs: CatalogConfig[];
+  maxConnections: number;
+  acquireTimeout: number;
+  retryDelay: number;
+  drainTimeout?: number;
 }
 
 /** Configuration d'un catalogue DuckLake attaché au pool. */
 interface CatalogConfig {
-  alias:    string;
-  path:     string;
+  alias: string;
+  path: string;
   dataPath: string;
   readOnly: boolean;
 }
 
 /** Instance de DuckDBPool avec accès aux membres internes pour les tests. */
 interface DuckDBPoolInstance {
-  maxConnections:   number;
-  acquireTimeout:   number;
-  retryDelay:       number;
-  pool:             PoolEntry[];
-  catalogs:         CatalogConfig[];
-  instance:         MockDuckInstance | null;
-  instancePromise:  Promise<MockDuckInstance> | null;
+  maxConnections: number;
+  acquireTimeout: number;
+  retryDelay: number;
+  pool: PoolEntry[];
+  draining: PoolEntry[];
+  catalogs: CatalogConfig[];
+  instance: MockDuckInstance | null;
+  instancePromise: Promise<MockDuckInstance> | null;
   initializeInstance: () => Promise<MockDuckInstance>;
-  acquire:          () => Promise<PoolEntry>;
-  release:          (conn: PoolEntry) => void;
-  close:            () => Promise<void>;
+  reload: () => Promise<void>;
+  acquire: () => Promise<PoolEntry>;
+  release: (conn: PoolEntry) => void;
+  close: () => Promise<void>;
 }
 
 /** Entrée dans le tableau pool — connexion avec flag d'utilisation. */
 interface PoolEntry {
-  conn:    MockDuckConnection;
-  inUse:   boolean;
-  all:              (sql: string, params?: unknown[]) => Promise<unknown[]>;
-  getAsJsonArray:   (sql: string, params?: unknown[]) => Promise<unknown[][]>;
-  getWithMetadata:  (sql: string, params?: unknown[]) => Promise<QueryWithMetadata>;
-  exec:             (sql: string) => Promise<void>;
+  conn: MockDuckConnection;
+  inUse: boolean;
+  all: (sql: string, params?: unknown[]) => Promise<unknown[]>;
+  getAsJsonArray: (sql: string, params?: unknown[]) => Promise<unknown[][]>;
+  getWithMetadata: (sql: string, params?: unknown[]) => Promise<QueryWithMetadata>;
+  exec: (sql: string) => Promise<void>;
+  close: () => Promise<void>;
 }
 
 /** Résultat enrichi de getWithMetadata — données + colonnes + métadonnées. */
 interface QueryWithMetadata {
-  columns:  string[];
-  data:     unknown[];
+  columns: string[];
+  data: unknown[];
   metadata: {
-    count:   number;
+    count: number;
     extents: Record<string, [number, number]>;
   };
 }
@@ -109,45 +113,45 @@ interface DuckDBNodeApiModule {
 // Résultat de requête mocké — utilisé par toutes les méthodes de connexion
 const mockQueryResult: MockQueryResult = {
   getRowObjectsJson: jest.fn().mockResolvedValue([{ id: 1, value: 'test' }]),
-  getRowsJson:       jest.fn().mockResolvedValue([[1, 'test']]),
-  columnNames:       jest.fn().mockReturnValue(['id', 'value'])
+  getRowsJson: jest.fn().mockResolvedValue([[1, 'test']]),
+  columnNames: jest.fn().mockReturnValue(['id', 'value']),
 };
 
 // Connexion DuckDB mockée — simulation de l'objet retourné par instance.connect()
 const mockDuckConn: MockDuckConnection = {
-  run:       jest.fn().mockResolvedValue(mockQueryResult),
-  prepare:   jest.fn(),
-  closeSync: jest.fn()
+  run: jest.fn().mockResolvedValue(mockQueryResult),
+  prepare: jest.fn(),
+  closeSync: jest.fn(),
 };
 
 // Instance DuckDB mockée — simulation de l'objet retourné par DuckDBInstance.create()
 const mockInstance: MockDuckInstance = {
-  connect:   jest.fn().mockResolvedValue(mockDuckConn),
-  closeSync: jest.fn()
+  connect: jest.fn().mockResolvedValue(mockDuckConn),
+  closeSync: jest.fn(),
 };
 
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('@duckdb/node-api', () => ({
-  DuckDBInstance: { create: jest.fn().mockResolvedValue(mockInstance) }
+  DuckDBInstance: { create: jest.fn().mockResolvedValue(mockInstance) },
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
-  config: { S3: { ENABLED: false } }
+  config: { S3: { ENABLED: false } },
 }));
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
-  createContextLogger: () => ({ database: jest.fn(), error: jest.fn(), warn: jest.fn() })
+  createContextLogger: () => ({ database: jest.fn(), error: jest.fn(), warn: jest.fn() }),
 }));
 
 // ─── Imports dynamiques ───────────────────────────────────────────────────────
 
-let DuckDBPool:     new (config: PoolConfig) => DuckDBPoolInstance;
+let DuckDBPool: new (config: PoolConfig) => DuckDBPoolInstance;
 let DuckDBInstance: { create: jest.Mock };
 
 beforeAll(async () => {
-  ({ DuckDBPool }      = await import('../../../src/db/pool.js') as unknown as PoolModule);
-  ({ DuckDBInstance }  = await import('@duckdb/node-api') as unknown as DuckDBNodeApiModule);
+  ({ DuckDBPool } = (await import('../../../src/db/pool.js')) as unknown as PoolModule);
+  ({ DuckDBInstance } = (await import('@duckdb/node-api')) as unknown as DuckDBNodeApiModule);
 });
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -159,7 +163,7 @@ beforeAll(async () => {
  *     Array with a single read-only 'main' catalog.
  */
 const makeCatalogs = (): CatalogConfig[] => [
-  { alias: 'main', path: '/abs/main.ducklake', dataPath: '/abs/data/main/', readOnly: true }
+  { alias: 'main', path: '/abs/main.ducklake', dataPath: '/abs/data/main/', readOnly: true },
 ];
 
 /**
@@ -173,12 +177,49 @@ const makeCatalogs = (): CatalogConfig[] => [
  */
 const makePool = (overrides: Partial<PoolConfig> = {}): DuckDBPoolInstance =>
   new DuckDBPool({
-    catalogs:       makeCatalogs(),
+    catalogs: makeCatalogs(),
     maxConnections: 3,
     acquireTimeout: 500,
-    retryDelay:     20,
-    ...overrides
+    retryDelay: 20,
+    ...overrides,
   });
+
+/**
+ * Build a distinct mock DuckDB instance whose connect() yields a fresh
+ * connection on each call.
+ *
+ * Lets a test tell the old instance apart from the rebuilt one across a reload
+ * (the shared mockInstance cannot be distinguished from itself).
+ *
+ * Returns:
+ *     A standalone MockDuckInstance with its own closeSync spy.
+ */
+const makeFreshInstance = (): MockDuckInstance => {
+  const makeConn = (): MockDuckConnection => ({
+    run: jest.fn().mockResolvedValue(mockQueryResult),
+    prepare: jest.fn(),
+    closeSync: jest.fn(),
+  });
+  return {
+    connect: jest.fn().mockImplementation(() => Promise.resolve(makeConn())),
+    closeSync: jest.fn(),
+  };
+};
+
+/**
+ * Poll a predicate until it returns true or the timeout elapses.
+ *
+ * Args:
+ *     predicate: Condition to wait for.
+ *     timeoutMs: Maximum time to wait before throwing.
+ */
+const waitFor = async (predicate: () => boolean, timeoutMs = 1000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  if (!predicate()) throw new Error('waitFor: condition not met within timeout');
+};
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -196,13 +237,13 @@ describe('DuckDBPool', () => {
     // Statement préparé par défaut — méthodes de binding et run
     mockDuckConn.prepare.mockImplementation(() =>
       Promise.resolve<MockPreparedStatement>({
-        bindNull:    jest.fn(),
+        bindNull: jest.fn(),
         bindVarchar: jest.fn(),
         bindInteger: jest.fn(),
-        bindDouble:  jest.fn(),
+        bindDouble: jest.fn(),
         bindBoolean: jest.fn(),
-        run:         jest.fn().mockResolvedValue(mockQueryResult)
-      })
+        run: jest.fn().mockResolvedValue(mockQueryResult),
+      }),
     );
   });
 
@@ -230,8 +271,8 @@ describe('DuckDBPool', () => {
 
     test('stores catalogs from config', () => {
       const catalogs: CatalogConfig[] = [
-        { alias: 'a', path: '/a.ducklake', dataPath: '/data_a/', readOnly: true  },
-        { alias: 'b', path: '/b.ducklake', dataPath: '/data_b/', readOnly: false }
+        { alias: 'a', path: '/a.ducklake', dataPath: '/data_a/', readOnly: true },
+        { alias: 'b', path: '/b.ducklake', dataPath: '/data_b/', readOnly: false },
       ];
       expect(makePool({ catalogs }).catalogs).toEqual(catalogs);
     });
@@ -258,21 +299,27 @@ describe('DuckDBPool', () => {
 
     test('attaches each catalog with ATTACH', async () => {
       await makePool().initializeInstance();
-      const attachCalls = mockDuckConn.run.mock.calls.filter(([sql]) => (sql as string).includes('ATTACH'));
+      const attachCalls = mockDuckConn.run.mock.calls.filter(([sql]) =>
+        (sql as string).includes('ATTACH'),
+      );
       expect(attachCalls).toHaveLength(1);
       expect(attachCalls[0][0]).toContain('"main"');
     });
 
     test('includes DATA_PATH option in ATTACH when dataPath is set', async () => {
       await makePool().initializeInstance();
-      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) => (sql as string).includes('ATTACH'));
+      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) =>
+        (sql as string).includes('ATTACH'),
+      );
       const [attachSql] = attachCall as [string];
       expect(attachSql).toContain('DATA_PATH');
     });
 
     test('includes READ_ONLY option in ATTACH for read-only catalogs', async () => {
       await makePool().initializeInstance();
-      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) => (sql as string).includes('ATTACH'));
+      const attachCall = mockDuckConn.run.mock.calls.find(([sql]) =>
+        (sql as string).includes('ATTACH'),
+      );
       const [attachSql] = attachCall as [string];
       expect(attachSql).toContain('READ_ONLY');
     });
@@ -282,7 +329,7 @@ describe('DuckDBPool', () => {
       const [i1, i2, i3] = await Promise.all([
         pool.initializeInstance(),
         pool.initializeInstance(),
-        pool.initializeInstance()
+        pool.initializeInstance(),
       ]);
       expect(i1).toBe(i2);
       expect(i2).toBe(i3);
@@ -290,8 +337,8 @@ describe('DuckDBPool', () => {
     });
 
     test('returns the cached instance on subsequent calls', async () => {
-      const pool   = makePool();
-      const first  = await pool.initializeInstance();
+      const pool = makePool();
+      const first = await pool.initializeInstance();
       const second = await pool.initializeInstance();
       expect(first).toBe(second);
       expect(DuckDBInstance.create).toHaveBeenCalledTimes(1);
@@ -300,7 +347,19 @@ describe('DuckDBPool', () => {
     test('does not configure S3 when S3.ENABLED is false', async () => {
       await makePool().initializeInstance();
       const sqlCalls = mockDuckConn.run.mock.calls.map(([sql]) => sql as string);
-      expect(sqlCalls.some(s => s.includes('httpfs'))).toBe(false);
+      expect(sqlCalls.some((s) => s.includes('httpfs'))).toBe(false);
+    });
+
+    test('clears instancePromise on failure so a later call can retry', async () => {
+      const pool = makePool();
+      DuckDBInstance.create.mockRejectedValueOnce(new Error('init failed'));
+
+      await expect(pool.initializeInstance()).rejects.toThrow('init failed');
+      // La Promise rejetée ne doit pas rester en cache (sinon le pool est cassé)
+      expect(pool.instancePromise).toBeNull();
+
+      // Nouvelle tentative réussie (retour au mock par défaut)
+      await expect(pool.initializeInstance()).resolves.toBe(mockInstance);
     });
   });
 
@@ -324,7 +383,7 @@ describe('DuckDBPool', () => {
     });
 
     test('reuses an available connection', async () => {
-      const pool  = makePool();
+      const pool = makePool();
       const conn1 = await pool.acquire();
       pool.release(conn1);
       const conn2 = await pool.acquire();
@@ -333,7 +392,7 @@ describe('DuckDBPool', () => {
     });
 
     test('creates up to maxConnections distinct connections', async () => {
-      const pool  = makePool({ maxConnections: 2 });
+      const pool = makePool({ maxConnections: 2 });
       const conn1 = await pool.acquire();
       const conn2 = await pool.acquire();
       expect(pool.pool).toHaveLength(2);
@@ -359,7 +418,7 @@ describe('DuckDBPool', () => {
     });
 
     test('allows the released connection to be reacquired', async () => {
-      const pool  = makePool({ maxConnections: 1 });
+      const pool = makePool({ maxConnections: 1 });
       const conn1 = await pool.acquire();
       pool.release(conn1);
       const conn2 = await pool.acquire();
@@ -403,6 +462,147 @@ describe('DuckDBPool', () => {
       expect(pool.instance).toBeNull();
       expect(pool.instancePromise).toBeNull();
     });
+
+    test('also closes connections left draining by a reload', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+
+      // drainTimeout long → la connexion en vol reste en drainage pendant le close
+      const pool = makePool({ retryDelay: 10, drainTimeout: 5000 });
+      const oldConn = await pool.acquire(); // inUse, jamais relâchée
+      await pool.reload();
+
+      expect(pool.draining).toHaveLength(1);
+      const closeSpy = jest.spyOn(oldConn, 'close');
+
+      await pool.close();
+
+      expect(closeSpy).toHaveBeenCalled();
+      expect(pool.draining).toHaveLength(0);
+
+      // Laisse la boucle de drainage résiduelle se terminer proprement
+      oldConn.inUse = false;
+    });
+  });
+
+  // ── Rechargement de l'instance (reload) ───────────────────────────────────
+
+  describe('reload', () => {
+    test('rebuilds the instance and re-attaches catalogs', async () => {
+      const pool = makePool();
+      await pool.initializeInstance();
+      const attachBefore = mockDuckConn.run.mock.calls.filter(([sql]) =>
+        (sql as string).includes('ATTACH'),
+      ).length;
+
+      await pool.reload();
+
+      const attachAfter = mockDuckConn.run.mock.calls.filter(([sql]) =>
+        (sql as string).includes('ATTACH'),
+      ).length;
+      expect(attachAfter).toBeGreaterThan(attachBefore);
+      expect(DuckDBInstance.create).toHaveBeenCalledTimes(2);
+    });
+
+    test('swaps in the new instance for subsequent acquisitions', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+
+      const pool = makePool();
+      await pool.initializeInstance();
+      expect(pool.instance).toBe(instA);
+
+      await pool.reload();
+      expect(pool.instance).toBe(instB);
+
+      await pool.acquire();
+      expect(instB.connect).toHaveBeenCalled();
+    });
+
+    test('keeps the old instance serving when the rebuild fails', async () => {
+      const pool = makePool();
+      await pool.initializeInstance();
+      const oldInstance = pool.instance;
+
+      DuckDBInstance.create.mockRejectedValueOnce(new Error('S3 unreachable'));
+      await expect(pool.reload()).rejects.toThrow('S3 unreachable');
+
+      // L'ancienne instance reste en place et le pool reste fonctionnel
+      expect(pool.instance).toBe(oldInstance);
+      await expect(pool.initializeInstance()).resolves.toBe(oldInstance);
+    });
+
+    test('dedupes concurrent reloads into a single rebuild', async () => {
+      const pool = makePool();
+      await pool.initializeInstance();
+      const before = DuckDBInstance.create.mock.calls.length;
+
+      await Promise.all([pool.reload(), pool.reload(), pool.reload()]);
+
+      expect(DuckDBInstance.create.mock.calls.length).toBe(before + 1);
+    });
+
+    test('drains in-flight connections before closing the old instance', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+
+      const pool = makePool({ retryDelay: 10 });
+      const oldConn = await pool.acquire();
+      const closeSpy = jest.spyOn(oldConn, 'close');
+      expect(oldConn.inUse).toBe(true);
+
+      await pool.reload();
+
+      // Requête encore en vol → l'ancienne instance ne doit pas être fermée
+      expect(instA.closeSync).not.toHaveBeenCalled();
+      expect(closeSpy).not.toHaveBeenCalled();
+
+      // Fin de la requête → le drainage ferme la connexion puis l'instance
+      pool.release(oldConn);
+      await waitFor(() => (instA.closeSync as jest.Mock).mock.calls.length > 0);
+
+      expect(closeSpy).toHaveBeenCalled();
+      expect(instA.closeSync).toHaveBeenCalled();
+    });
+
+    test('force-closes in-flight connections after the drain timeout', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+
+      // drainTimeout court → fermeture forcée sans attendre 30s
+      const pool = makePool({ retryDelay: 10, drainTimeout: 30 });
+      const oldConn = await pool.acquire(); // jamais relâchée
+      const closeSpy = jest.spyOn(oldConn, 'close');
+
+      await pool.reload();
+
+      await waitFor(() => (instA.closeSync as jest.Mock).mock.calls.length > 0);
+      expect(closeSpy).toHaveBeenCalled();
+    });
+  });
+
+  // ── Libération d'une connexion en drainage ────────────────────────────────
+
+  describe('release (draining connections)', () => {
+    test('marks a draining connection free after a reload', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+
+      const pool = makePool({ retryDelay: 10, drainTimeout: 5000 });
+      const oldConn = await pool.acquire();
+      await pool.reload();
+
+      expect(pool.draining).toContain(oldConn);
+      expect(oldConn.inUse).toBe(true);
+
+      pool.release(oldConn);
+      expect(oldConn.inUse).toBe(false);
+    });
   });
 
   // ── Méthodes de requête des connexions ────────────────────────────────────
@@ -431,10 +631,10 @@ describe('DuckDBPool', () => {
         const mockPrep: MockPreparedStatement = {
           bindVarchar: jest.fn(),
           bindInteger: jest.fn(),
-          bindDouble:  jest.fn(),
+          bindDouble: jest.fn(),
           bindBoolean: jest.fn(),
-          bindNull:    jest.fn(),
-          run:         jest.fn().mockResolvedValue(mockQueryResult)
+          bindNull: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
         };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
 
@@ -452,35 +652,50 @@ describe('DuckDBPool', () => {
       });
 
       test('binds string param with bindVarchar', async () => {
-        const mockPrep = { bindVarchar: jest.fn(), run: jest.fn().mockResolvedValue(mockQueryResult) };
+        const mockPrep = {
+          bindVarchar: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
+        };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.all('SELECT ?', ['hello']);
         expect(mockPrep.bindVarchar).toHaveBeenCalledWith(1, 'hello');
       });
 
       test('binds integer param with bindInteger', async () => {
-        const mockPrep = { bindInteger: jest.fn(), run: jest.fn().mockResolvedValue(mockQueryResult) };
+        const mockPrep = {
+          bindInteger: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
+        };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.all('SELECT ?', [7]);
         expect(mockPrep.bindInteger).toHaveBeenCalledWith(1, 7);
       });
 
       test('binds float param with bindDouble', async () => {
-        const mockPrep = { bindDouble: jest.fn(), run: jest.fn().mockResolvedValue(mockQueryResult) };
+        const mockPrep = {
+          bindDouble: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
+        };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.all('SELECT ?', [3.14]);
         expect(mockPrep.bindDouble).toHaveBeenCalledWith(1, 3.14);
       });
 
       test('binds boolean param with bindBoolean', async () => {
-        const mockPrep = { bindBoolean: jest.fn(), run: jest.fn().mockResolvedValue(mockQueryResult) };
+        const mockPrep = {
+          bindBoolean: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
+        };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.all('SELECT ?', [true]);
         expect(mockPrep.bindBoolean).toHaveBeenCalledWith(1, true);
       });
 
       test('converts unknown param types to string', async () => {
-        const mockPrep = { bindVarchar: jest.fn(), run: jest.fn().mockResolvedValue(mockQueryResult) };
+        const mockPrep = {
+          bindVarchar: jest.fn(),
+          run: jest.fn().mockResolvedValue(mockQueryResult),
+        };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.all('SELECT ?', [{ key: 'val' }]);
         expect(mockPrep.bindVarchar).toHaveBeenCalledWith(1, '[object Object]');
@@ -499,7 +714,7 @@ describe('DuckDBPool', () => {
       test('uses prepared statement for parameterized queries', async () => {
         const mockPrep: Partial<MockPreparedStatement> = {
           bindInteger: jest.fn(),
-          run:         jest.fn().mockResolvedValue(mockQueryResult)
+          run: jest.fn().mockResolvedValue(mockQueryResult),
         };
         mockDuckConn.prepare.mockResolvedValue(mockPrep);
         await conn.getAsJsonArray('SELECT ? AS n', [1]);
@@ -522,7 +737,7 @@ describe('DuckDBPool', () => {
         mockQueryResult.getRowObjectsJson.mockResolvedValue([
           { id: 1, score: 10 },
           { id: 2, score: 50 },
-          { id: 3, score: 30 }
+          { id: 3, score: 30 },
         ]);
         mockQueryResult.columnNames.mockReturnValue(['id', 'score']);
 
@@ -532,9 +747,7 @@ describe('DuckDBPool', () => {
       });
 
       test('skips null values when computing extents', async () => {
-        mockQueryResult.getRowObjectsJson.mockResolvedValue([
-          { v: 5 }, { v: null }, { v: 15 }
-        ]);
+        mockQueryResult.getRowObjectsJson.mockResolvedValue([{ v: 5 }, { v: null }, { v: 15 }]);
         mockQueryResult.columnNames.mockReturnValue(['v']);
 
         const { metadata } = await conn.getWithMetadata('SELECT v FROM t');

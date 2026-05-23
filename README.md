@@ -13,12 +13,12 @@ A production-ready **GraphQL API template** that connects to one or more [DuckLa
 
 ## Key properties
 
-| | |
-|---|---|
-| **Authentication** | None — fully public |
-| **Operations** | Read-only (no mutations) |
-| **Protection** | Rate limiting · complexity limits · depth limits |
-| **Stack** | Apollo Server 5 · DuckDB · Express 5 · Redis · TypeScript |
+|                    |                                                           |
+| ------------------ | --------------------------------------------------------- |
+| **Authentication** | None — fully public                                       |
+| **Operations**     | Read-only (no mutations)                                  |
+| **Protection**     | Rate limiting · complexity limits · depth limits          |
+| **Stack**          | Apollo Server 5 · DuckDB · Express 5 · Redis · TypeScript |
 
 The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query complexity analysis, and input sanitization protect against abuse.
 
@@ -38,16 +38,16 @@ npm run dev                   # → http://localhost:4000/graphql
 
 ## npm scripts
 
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Development server with auto-reload |
-| `npm run build` | Compile TypeScript → `dist/` |
-| `npm run start:prod` | Run compiled output |
-| `npm run lint` | ESLint |
-| `npm run format` | Prettier |
-| `npm run test:setup` | Load test fixtures |
-| `npm test` | Run Jest test suite |
-| `npm run test:coverage` | Tests with coverage report |
+| Script                  | Description                         |
+| ----------------------- | ----------------------------------- |
+| `npm run dev`           | Development server with auto-reload |
+| `npm run build`         | Compile TypeScript → `dist/`        |
+| `npm run start:prod`    | Run compiled output                 |
+| `npm run lint`          | ESLint                              |
+| `npm run format`        | Prettier                            |
+| `npm run test:setup`    | Load test fixtures                  |
+| `npm test`              | Run Jest test suite                 |
+| `npm run test:coverage` | Tests with coverage report          |
 
 ---
 
@@ -73,7 +73,7 @@ The full deployment guide — Dockerfile internals, `values.yaml` reference, ing
 - [Deployment overview](https://qbolliet.github.io/dashboard-template-api/deployment/overview)
 - [Docker](https://qbolliet.github.io/dashboard-template-api/deployment/docker)
 - [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/deployment/kubernetes-helm)
-- [Cache invalidation](https://qbolliet.github.io/dashboard-template-api/deployment/cache-invalidation)
+- [Data refresh](https://qbolliet.github.io/dashboard-template-api/deployment/data-refresh)
 
 ---
 

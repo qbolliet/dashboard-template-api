@@ -1,5 +1,5 @@
 // Importation des modules nécessaires pour la gestion des bases de données
-import { DuckDBPool } from './pool.js';
+import { DuckDBPool, type CatalogEntry } from './pool.js';
 import { dirname, resolve } from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -15,6 +15,11 @@ const dbLogger = createContextLogger({
   component: 'database',
   module: 'database-manager',
 });
+
+// Détection des URI distantes (s3://, gs://, az://, http(s)://, …) : ces chemins
+// ne doivent pas passer par resolve()/fs.existsSync (réservés au système de fichiers local).
+const REMOTE_URI_PATTERN = /^[a-z0-9]+:\/\//i;
+const isRemoteUri = (p: string): boolean => REMOTE_URI_PATTERN.test(p);
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -101,38 +106,76 @@ class DatabaseManager {
     });
 
     // Construction de la liste des catalogues DuckLake à attacher
-    const catalogs: { alias: string; path: string; dataPath: string; readOnly: boolean }[] = [];
+    const catalogs: CatalogEntry[] = [];
 
     for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
-      // Résolution du chemin absolu vers le fichier catalogue
-      const catalogPath = resolve(__dirname, '../../', catalogConfig.PATH).replace(/\\/g, '/');
-      // Résolution du chemin absolu vers le répertoire de données Parquet
-      const dataPathRaw = resolve(__dirname, '../../', catalogConfig.DATA_PATH).replace(/\\/g, '/');
-      // DuckLake exige un slash final sur DATA_PATH
-      const dataPath = dataPathRaw.endsWith('/') ? dataPathRaw : dataPathRaw + '/';
+      const type = catalogConfig.TYPE ?? 'file';
 
       // Stockage du schéma DuckLake configuré pour ce catalogue
       this.schemas[catalogId] = catalogConfig.SCHEMA ?? 'main';
 
-      // Vérification de l'existence du fichier catalogue
-      if (!fs.existsSync(catalogPath)) {
-        dbLogger.warn(`Catalog file not found for ${catalogId}`, {
-          path: catalogPath,
-          configPath: catalogConfig.PATH,
+      // Résolution du chemin de données (local résolu en absolu, URI distante telle quelle)
+      const dataPath = this.resolveDataPath(catalogConfig.DATA_PATH);
+
+      // Catalogue adossé à Postgres : pas de fichier à résoudre/vérifier
+      if (type === 'postgres') {
+        const pg = catalogConfig.POSTGRES;
+        if (!pg?.HOST || !pg?.DATABASE) {
+          throw new Error(
+            `Postgres catalog '${catalogId}' requires POSTGRES.HOST and POSTGRES.DATABASE.`,
+          );
+        }
+        // Descripteur sans identifiants pour les logs
+        dbLogger.database(`Postgres catalog configured for ${catalogId}`, {
+          metadata: `postgres://${pg.HOST}:${pg.PORT}/${pg.DATABASE}`,
         });
-      } else {
-        const stats = fs.statSync(catalogPath);
-        dbLogger.database(`Catalog file found for ${catalogId}`, {
-          path: catalogPath,
-          size: stats.size,
-          modified: stats.mtime,
+        catalogs.push({
+          alias: catalogId,
+          type: 'postgres',
+          readOnly: catalogConfig.READ_ONLY ?? true,
+          dataPath,
+          postgres: {
+            host: pg.HOST,
+            port: pg.PORT,
+            database: pg.DATABASE,
+            user: pg.USER,
+            password: pg.PASSWORD,
+          },
         });
+        continue;
+      }
+
+      // Catalogue fichier (.ducklake)
+      if (!catalogConfig.PATH) {
+        throw new Error(`File catalog '${catalogId}' requires a PATH.`);
+      }
+      // URI distante (s3://, …) telle quelle ; sinon résolution absolue locale
+      const catalogPath = isRemoteUri(catalogConfig.PATH)
+        ? catalogConfig.PATH
+        : resolve(__dirname, '../../', catalogConfig.PATH).replace(/\\/g, '/');
+
+      // Vérification d'existence réservée aux fichiers locaux
+      if (!isRemoteUri(catalogPath)) {
+        if (!fs.existsSync(catalogPath)) {
+          dbLogger.warn(`Catalog file not found for ${catalogId}`, {
+            path: catalogPath,
+            configPath: catalogConfig.PATH,
+          });
+        } else {
+          const stats = fs.statSync(catalogPath);
+          dbLogger.database(`Catalog file found for ${catalogId}`, {
+            path: catalogPath,
+            size: stats.size,
+            modified: stats.mtime,
+          });
+        }
       }
 
       catalogs.push({
         alias: catalogId,
+        type: 'file',
         path: catalogPath,
-        dataPath: dataPath,
+        dataPath,
         readOnly: catalogConfig.READ_ONLY ?? true,
       });
     }
@@ -157,7 +200,11 @@ class DatabaseManager {
     dbLogger.database('Creating shared pool', {
       catalogs: catalogs.map((c) => ({
         alias: c.alias,
-        path: c.path.replace(process.cwd(), '.'),
+        type: c.type,
+        location:
+          c.type === 'postgres'
+            ? `postgres://${c.postgres?.host}:${c.postgres?.port}/${c.postgres?.database}`
+            : (c.path ?? '').replace(process.cwd(), '.'),
         readOnly: c.readOnly,
       })),
       maxConnections: poolConfig.maxConnections,
@@ -168,6 +215,21 @@ class DatabaseManager {
     dbLogger.database('Database manager initialized successfully', {
       attachedCatalogs: catalogs.map((c) => c.alias),
     });
+  }
+
+  /**
+   * Resolve a catalog DATA_PATH into a form DuckLake accepts.
+   * Remote URIs (s3://, gs://, …) are passed through unchanged; local paths are
+   * resolved to absolute. A trailing slash is always enforced (DuckLake requirement).
+   *
+   * @param rawDataPath - DATA_PATH as configured (local path or remote URI).
+   * @returns Resolved data path with a guaranteed trailing slash.
+   */
+  private resolveDataPath(rawDataPath: string): string {
+    const base = isRemoteUri(rawDataPath)
+      ? rawDataPath
+      : resolve(__dirname, '../../', rawDataPath).replace(/\\/g, '/');
+    return base.endsWith('/') ? base : base + '/';
   }
 
   /**
@@ -268,6 +330,33 @@ class DatabaseManager {
     }
 
     return targetDatabase;
+  }
+
+  /**
+   * Reload all attached catalogs against their latest state on disk / S3.
+   *
+   * Rebuilds the shared DuckDB instance so the API picks up data refreshed by an
+   * external process (e.g. a nightly DuckLake update) without a pod restart.
+   * In-flight requests drain on the old instance; new requests use the fresh
+   * catalog. Resolves once the new instance is ready.
+   *
+   * @throws {Error} If the shared pool is not initialized or the rebuild fails.
+   */
+  async reloadCatalogs(): Promise<void> {
+    if (!this.sharedPool) {
+      throw new Error('Shared pool is not initialized.');
+    }
+
+    // Logging
+    dbLogger.database('Reloading catalogs on shared pool');
+
+    // Re-chargement des catalogues
+    await this.sharedPool.reload();
+
+    // Logging
+    dbLogger.database('Catalogs reloaded successfully', {
+      attachedCatalogs: this.sharedPool.catalogs.map((c) => c.alias),
+    });
   }
 
   /**

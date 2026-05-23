@@ -5,12 +5,27 @@ import { createContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
+/** Postgres connection used by a Postgres-backed DuckLake catalog. */
+export interface PostgresConnection {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+}
+
 /** DuckLake catalog entry to attach to the shared DuckDB instance. */
 export interface CatalogEntry {
-  path: string;
   alias: string;
   readOnly: boolean;
+  /** Catalog source: static `.ducklake` file or Postgres-backed catalog. */
+  type: 'file' | 'postgres';
+  /** Path to the `.ducklake` file (local path or remote URI). Set when type is 'file'. */
+  path?: string;
+  /** Data directory/URI for Parquet files (local path or s3:// URI). */
   dataPath?: string;
+  /** Postgres connection. Set when type is 'postgres'. */
+  postgres?: PostgresConnection;
 }
 
 /** Configuration for the DuckDB connection pool. */
@@ -19,6 +34,8 @@ export interface PoolConfig {
   maxConnections: number;
   acquireTimeout: number;
   retryDelay: number;
+  /** Max wait (ms) for in-flight requests to drain on reload before force-close. */
+  drainTimeout?: number;
 }
 
 /** Query result with column metadata, intended for D3 visualization. */
@@ -43,6 +60,66 @@ export interface ConnectionWrapper {
   close: () => Promise<void>;
 }
 
+// ─── Helpers SQL (purs, testables sans BD) ──────────────────────────────────────
+
+/** SQL string escaping: double single quotes to prevent injection. */
+export const escapeSqlString = (v: string | undefined | null): string =>
+  (v ?? '').replace(/'/g, "''");
+
+/** Sanitize an alias into a safe SQL secret-name suffix ([a-zA-Z0-9_]). */
+const sanitizeSecretSuffix = (alias: string): string => alias.replace(/[^a-zA-Z0-9_]/g, '_');
+
+/**
+ * Build the SQL statements that attach a single DuckLake catalog.
+ *
+ * Pure function (no I/O) so it can be unit-tested without a live database.
+ * For Postgres catalogs, the first statement creates a `TYPE postgres` secret so
+ * that user/password never appear in the ATTACH connection string (which is
+ * logged): the string carries only db/host/port and DuckDB resolves credentials
+ * from the secret.
+ *
+ * @param catalog - The catalog entry to attach.
+ * @returns Ordered SQL statements to execute (secret creation, then ATTACH).
+ */
+export const buildCatalogSql = (catalog: CatalogEntry): string[] => {
+  // Options communes de l'ATTACH (chemin de données + lecture seule)
+  const options: string[] = [];
+  if (catalog.dataPath) {
+    options.push(`DATA_PATH '${escapeSqlString(catalog.dataPath)}'`);
+    options.push('OVERRIDE_DATA_PATH TRUE');
+  }
+  if (catalog.readOnly) {
+    options.push('READ_ONLY');
+  }
+  const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
+
+  // Catalogue adossé à Postgres : secret d'identifiants + ATTACH sans secret
+  if (catalog.type === 'postgres') {
+    const pg = catalog.postgres;
+    if (!pg) {
+      throw new Error(`Postgres catalog '${catalog.alias}' is missing connection settings.`);
+    }
+    const secretName = `_api_pg_${sanitizeSecretSuffix(catalog.alias)}`;
+    const secretSql =
+      `CREATE OR REPLACE SECRET ${secretName} (` +
+      `TYPE postgres, ` +
+      `HOST '${escapeSqlString(pg.host)}', ` +
+      `PORT ${pg.port}, ` +
+      `DATABASE '${escapeSqlString(pg.database)}', ` +
+      `USER '${escapeSqlString(pg.user)}', ` +
+      `PASSWORD '${escapeSqlString(pg.password)}')`;
+    // Chaîne de connexion sans identifiants (résolus via le secret ci-dessus)
+    const connStr = `postgres:dbname=${pg.database} host=${pg.host} port=${pg.port}`;
+    const attachSql = `ATTACH 'ducklake:${escapeSqlString(connStr)}' AS "${catalog.alias}"${optionClause}`;
+    return [secretSql, attachSql];
+  }
+
+  // Catalogue fichier (.ducklake) — comportement historique
+  return [
+    `ATTACH 'ducklake:${escapeSqlString(catalog.path ?? '')}' AS "${catalog.alias}"${optionClause}`,
+  ];
+};
+
 // ─── Classe DuckDBPool ────────────────────────────────────────────────────────
 
 /**
@@ -54,8 +131,8 @@ export interface ConnectionWrapper {
  * Example:
  *   const pool = new DuckDBPool({
  *     catalogs: [
- *       { path: '/abs/a.ducklake', alias: 'project_a', readOnly: true, dataPath: '/abs/data/a/' },
- *       { path: '/abs/b.ducklake', alias: 'project_b', readOnly: true, dataPath: '/abs/data/b/' }
+ *       { type: 'file', path: '/abs/a.ducklake', alias: 'project_a', readOnly: true, dataPath: '/abs/data/a/' },
+ *       { type: 'file', path: '/abs/b.ducklake', alias: 'project_b', readOnly: true, dataPath: '/abs/data/b/' }
  *     ],
  *     maxConnections: 5,
  *     acquireTimeout: 10000,
@@ -74,6 +151,13 @@ class DuckDBPool {
   readonly catalogs: CatalogEntry[];
   private instance: DuckDBInstance | null;
   private instancePromise: Promise<DuckDBInstance> | null;
+  // Connexions de l'ancienne instance en cours de drainage après un reload
+  private draining: ConnectionWrapper[];
+  // Garde anti-concurrence pour reload() (déduplique les appels simultanés)
+  private reloadPromise: Promise<void> | null;
+  // Délai max d'attente du drainage des requêtes en vol avant fermeture forcée.
+  // Doit dépasser le plus long timeout de requête (cf. API.TIMEOUTS, max 15s).
+  private readonly drainTimeout: number;
 
   // Initialisation
   constructor(poolConfig: PoolConfig) {
@@ -93,6 +177,65 @@ class DuckDBPool {
     this.instance = null;
     // Promise de garde pour éviter les initialisations concurrentes (lazy singleton)
     this.instancePromise = null;
+    // Ensemble des connexions de l'ancienne instance en attente de fermeture
+    this.draining = [];
+    // Garde de reload en cours
+    this.reloadPromise = null;
+    // Délai de drainage configurable (défaut 30s, > timeout max de requête)
+    this.drainTimeout = poolConfig.drainTimeout ?? 30000;
+  }
+
+  /**
+   * Build a fresh DuckDB instance with all DuckLake catalogs attached.
+   * Pure factory: does not mutate pool state, so a failure here leaves any
+   * currently-serving instance untouched (used by both lazy init and reload).
+   *
+   * @returns A newly created DuckDB instance with every catalog attached.
+   */
+  private async buildInstance(): Promise<DuckDBInstance> {
+    // Création d'une instance DuckDB en mémoire partagée
+    const instance = await DuckDBInstance.create(':memory:');
+    const conn = await instance.connect();
+
+    try {
+      // Chargement de ducklake
+      await conn.run('LOAD ducklake;');
+
+      // Support S3 : chargement de httpfs si activé dans la config
+      if (config.S3?.ENABLED) {
+        await conn.run('INSTALL httpfs FROM core; LOAD httpfs;');
+        const secretParts: string[] = [
+          `TYPE S3`,
+          `REGION '${escapeSqlString(config.S3?.REGION ?? 'eu-west-1')}'`,
+        ];
+        if (config.S3?.ACCESS_KEY) {
+          secretParts.push(`KEY_ID '${escapeSqlString(config.S3.ACCESS_KEY)}'`);
+        }
+        if (config.S3?.SECRET_KEY) {
+          secretParts.push(`SECRET '${escapeSqlString(config.S3.SECRET_KEY)}'`);
+        }
+        if (config.S3?.ENDPOINT) {
+          secretParts.push(`ENDPOINT '${escapeSqlString(config.S3.ENDPOINT)}'`);
+        }
+        await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
+      }
+
+      // Support Postgres : chargement de l'extension si au moins un catalogue l'utilise
+      if (this.catalogs.some((c) => c.type === 'postgres')) {
+        await conn.run('INSTALL postgres FROM core; LOAD postgres;');
+      }
+
+      // Attachement de chaque catalogue DuckLake (fichier ou Postgres)
+      for (const catalog of this.catalogs) {
+        for (const statement of buildCatalogSql(catalog)) {
+          await conn.run(statement);
+        }
+      }
+    } finally {
+      conn.closeSync();
+    }
+
+    return instance;
   }
 
   /**
@@ -111,57 +254,124 @@ class DuckDBPool {
 
     // Démarrage de l'initialisation unique
     this.instancePromise = (async (): Promise<DuckDBInstance> => {
-      // Création d'une instance DuckDB en mémoire partagée
-      const instance = await DuckDBInstance.create(':memory:');
-      const conn = await instance.connect();
-
-      // Chargement de ducklake
-      await conn.run('LOAD ducklake;');
-
-      // Support S3 : chargement de httpfs si activé dans la config
-      if (config.S3?.ENABLED) {
-        await conn.run('INSTALL httpfs FROM core; LOAD httpfs;');
-        // Échappement SQL des valeurs de configuration S3
-        const esc = (v: string | undefined | null): string => (v ?? '').replace(/'/g, "''");
-        const secretParts: string[] = [
-          `TYPE S3`,
-          `REGION '${esc(config.S3?.REGION ?? 'eu-west-1')}'`,
-        ];
-        if (config.S3?.ACCESS_KEY) {
-          secretParts.push(`KEY_ID '${esc(config.S3.ACCESS_KEY)}'`);
-        }
-        if (config.S3?.SECRET_KEY) {
-          secretParts.push(`SECRET '${esc(config.S3.SECRET_KEY)}'`);
-        }
-        if (config.S3?.ENDPOINT) {
-          secretParts.push(`ENDPOINT '${esc(config.S3.ENDPOINT)}'`);
-        }
-        await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
+      try {
+        const instance = await this.buildInstance();
+        // Stockage de l'instance pour les appels suivants
+        this.instance = instance;
+        return instance;
+      } catch (error) {
+        // Réinitialisation de la garde pour autoriser une nouvelle tentative
+        // (sinon une Promise rejetée serait mise en cache et casserait le pool)
+        this.instancePromise = null;
+        throw error;
       }
-
-      // Attachement de chaque catalogue DuckLake avec son alias et ses options
-      for (const catalog of this.catalogs) {
-        const options: string[] = [];
-        // Chemin du répertoire de données Parquet associé au catalogue
-        if (catalog.dataPath) {
-          options.push(`DATA_PATH '${catalog.dataPath}'`);
-          options.push('OVERRIDE_DATA_PATH TRUE');
-        }
-        // Mode lecture seule pour les catalogues de production
-        if (catalog.readOnly) {
-          options.push('READ_ONLY');
-        }
-        const optionClause = options.length > 0 ? ` (${options.join(', ')})` : '';
-        await conn.run(`ATTACH 'ducklake:${catalog.path}' AS "${catalog.alias}"${optionClause}`);
-      }
-
-      conn.closeSync();
-      // Stockage de l'instance pour les appels suivants
-      this.instance = instance;
-      return instance;
     })();
 
     return this.instancePromise;
+  }
+
+  /**
+   * Rebuild the shared instance against the latest catalog state on disk / S3.
+   *
+   * Used after an external process refreshes the DuckLake catalogs: the running
+   * pool keeps serving the snapshot it attached at startup, so a reload is needed
+   * to pick up new data without restarting the pod.
+   *
+   * Zero-interruption strategy:
+   *  1. Build the new instance first — if it fails (S3 down, corrupt catalog),
+   *     the old instance keeps serving and the error propagates to the caller.
+   *  2. Atomically swap it in so new acquisitions use the fresh catalog.
+   *  3. Drain and close the old instance in the background, letting in-flight
+   *     requests finish on a clean per-request boundary.
+   *
+   * Resolves only once the new instance is ready, so callers can safely sequence
+   * a cache invalidation afterwards.
+   */
+  async reload(): Promise<void> {
+    // Déduplication des reloads concurrents
+    if (this.reloadPromise) return this.reloadPromise;
+
+    this.reloadPromise = (async (): Promise<void> => {
+      const dbLogger = createContextLogger({ component: 'database', module: 'pool' });
+      try {
+        dbLogger.database('Reloading DuckDB instance (re-attaching catalogs)', {
+          catalogs: this.catalogs.map((c) => c.alias),
+        });
+
+        // 1. Construction de la nouvelle instance AVANT toute mutation d'état
+        const newInstance = await this.buildInstance();
+
+        // 2. Bascule atomique : les nouvelles acquisitions utilisent le catalogue à jour
+        const oldInstance = this.instance;
+        const oldConnections = this.pool;
+        this.instance = newInstance;
+        this.instancePromise = Promise.resolve(newInstance);
+        this.pool = [];
+
+        // 3. Drainage et fermeture de l'ancienne instance en arrière-plan
+        void this.drainAndClose(oldInstance, oldConnections);
+
+        dbLogger.database('DuckDB instance reloaded successfully', {
+          drainingConnections: oldConnections.length,
+        });
+      } finally {
+        // Libération de la garde, succès comme échec
+        this.reloadPromise = null;
+      }
+    })();
+
+    return this.reloadPromise;
+  }
+
+  /**
+   * Wait for in-flight requests on a retired instance to finish, then close it.
+   * Connections still in use are tracked in {@link draining} so that release()
+   * can flag them done; after the drain window elapses they are force-closed.
+   *
+   * @param oldInstance - The retired DuckDB instance to close.
+   * @param oldConnections - Connections bound to the retired instance.
+   */
+  private async drainAndClose(
+    oldInstance: DuckDBInstance | null,
+    oldConnections: ConnectionWrapper[],
+  ): Promise<void> {
+    const dbLogger = createContextLogger({ component: 'database', module: 'pool' });
+
+    // Suivi des connexions en drainage pour que release() puisse les marquer libres
+    this.draining.push(...oldConnections);
+
+    // Attente que les requêtes en vol se terminent, plafonnée par drainTimeout
+    const deadline = Date.now() + this.drainTimeout;
+    while (oldConnections.some((c) => c.inUse) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
+    }
+
+    const stillBusy = oldConnections.filter((c) => c.inUse).length;
+    if (stillBusy > 0) {
+      dbLogger.warn('Force-closing in-flight connections after drain timeout', {
+        stillBusy,
+        drainTimeout: this.drainTimeout,
+      });
+    }
+
+    // Fermeture des anciennes connexions puis de l'ancienne instance
+    const results = await Promise.allSettled(oldConnections.map((c) => c.close()));
+    results.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        dbLogger.error(`Failed to close drained connection #${i}`, result.reason);
+      }
+    });
+
+    if (oldInstance) {
+      try {
+        oldInstance.closeSync();
+      } catch (error) {
+        dbLogger.error('Failed to close retired DuckDB instance', error);
+      }
+    }
+
+    // Retrait des connexions drainées du suivi
+    this.draining = this.draining.filter((c) => !oldConnections.includes(c));
   }
 
   /**
@@ -381,6 +591,13 @@ class DuckDBPool {
     if (connIndex >= 0) {
       // Marquage comme disponible pour la prochaine acquisition
       this.pool[connIndex].inUse = false;
+      return;
+    }
+    // Connexion appartenant à une instance retirée (reload en cours) : on la marque
+    // libre pour que le drainage puisse la fermer dès la fin de la requête en vol.
+    const drainIndex = this.draining.findIndex((conn) => conn.conn === connection.conn);
+    if (drainIndex >= 0) {
+      this.draining[drainIndex].inUse = false;
     }
   }
 
@@ -390,8 +607,10 @@ class DuckDBPool {
   async close(): Promise<void> {
     const dbLogger = createContextLogger({ component: 'database' });
 
-    // allSettled pour fermer toutes les connexions même si l'une échoue
-    const results = await Promise.allSettled(this.pool.map((conn) => conn.close()));
+    // allSettled pour fermer toutes les connexions même si l'une échoue,
+    // y compris celles encore en cours de drainage après un reload
+    const allConnections = [...this.pool, ...this.draining];
+    const results = await Promise.allSettled(allConnections.map((conn) => conn.close()));
     results.forEach((result, i) => {
       if (result.status === 'rejected') {
         dbLogger.error(`Failed to close pool connection #${i}`, result.reason);
@@ -409,6 +628,7 @@ class DuckDBPool {
 
     // Réinitialisation complète du pool
     this.pool = [];
+    this.draining = [];
     this.instance = null;
     this.instancePromise = null;
   }

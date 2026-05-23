@@ -1,0 +1,37 @@
+name: Cleanup Container Images
+
+on:
+  schedule:
+    - cron: '0 3 * * 0' # Every Sunday at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: 'Simulate without deleting anything'
+        type: boolean
+        default: true
+
+concurrency:
+  group: cleanup-images
+  cancel-in-progress: false
+
+permissions:
+  packages: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old & untagged images
+        uses: dataaxiom/ghcr-cleanup-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          owner: qbolliet
+          package: dashboard-template-api
+          # Keep the 10 most recent tagged versions (by date)…
+          keep-n-tagged: 10
+          # …never delete these tags, whatever their age
+          exclude-tags: latest
+          # Remove dangling/untagged manifests (attestations, old digests)
+          delete-untagged: true
+          # Scheduled runs delete for real; manual runs default to a safe dry-run
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || false }}

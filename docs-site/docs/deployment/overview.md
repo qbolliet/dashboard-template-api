@@ -7,11 +7,11 @@ sidebar_position: 1
 
 This section covers running the API in production. Three deployment modes are supported:
 
-| Mode | When to use |
-|------|-------------|
-| **Local / dev** | Single process via `npm run dev` — see [Getting Started](../getting-started/installation) |
-| **Docker** | Single-host setup, CI integration, simple ops — see [Docker](./docker) |
-| **Kubernetes (Helm)** | Production, scaling, reproducible installs — see [Kubernetes & Helm](./kubernetes-helm) |
+| Mode                  | When to use                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| **Local / dev**       | Single process via `npm run dev` — see [Getting Started](../getting-started/installation) |
+| **Docker**            | Single-host setup, CI integration, simple ops — see [Docker](./docker)                    |
+| **Kubernetes (Helm)** | Production, scaling, reproducible installs — see [Kubernetes & Helm](./kubernetes-helm)   |
 
 ## Architecture
 
@@ -54,15 +54,15 @@ This section covers running the API in production. Three deployment modes are su
 
 ## Components
 
-| Component | Purpose | Notes |
-|-----------|---------|-------|
-| API container | Apollo + Express + DuckDB | Stateless, scales horizontally |
-| Redis | Cache for query results, metadata, dimensions | Provided by Bitnami sub-chart, or external |
-| S3 bucket | Stores `.ducklake` catalogs + parquet data files | Read via DuckDB httpfs |
-| Ingress | TLS termination + routing | nginx-ingress recommended |
-| ConfigMap | Non-secret env (catalog paths, NODE_ENV, REDIS_HOST…) | Generated from `values.config` |
-| Secret | AWS keys, ADMIN_API_KEY | Inline (dev) or external (ESO/SealedSecrets) |
-| Bitnami Redis Secret | Auto-generated Redis password | Persists across upgrades |
+| Component            | Purpose                                               | Notes                                        |
+| -------------------- | ----------------------------------------------------- | -------------------------------------------- |
+| API container        | Apollo + Express + DuckDB                             | Stateless, scales horizontally               |
+| Redis                | Cache for query results, metadata, dimensions         | Provided by Bitnami sub-chart, or external   |
+| S3 bucket            | Stores `.ducklake` catalogs + parquet data files      | Read via DuckDB httpfs                       |
+| Ingress              | TLS termination + routing                             | nginx-ingress recommended                    |
+| ConfigMap            | Non-secret env (catalog paths, NODE_ENV, REDIS_HOST…) | Generated from `values.config`               |
+| Secret               | AWS keys, ADMIN_API_KEY                               | Inline (dev) or external (ESO/SealedSecrets) |
+| Bitnami Redis Secret | Auto-generated Redis password                         | Persists across upgrades                     |
 
 ## Image registry
 
@@ -78,14 +78,14 @@ Pulls are unauthenticated (the package is public).
 
 ## Prerequisites
 
-| Tool | Version | Required for |
-|------|---------|--------------|
-| Docker | 24+ | All deployment modes |
-| Kubernetes | 1.27+ | Helm install |
-| Helm | 3.13+ | Helm install |
-| ingress-nginx | 1.10+ | Public exposure |
-| cert-manager | 1.14+ | Auto-issued TLS (optional) |
-| S3-compatible bucket | — | DuckLake catalog storage |
+| Tool                 | Version | Required for               |
+| -------------------- | ------- | -------------------------- |
+| Docker               | 24+     | All deployment modes       |
+| Kubernetes           | 1.27+   | Helm install               |
+| Helm                 | 3.13+   | Helm install               |
+| ingress-nginx        | 1.10+   | Public exposure            |
+| cert-manager         | 1.14+   | Auto-issued TLS (optional) |
+| S3-compatible bucket | —       | DuckLake catalog storage   |
 
 ## Configuration model
 
@@ -95,6 +95,6 @@ Pulls are unauthenticated (the package is public).
 
 See [Configuration Reference](../configuration/overview) for the complete list of YAML keys.
 
-## Cache invalidation
+## Data refresh
 
-When DuckLake catalogs are refreshed, the API's Redis cache must be invalidated. This is done via authenticated HTTP endpoints — see [Cache invalidation](./cache-invalidation).
+When DuckLake catalogs are refreshed, the API must reload the catalog and invalidate its Redis cache. Both are done via authenticated HTTP endpoints — see [Data refresh](./data-refresh).

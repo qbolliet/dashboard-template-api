@@ -19,13 +19,13 @@ CACHE:
     KEY_PREFIX: ${REDIS_KEY_PREFIX:-'graphql-api:'}
 ```
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `HOST` | `REDIS_HOST` | `localhost` | Redis server hostname |
-| `PORT` | `REDIS_PORT` | `6379` | Redis server port |
-| `PASSWORD` | `REDIS_PASSWORD` | — | Redis AUTH password (leave unset if not required) |
-| `DB` | `REDIS_DB` | `0` | Redis logical database index |
-| `KEY_PREFIX` | `REDIS_KEY_PREFIX` | `graphql-api:` | Namespace prefix for all cache keys |
+| Key          | Env var            | Default        | Description                                       |
+| ------------ | ------------------ | -------------- | ------------------------------------------------- |
+| `HOST`       | `REDIS_HOST`       | `localhost`    | Redis server hostname                             |
+| `PORT`       | `REDIS_PORT`       | `6379`         | Redis server port                                 |
+| `PASSWORD`   | `REDIS_PASSWORD`   | —              | Redis AUTH password (leave unset if not required) |
+| `DB`         | `REDIS_DB`         | `0`            | Redis logical database index                      |
+| `KEY_PREFIX` | `REDIS_KEY_PREFIX` | `graphql-api:` | Namespace prefix for all cache keys               |
 
 ### Redis Cluster
 
@@ -58,14 +58,14 @@ CACHE:
     COUNT_QUERIES: 300
 ```
 
-| Data type | Default TTL |
-|-----------|-------------|
-| Metadata | 600 s (10 min) |
-| Dimensions | 600 s |
-| Facts | 300 s (5 min) |
-| Aggregated facts | 300 s |
-| Select options | 600 s |
-| Count queries | 300 s |
+| Data type        | Default TTL    |
+| ---------------- | -------------- |
+| Metadata         | 600 s (10 min) |
+| Dimensions       | 600 s          |
+| Facts            | 300 s (5 min)  |
+| Aggregated facts | 300 s          |
+| Select options   | 600 s          |
+| Count queries    | 300 s          |
 
 ## Cache invalidation
 
@@ -79,11 +79,12 @@ CACHE:
 ```
 
 When a DuckLake file is updated (e.g. a new dataset is loaded), a `POST` to `/api/cache/invalidate-all` (or `/api/cache/invalidate/:database`):
+
 1. Waits `GRACE_PERIOD` seconds for in-flight queries to complete
 2. Deletes all matching cache keys in batches of `BATCH_SIZE`
 3. Times out if invalidation takes longer than `TIMEOUT` ms
 
-See the [Cache invalidation deployment guide](../deployment/cache-invalidation) for the full update workflow.
+See the [Data refresh deployment guide](../deployment/data-refresh) for the full update workflow.
 
 ## HTTP cache headers
 

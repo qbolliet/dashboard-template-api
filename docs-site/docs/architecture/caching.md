@@ -7,10 +7,10 @@ sidebar_position: 3
 
 The API uses two independent caching layers:
 
-| Layer | Scope | Implementation |
-|-------|-------|---------------|
-| DataLoader cache | Single request | In-memory, per-request |
-| Redis cache | Cross-request | Redis with per-type TTL |
+| Layer            | Scope          | Implementation          |
+| ---------------- | -------------- | ----------------------- |
+| DataLoader cache | Single request | In-memory, per-request  |
+| Redis cache      | Cross-request  | Redis with per-type TTL |
 
 ## DataLoader cache (request-scoped)
 
@@ -23,12 +23,12 @@ The DataLoader cache lives only for the duration of the request. It prevents N+1
 
 Loader cache timeouts (in-memory, not Redis) are configured per data type in `config/api.yaml`:
 
-| Loader | Default in-memory TTL |
-|--------|-----------------------|
-| Facts | 300 s |
-| Dimensions | 600 s |
-| Metadata | 600 s |
-| Select options | 600 s |
+| Loader         | Default in-memory TTL |
+| -------------- | --------------------- |
+| Facts          | 300 s                 |
+| Dimensions     | 600 s                 |
+| Metadata       | 600 s                 |
+| Select options | 600 s                 |
 
 ## Redis cache (cross-request)
 
@@ -36,13 +36,13 @@ Resolver results are cached in Redis with keys derived from the query parameters
 
 TTL values per data type (`config/cache.yaml`):
 
-| Type | Default TTL |
-|------|-------------|
-| Facts | 300 s |
-| Aggregated facts | 300 s |
-| Dimensions | 600 s |
-| Metadata | 600 s |
-| Select options | 600 s |
+| Type             | Default TTL |
+| ---------------- | ----------- |
+| Facts            | 300 s       |
+| Aggregated facts | 300 s       |
+| Dimensions       | 600 s       |
+| Metadata         | 600 s       |
+| Select options   | 600 s       |
 
 All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) to allow coexistence with other apps in the same Redis instance.
 
@@ -50,7 +50,7 @@ All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) 
 
 When a DuckLake file is updated, the cache must be invalidated to prevent stale data. The API exposes three admin-protected HTTP endpoints (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidate/:database`, `GET /api/cache/stats`) that perform a non-blocking Redis `SCAN` + `DEL` over the per-database key namespaces.
 
-See the [Cache invalidation deployment guide](../deployment/cache-invalidation) for endpoint reference, in-cluster `CronJob` patterns, the Python updater example, monitoring and troubleshooting.
+See the [Data refresh deployment guide](../deployment/data-refresh) for endpoint reference, in-cluster `CronJob` patterns, the Python updater example, monitoring and troubleshooting.
 
 ## HTTP cache headers
 

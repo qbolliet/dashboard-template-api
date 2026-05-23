@@ -5,6 +5,7 @@ import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
 import { InputSanitizer } from './input-sanitizer.js';
 import { PatternValidator } from './pattern-validator.js';
 import { createDepthLimitRule, createSimpleDepthLimitRule } from './depth-limit.js';
+import { requireAdminKey } from './admin-auth.js';
 
 export {
   SecurityManager,
@@ -16,4 +17,5 @@ export {
   PatternValidator,
   createDepthLimitRule,
   createSimpleDepthLimitRule,
+  requireAdminKey,
 };

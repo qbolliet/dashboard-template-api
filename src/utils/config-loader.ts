@@ -225,12 +225,29 @@ interface CacheConfig {
   HTTP_CACHE: CacheHttpConfig;
 }
 
+/** Source type of a DuckLake catalog: a static `.ducklake` file or a Postgres catalog. */
+export type CatalogType = 'file' | 'postgres';
+
+/** Postgres connection settings for a DuckLake catalog backed by Postgres. */
+export interface PostgresCatalogConfig {
+  HOST: string;
+  PORT: number;
+  DATABASE: string;
+  USER: string;
+  PASSWORD: string;
+}
+
 /** Configuration for an individual DuckLake catalog. */
 export interface CatalogConfig {
-  PATH: string;
+  /** Catalog source. Defaults to 'file' when omitted (backward compatible). */
+  TYPE?: CatalogType;
+  /** Path to the `.ducklake` file. Required only when TYPE is 'file'. */
+  PATH?: string;
   DATA_PATH: string;
   READ_ONLY: boolean;
   SCHEMA?: string;
+  /** Postgres connection settings. Required only when TYPE is 'postgres'. */
+  POSTGRES?: PostgresCatalogConfig;
 }
 
 /** S3 configuration for remote Parquet file storage. */

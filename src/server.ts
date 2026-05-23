@@ -23,6 +23,7 @@ import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
+import { createCatalogRoutes } from './db/catalog-routes.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -196,6 +197,9 @@ async function startServer(): Promise<void> {
 
   // Configuration des routes d'invalidation de cache
   createCacheInvalidationRoutes(app);
+
+  // Configuration des routes d'administration du catalogue (rechargement)
+  createCatalogRoutes(app);
 
   // Compteurs de métriques en mémoire
   const metrics: ServerMetrics = {
