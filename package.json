@@ -59,7 +59,7 @@
     "graphql": "^16.14.0",
     "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.1",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
     "xss": "^1.0.15",
