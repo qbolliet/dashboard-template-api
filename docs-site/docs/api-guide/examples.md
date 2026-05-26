@@ -13,6 +13,7 @@ All examples assume the server is running at `http://localhost:4000/graphql`.
 query {
   getDatabases {
     id
+    schemas # list of DuckLake schemas hosted by the catalog
     dimensionNames
     fields {
       name
@@ -24,11 +25,30 @@ query {
 }
 ```
 
+## Target a specific schema within a catalog
+
+A catalog can host several schemas. Pass `schema:` to query a non-default one:
+
+```graphql
+query {
+  getDatabaseSchema(catalog: "default", schema: "staging") {
+    name
+    label
+    is_categorical
+    sql_type
+  }
+}
+```
+
+The same `schema` argument is available on `getFactTable`,
+`getAggregatedFacts`, `getMetaData`, `getDimensionTable`, `getSelectOptions`,
+etc. An unknown schema returns a `GraphQLError` (allow-list validation).
+
 ## Browse a dimension
 
 ```graphql
 query {
-  getDimensionTable(name: "country", database: "macroeconomics") {
+  getDimensionTable(name: "country", catalog: "macroeconomics") {
     value
     label
   }
@@ -48,7 +68,7 @@ query {
     sort: [{ field: "year", order: DESC }]
     limit: 50
     offset: 0
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     total
     hasNextPage
@@ -72,12 +92,10 @@ query {
 query {
   getFactTableWithMetadata(
     fields: ["year", "country", "gdp_growth"]
-    structuredFilters: [
-      { key: "year", operator: ">=", value: "2015" }
-    ]
+    structuredFilters: [{ key: "year", operator: ">=", value: "2015" }]
     limit: 200
     format: OBJECTS
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     columns
     data
@@ -99,12 +117,10 @@ query {
   getAggregatedFacts(
     groupBy: "country"
     aggregation: AVG
-    structuredFilters: [
-      { key: "year", operator: ">=", value: "2010" }
-    ]
+    structuredFilters: [{ key: "year", operator: ">=", value: "2010" }]
     sort: [{ field: "aggregatedValue", order: DESC }]
     limit: 20
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     key
     aggregatedValue
@@ -121,7 +137,7 @@ query {
     groupBy: "country"
     aggregation: SUM
     limit: 50
-    database: "public_finance"
+    catalog: "public_finance"
   ) {
     data {
       key
@@ -147,7 +163,7 @@ query {
 
 ```graphql
 query {
-  getMetaData(name: "gdp_growth", database: "macroeconomics") {
+  getMetaData(name: "gdp_growth", catalog: "macroeconomics") {
     name
     label
     sql_type
@@ -161,12 +177,7 @@ query {
 
 ```graphql
 query {
-  getSelectOptions(
-    fieldName: "country"
-    searchTerm: "fr"
-    limit: 10
-    database: "macroeconomics"
-  ) {
+  getSelectOptions(fieldName: "country", searchTerm: "fr", limit: 10, catalog: "macroeconomics") {
     value
     label
   }
@@ -181,10 +192,16 @@ query {
     groupField: "region"
     optionsField: "country"
     limit: 100
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
-    group { value label }
-    options { value label }
+    group {
+      value
+      label
+    }
+    options {
+      value
+      label
+    }
   }
 }
 ```
@@ -194,8 +211,8 @@ query {
 ```graphql
 query {
   compareAggregatedFacts(
-    databaseA: "macroeconomics"
-    databaseB: "public_finance"
+    catalogA: "macroeconomics"
+    catalogB: "public_finance"
     groupBy: "country"
     aggregation: SUM
     limit: 30
@@ -217,7 +234,7 @@ query {
 
 ```graphql
 query {
-  getSharedDimensions(databases: ["macroeconomics", "public_finance"])
+  getSharedDimensions(catalogs: ["macroeconomics", "public_finance"])
 }
 ```
 
@@ -228,6 +245,6 @@ For clients that cannot modify each query, pass the catalog ID as a header:
 ```bash
 curl -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -H "x-database-id: macroeconomics" \
+  -H "x-catalog-id: macroeconomics" \
   -d '{"query": "{ getDimensionTable(name: \"country\") { value label } }"}'
 ```

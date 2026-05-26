@@ -45,27 +45,36 @@ src/loaders/
 ```
 
 `base-loader.ts` handles:
+
 - Constructing the cache key from query parameters
 - Checking/populating the Redis cache
 - Error normalisation so a single loader failure does not corrupt the whole batch
 
+Cache keys are namespaced by `(catalog, schema)` so two schemas of the same catalog never share a cache entry — important because categorical IDs are assigned per-schema and the same integer ID can label different modalities across schemas. Table names are likewise qualified as `"catalog".schema.table_name` at every SQL boundary (`base-loader.ts:qualifyTable`).
+
 ### Request context
 
 A new set of loader instances is created per GraphQL request in the Apollo context factory (`src/server.ts`). This ensures:
+
 - DataLoader's in-memory cache is reset between requests (no data leakage)
 - Each request has isolated concurrency control
 
-## Multi-catalog routing
+## Multi-catalog / multi-schema routing
 
-The `DatabaseManager` (`src/db/database-manager.ts`) is a singleton that holds all catalog pool instances. Resolvers call `manager.query(sql, params, catalogId)` — the manager selects the correct pool and executes the query.
+The `DatabaseManager` (`src/db/database-manager.ts`) is a singleton that owns the shared DuckDB pool with every DuckLake catalog attached, plus the per-catalog allow-list of schemas. Resolvers route a query to the right `(catalog, schema, table)` triplet.
 
-Catalog selection follows this priority:
+Selection priority for the **catalog** and the **schema** (independent axes):
 
-1. `database` GraphQL argument (if provided by the client)
-2. `x-database-id` HTTP header (if set on the request)
-3. `DEFAULT_DATABASE` config value (`default`)
+1. GraphQL argument (`catalog: "…"`, `schema: "…"`) on the field
+2. HTTP header (`X-Catalog-ID`, `X-Schema-ID`) on the request
+3. `DEFAULT_CATALOG` config value, then the first element of `SCHEMAS` for that catalog (defaults to `main`)
 
-The manager validates the requested catalog against `ALLOWED_DATABASES` before dispatching and throws a structured error if an unlisted catalog is requested.
+Validation:
+
+- `catalog` is checked against `ALLOWED_CATALOGS`.
+- `schema` is checked against the per-catalog allow-list (`databaseManager.isValidSchema(catalog, schema)`), which is reconciled at startup between the configured `SCHEMAS` and what `information_schema.schemata` actually returns from the live engine.
+
+An invalid catalog or schema produces a structured `GraphQLError` listing the available values.
 
 ## Dimension enrichment
 
