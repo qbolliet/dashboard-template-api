@@ -35,9 +35,9 @@ export interface PoolStats {
 /** Full statistics snapshot for the database manager. */
 export interface DatabaseStats {
   sharedPool: PoolStats | null;
-  defaultDatabase: string;
-  allowedDatabases: string[];
-  allowCrossDatabase: boolean;
+  defaultCatalog: string;
+  allowedCatalogs: string[];
+  allowCrossCatalog: boolean;
 }
 
 // ─── Classe DatabaseManager ───────────────────────────────────────────────────
@@ -46,20 +46,22 @@ export interface DatabaseStats {
  * DatabaseManager - Manages a shared DuckDB pool attached to multiple DuckLake catalogs.
  *
  * Each DuckLake catalog (one per ML pipeline / data source) is attached to a single
- * in-memory DuckDB instance under a distinct alias. GraphQL resolvers route queries
- * to the right catalog by prefixing table names:
+ * in-memory DuckDB instance under a distinct alias. A catalog may itself contain one
+ * or more schemas. GraphQL resolvers route queries to the right catalog/schema by
+ * prefixing table names:
  *   SELECT * FROM project_a.main.fact_table
  *
  * Configuration expected from config-loader.js:
- *   DATABASE_ROUTING:
- *     DEFAULT_DATABASE: 'project_a'
- *     ALLOWED_DATABASES: ['project_a', 'project_b']
- *     ALLOW_CROSS_DATABASE_QUERIES: true
+ *   CATALOG_ROUTING:
+ *     DEFAULT_CATALOG: 'project_a'
+ *     ALLOWED_CATALOGS: ['project_a', 'project_b']
+ *     ALLOW_CROSS_CATALOG_QUERIES: true
  *   CATALOGS:
  *     project_a:
  *       PATH: 'outputs/project_a.ducklake'
  *       DATA_PATH: 'outputs/project_a_data/'
  *       READ_ONLY: true
+ *       SCHEMA: 'main'   # schéma par défaut du catalogue
  *   DATABASE:
  *     POOL:
  *       MAX_CONNECTIONS: 5
@@ -67,27 +69,28 @@ export interface DatabaseStats {
  *       POOL_RETRY_DELAY: 50
  */
 class DatabaseManager {
-  private readonly defaultDatabase: string;
-  private readonly allowedDatabases: string[];
-  private readonly allowCrossDatabase: boolean;
+  private readonly defaultCatalog: string;
+  private readonly allowedCatalogs: string[];
+  private readonly allowCrossCatalog: boolean;
   private sharedPool: DuckDBPool | null;
-  private readonly schemas: Record<string, string>;
+  // Liste complète des schémas connus par catalogue (au moins un)
+  private readonly schemas: Record<string, string[]>;
 
   constructor() {
     // Configuration du routage des catalogues depuis le fichier de config
-    this.defaultDatabase = config.DATABASE_ROUTING.DEFAULT_DATABASE;
+    this.defaultCatalog = config.CATALOG_ROUTING.DEFAULT_CATALOG;
 
-    // ALLOWED_DATABASES peut être une string JSON ou un tableau selon le config-loader
-    const rawAllowed = config.DATABASE_ROUTING.ALLOWED_DATABASES;
-    this.allowedDatabases =
+    // ALLOWED_CATALOGS peut être une string JSON ou un tableau selon le config-loader
+    const rawAllowed = config.CATALOG_ROUTING.ALLOWED_CATALOGS;
+    this.allowedCatalogs =
       typeof rawAllowed === 'string' ? (JSON.parse(rawAllowed) as string[]) : rawAllowed;
 
-    this.allowCrossDatabase = config.DATABASE_ROUTING.ALLOW_CROSS_DATABASE_QUERIES;
+    this.allowCrossCatalog = config.CATALOG_ROUTING.ALLOW_CROSS_CATALOG_QUERIES;
 
     // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
     this.sharedPool = null;
 
-    // Map catalogId -> schéma DuckLake (configurable via SCHEMA dans database.yaml)
+    // Map catalogId -> schéma DuckLake par défaut (configurable via SCHEMA dans database.yaml)
     this.schemas = {};
 
     // Initialisation automatique
@@ -100,9 +103,9 @@ class DatabaseManager {
    */
   initializeDatabases(): void {
     dbLogger.database('Initializing database manager', {
-      defaultDatabase: this.defaultDatabase,
-      allowedDatabases: this.allowedDatabases,
-      allowCrossDatabase: this.allowCrossDatabase,
+      defaultCatalog: this.defaultCatalog,
+      allowedCatalogs: this.allowedCatalogs,
+      allowCrossCatalog: this.allowCrossCatalog,
     });
 
     // Construction de la liste des catalogues DuckLake à attacher
@@ -111,8 +114,9 @@ class DatabaseManager {
     for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
       const type = catalogConfig.TYPE ?? 'file';
 
-      // Stockage du schéma DuckLake configuré pour ce catalogue
-      this.schemas[catalogId] = catalogConfig.SCHEMA ?? 'main';
+      // Liste des schémas du catalogue : SCHEMAS prioritaire, sinon [SCHEMA], sinon ['main']
+      // SCHEMAS peut arriver sous forme de string JSON depuis une variable d'env
+      this.schemas[catalogId] = this.resolveSchemas(catalogConfig);
 
       // Résolution du chemin de données (local résolu en absolu, URI distante telle quelle)
       const dataPath = this.resolveDataPath(catalogConfig.DATA_PATH);
@@ -181,10 +185,10 @@ class DatabaseManager {
     }
 
     // Validation que le catalogue par défaut est bien dans la liste
-    const defaultInCatalogs = catalogs.some((c) => c.alias === this.defaultDatabase);
+    const defaultInCatalogs = catalogs.some((c) => c.alias === this.defaultCatalog);
     if (!defaultInCatalogs) {
       throw new Error(
-        `Default database '${this.defaultDatabase}' not found in CATALOGS config. ` +
+        `Default catalog '${this.defaultCatalog}' not found in CATALOGS config. ` +
           `Available: ${catalogs.map((c) => c.alias).join(', ')}`,
       );
     }
@@ -233,20 +237,44 @@ class DatabaseManager {
   }
 
   /**
+   * Resolve the schema list for a catalog, accepting either a SCHEMAS list
+   * (array or JSON-string from env), a single SCHEMA, or neither (→ ['main']).
+   *
+   * @param catalogConfig - Per-catalog configuration block.
+   * @returns Non-empty list of schemas, with SCHEMA (or 'main') guaranteed present.
+   */
+  private resolveSchemas(catalogConfig: {
+    SCHEMA?: string;
+    SCHEMAS?: string[] | string;
+  }): string[] {
+    // Liste explicite SCHEMAS : prioritaire. Peut être un tableau YAML ou une chaîne JSON (env).
+    if (catalogConfig.SCHEMAS !== undefined) {
+      const raw = catalogConfig.SCHEMAS;
+      const list = typeof raw === 'string' ? (JSON.parse(raw) as string[]) : raw;
+      if (!Array.isArray(list) || list.length === 0) {
+        throw new Error('CATALOGS.<id>.SCHEMAS must be a non-empty list of schema names.');
+      }
+      return [...new Set(list)];
+    }
+    // Pas de SCHEMAS : on retombe sur le mono-schéma legacy (SCHEMA, ou 'main' par défaut)
+    return [catalogConfig.SCHEMA ?? 'main'];
+  }
+
+  /**
    * Get the shared connection pool.
    * Validates that the requested catalogId is allowed before returning the pool.
    *
    * @param catalogId - Catalog to validate access for (null = default).
    * @returns The shared connection pool.
-   * @throws {Error} If catalogId is not in ALLOWED_DATABASES.
+   * @throws {Error} If catalogId is not in ALLOWED_CATALOGS.
    */
   getPool(catalogId: string | null = null): DuckDBPool {
-    const targetCatalog = catalogId ?? this.defaultDatabase;
+    const targetCatalog = catalogId ?? this.defaultCatalog;
 
-    if (!this.isValidDatabase(targetCatalog)) {
+    if (!this.isValidCatalog(targetCatalog)) {
       throw new Error(
-        `Database '${targetCatalog}' is not allowed or not configured. ` +
-          `Allowed: ${this.allowedDatabases.join(', ')}`,
+        `Catalog '${targetCatalog}' is not allowed or not configured. ` +
+          `Allowed: ${this.allowedCatalogs.join(', ')}`,
       );
     }
 
@@ -263,8 +291,8 @@ class DatabaseManager {
    * @param catalogId - Catalog identifier to validate.
    * @returns True if the catalog is allowed.
    */
-  isValidDatabase(catalogId: string): boolean {
-    return this.allowedDatabases.includes(catalogId);
+  isValidCatalog(catalogId: string): boolean {
+    return this.allowedCatalogs.includes(catalogId);
   }
 
   /**
@@ -272,8 +300,8 @@ class DatabaseManager {
    *
    * @returns List of allowed catalog identifiers.
    */
-  getAvailableDatabases(): string[] {
-    return [...this.allowedDatabases];
+  getAvailableCatalogs(): string[] {
+    return [...this.allowedCatalogs];
   }
 
   /**
@@ -281,19 +309,53 @@ class DatabaseManager {
    *
    * @returns Default catalog identifier.
    */
-  getDefaultDatabase(): string {
-    return this.defaultDatabase;
+  getDefaultCatalog(): string {
+    return this.defaultCatalog;
   }
 
   /**
-   * Get the DuckLake schema name for a catalog.
-   * Defaults to 'main' if not configured.
+   * Get the default DuckLake schema name for a catalog.
+   * Used when a request does not specify an explicit schema.
+   * Falls back to the first schema of the default catalog, or 'main' if absent.
    *
    * @param catalogId - Catalog identifier.
    * @returns Schema name (e.g. 'main').
    */
   getSchema(catalogId: string): string {
-    return this.schemas[catalogId] ?? this.schemas[this.defaultDatabase] ?? 'main';
+    return this.getDefaultSchema(catalogId);
+  }
+
+  /**
+   * Get the default DuckLake schema name for a catalog (first in the list).
+   *
+   * @param catalogId - Catalog identifier.
+   * @returns First schema configured for the catalog, or 'main' if none.
+   */
+  getDefaultSchema(catalogId: string): string {
+    const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog];
+    return list?.[0] ?? 'main';
+  }
+
+  /**
+   * Get the full list of schemas known for a catalog.
+   *
+   * @param catalogId - Catalog identifier.
+   * @returns Copy of the configured schema list (at least one element).
+   */
+  getSchemas(catalogId: string): string[] {
+    const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog] ?? ['main'];
+    return [...list];
+  }
+
+  /**
+   * Check whether a schema is configured for a given catalog.
+   *
+   * @param catalogId - Catalog identifier.
+   * @param schema - Schema name to validate.
+   * @returns True when the schema belongs to the catalog's known list.
+   */
+  isValidSchema(catalogId: string, schema: string): boolean {
+    return (this.schemas[catalogId] ?? []).includes(schema);
   }
 
   /**
@@ -301,35 +363,35 @@ class DatabaseManager {
    *
    * @returns True if cross-catalog queries are allowed.
    */
-  isCrossDatabaseAllowed(): boolean {
-    return this.allowCrossDatabase;
+  isCrossCatalogAllowed(): boolean {
+    return this.allowCrossCatalog;
   }
 
   /**
    * Validate and resolve the catalog ID for a GraphQL request.
    * Priority: explicit parameter > HTTP header context > default catalog.
    *
-   * @param requestedDatabase - Catalog requested by the client.
-   * @param contextDatabase - Catalog from request context (HTTP header).
+   * @param requestedCatalog - Catalog requested by the client.
+   * @param contextCatalog - Catalog from request context (HTTP header).
    * @returns Validated catalog ID to use.
    * @throws {Error} If the resolved catalog is not available.
    */
-  validateDatabaseRouting(
-    requestedDatabase: string | null = null,
-    contextDatabase: string | null = null,
+  validateCatalogRouting(
+    requestedCatalog: string | null = null,
+    contextCatalog: string | null = null,
   ): string {
     // Priorité : paramètre GraphQL > en-tête HTTP > catalogue par défaut
     // Utilisation de || pour traiter les chaînes vides comme absentes
-    const targetDatabase = requestedDatabase || contextDatabase || this.defaultDatabase;
+    const targetCatalog = requestedCatalog || contextCatalog || this.defaultCatalog;
 
-    if (!this.isValidDatabase(targetDatabase)) {
+    if (!this.isValidCatalog(targetCatalog)) {
       throw new Error(
-        `Database '${targetDatabase}' is not available. ` +
-          `Available databases: ${this.getAvailableDatabases().join(', ')}`,
+        `Catalog '${targetCatalog}' is not available. ` +
+          `Available catalogs: ${this.getAvailableCatalogs().join(', ')}`,
       );
     }
 
-    return targetDatabase;
+    return targetCatalog;
   }
 
   /**
@@ -357,6 +419,37 @@ class DatabaseManager {
     dbLogger.database('Catalogs reloaded successfully', {
       attachedCatalogs: this.sharedPool.catalogs.map((c) => c.alias),
     });
+  }
+
+  /**
+   * Reload a single attached catalog against its latest state on disk / S3.
+   *
+   * Performs a scoped DETACH + ATTACH of just that catalog on the live shared
+   * instance (no full rebuild), so an external process can refresh one catalog
+   * without touching the others. Serialized per catalog by the pool.
+   *
+   * @param catalogId - Alias of the catalog to reattach.
+   * @throws {Error} If the catalog is unknown or the pool is not initialized.
+   */
+  async reloadCatalog(catalogId: string): Promise<void> {
+    if (!this.sharedPool) {
+      throw new Error('Shared pool is not initialized.');
+    }
+
+    // Validation de l'identifiant de catalogue contre l'allowlist
+    if (!this.isValidCatalog(catalogId)) {
+      throw new Error(
+        `Catalog '${catalogId}' is not available. ` +
+          `Available catalogs: ${this.getAvailableCatalogs().join(', ')}`,
+      );
+    }
+
+    dbLogger.database('Reloading single catalog on shared pool', { catalog: catalogId });
+
+    // Ré-attachement ciblé du seul catalogue
+    await this.sharedPool.reloadOne(catalogId);
+
+    dbLogger.database('Catalog reloaded successfully', { catalog: catalogId });
   }
 
   /**
@@ -396,9 +489,9 @@ class DatabaseManager {
 
     return {
       sharedPool: poolStats,
-      defaultDatabase: this.defaultDatabase,
-      allowedDatabases: this.allowedDatabases,
-      allowCrossDatabase: this.allowCrossDatabase,
+      defaultCatalog: this.defaultCatalog,
+      allowedCatalogs: this.allowedCatalogs,
+      allowCrossCatalog: this.allowCrossCatalog,
     };
   }
 }
