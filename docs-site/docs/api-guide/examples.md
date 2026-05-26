@@ -11,15 +11,58 @@ All examples assume the server is running at `http://localhost:4000/graphql`.
 
 ```graphql
 query {
-  getDatabases {
+  getCatalogs {
     id
-    schemas # list of DuckLake schemas hosted by the catalog
-    dimensionNames
-    fields {
+    defaultSchema
+    schemas {
+      name # list of DuckLake schemas hosted by the catalog (1st = default)
+    }
+  }
+}
+```
+
+`getCatalogs` returns each catalog with its identifier, default schema, and
+the list of hosted schemas. Per-schema details (`fields`, `dimensionNames`)
+are exposed as sub-fields and only loaded when the client requests them —
+see the cascade example below — or via `getCatalogSchema` / `getFields`.
+
+## Inspect a schema's fields
+
+```graphql
+query {
+  getCatalogSchema(catalog: "macroeconomics") {
+    name
+    label
+    sql_type
+    is_categorical
+  }
+}
+```
+
+## Cascade introspection: catalogs → schemas → fields
+
+A single round-trip can fetch every catalog with the metadata of every one
+of its schemas. The `fields` and `dimensionNames` sub-fields are resolved
+lazily through GraphQL's selection set, so requesting `schemas { name }` is
+just as cheap as the previous example — only adding `fields` or
+`dimensionNames` triggers the per-schema loads (each load is batched and
+DataLoader-cached, so a multi-schema catalog hits the database once per
+schema, in parallel).
+
+```graphql
+query {
+  getCatalogs {
+    id
+    defaultSchema
+    schemas {
       name
-      label
-      sql_type
-      is_categorical
+      dimensionNames
+      fields {
+        name
+        label
+        sql_type
+        is_categorical
+      }
     }
   }
 }
@@ -31,7 +74,7 @@ A catalog can host several schemas. Pass `schema:` to query a non-default one:
 
 ```graphql
 query {
-  getDatabaseSchema(catalog: "default", schema: "staging") {
+  getCatalogSchema(catalog: "default", schema: "staging") {
     name
     label
     is_categorical
@@ -40,9 +83,92 @@ query {
 }
 ```
 
-The same `schema` argument is available on `getFactTable`,
-`getAggregatedFacts`, `getMetaData`, `getDimensionTable`, `getSelectOptions`,
-etc. An unknown schema returns a `GraphQLError` (allow-list validation).
+The same `schema` argument is available on every data query
+(`getFactTable`, `getAggregatedFacts`, `getMetaData`, `getDimensionTable`,
+`getSelectOptions`, `getGroupedSelectOptions`, `getFields`). An unknown
+schema returns a `GraphQLError` (allow-list validation).
+
+## Targeting a specific schema across data queries
+
+The examples below all hit the `staging` schema of the `macroeconomics`
+catalog. Omit `schema:` to fall back to the catalog's default schema.
+
+### Field metadata
+
+```graphql
+query {
+  getMetaData(name: "gdp_growth", catalog: "macroeconomics", schema: "staging") {
+    name
+    label
+    sql_type
+    is_categorical
+  }
+}
+```
+
+### Dimension table
+
+```graphql
+query {
+  getDimensionTable(name: "country", catalog: "macroeconomics", schema: "staging") {
+    value
+    label
+  }
+}
+```
+
+### Paginated fact table
+
+```graphql
+query {
+  getFactTable(
+    fields: ["year", "country", "gdp_growth"]
+    limit: 50
+    offset: 0
+    catalog: "macroeconomics"
+    schema: "staging"
+  ) {
+    total
+    data {
+      value
+    }
+  }
+}
+```
+
+### Aggregated facts
+
+```graphql
+query {
+  getAggregatedFacts(
+    groupBy: "country"
+    aggregation: AVG
+    limit: 20
+    catalog: "macroeconomics"
+    schema: "staging"
+  ) {
+    key
+    aggregatedValue
+  }
+}
+```
+
+### Select options for a dropdown
+
+```graphql
+query {
+  getSelectOptions(
+    fieldName: "country"
+    searchTerm: "fr"
+    limit: 10
+    catalog: "macroeconomics"
+    schema: "staging"
+  ) {
+    value
+    label
+  }
+}
+```
 
 ## Browse a dimension
 
@@ -232,9 +358,14 @@ query {
 
 ## Shared dimensions across catalogs
 
+`getSharedDimensions` takes a list of `(catalog, schema)` targets. Each
+target's `schema` is optional and defaults to the catalog's default schema.
+
 ```graphql
 query {
-  getSharedDimensions(catalogs: ["macroeconomics", "public_finance"])
+  getSharedDimensions(
+    targets: [{ catalog: "macroeconomics" }, { catalog: "public_finance", schema: "staging" }]
+  )
 }
 ```
 

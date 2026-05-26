@@ -869,36 +869,68 @@ query TestEmptyDatabase {
 #    Vide:     { "X-Catalog-ID": "" }         -> utilise default
 
 # ============================================
-# 16. TESTS CATALOGUE (getDatabases, getDatabaseSchema, getSharedDimensions)
+# 16. TESTS CATALOGUE (getCatalogs, getCatalogSchema, getSharedDimensions)
 # ============================================
 
-# Test 16.1: Lister tous les catalogues disponibles avec leurs champs et dimensions
-# Utile pour alimenter dynamiquement un sélecteur de catalogue dans l'UI
-query TestGetDatabases {
-  getDatabases {
+# Test 16.1: Lister tous les catalogues disponibles avec leurs schémas
+# Utile pour alimenter dynamiquement un sélecteur de catalogue/schéma dans l'UI
+query TestGetCatalogs {
+  getCatalogs {
     id
-    dimensionNames
-    fields {
+    defaultSchema
+    schemas {
       name
-      label
-      is_categorical
-      sql_type
     }
   }
 }
 
-# Test 16.1b: Version légère (identifiant + dimensions seulement)
-query TestGetDatabasesLight {
-  getDatabases {
+# Test 16.1b: Version minimaliste (identifiants seulement)
+query TestGetCatalogsLight {
+  getCatalogs {
     id
-    dimensionNames
+  }
+}
+
+# Test 16.1c: Listage + contenu du schéma par défaut en une seule requête
+# (enchaînement typique côté UI sans utiliser la cascade)
+query TestGetCatalogsThenSchema {
+  catalogs: getCatalogs {
+    id
+    defaultSchema
+    schemas {
+      name
+    }
+  }
+  macroDefaultSchema: getCatalogSchema(catalog: "macroeconomics") {
+    name
+    label
+    is_categorical
+  }
+}
+
+# Test 16.1d: Cascade — catalogues → schémas → champs en UNE seule requête
+# Les sous-champs fields/dimensionNames sont chargés à la demande via la
+# selection set GraphQL ; un client qui veut juste les noms ne paie rien.
+query TestGetCatalogsCascade {
+  getCatalogs {
+    id
+    defaultSchema
+    schemas {
+      name
+      dimensionNames
+      fields {
+        name
+        label
+        sql_type
+        is_categorical
+      }
+    }
   }
 }
 
 # Test 16.2: Schéma complet d'un catalogue spécifique
-# Équivalent de getDatabases mais pour un seul catalogue
-query TestGetDatabaseSchema {
-  getDatabaseSchema(catalog: "macroeconomics") {
+query TestGetCatalogSchema {
+  getCatalogSchema(catalog: "macroeconomics") {
     name
     label
     python_type
@@ -908,8 +940,8 @@ query TestGetDatabaseSchema {
 }
 
 # Test 16.2b: Schéma du catalogue par défaut (paramètre optionnel omis)
-query TestGetDatabaseSchemaDefault {
-  getDatabaseSchema {
+query TestGetCatalogSchemaDefault {
+  getCatalogSchema {
     name
     label
     is_categorical
@@ -917,42 +949,50 @@ query TestGetDatabaseSchemaDefault {
 }
 
 # Test 16.2c: Schémas de plusieurs catalogues en parallèle
-query TestGetDatabaseSchemaMultiple {
-  defaultSchema: getDatabaseSchema(catalog: "default") {
+query TestGetCatalogSchemaMultiple {
+  defaultSchema: getCatalogSchema(catalog: "default") {
     name
     label
     is_categorical
   }
-  macroSchema: getDatabaseSchema(catalog: "macroeconomics") {
+  macroSchema: getCatalogSchema(catalog: "macroeconomics") {
     name
     label
     is_categorical
   }
-  financeSchema: getDatabaseSchema(catalog: "public_finance") {
+  financeSchema: getCatalogSchema(catalog: "public_finance") {
     name
     label
     is_categorical
   }
 }
 
-# Test 16.3: Dimensions communes à deux catalogues
+# Test 16.3: Dimensions communes à deux catalogues (schémas par défaut)
 # Résultat attendu: ["indicator", "country"]
 query TestGetSharedDimensions {
-  getSharedDimensions(catalogs: ["default", "macroeconomics"])
+  getSharedDimensions(targets: [
+    { catalog: "default" }
+    { catalog: "macroeconomics" }
+  ])
 }
 
 # Test 16.3b: Dimensions communes aux trois catalogues
 # Résultat attendu: ["indicator", "country"]
 query TestGetSharedDimensionsAll {
-  getSharedDimensions(catalogs: ["default", "macroeconomics", "public_finance"])
+  getSharedDimensions(targets: [
+    { catalog: "default" }
+    { catalog: "macroeconomics" }
+    { catalog: "public_finance" }
+  ])
 }
 
 # Test 16.3c: Dimensions communes puis récupération des options disponibles
 # Utile pour construire un filtre partagé cross-catalogue dans l'UI
 query TestSharedDimensionsWithOptions {
-  sharedDimensions: getSharedDimensions(
-    catalogs: ["default", "macroeconomics"]
-  )
+  sharedDimensions: getSharedDimensions(targets: [
+    { catalog: "default" }
+    { catalog: "macroeconomics" }
+  ])
   countryOptions: getDimensionTable(name: "country", catalog: "default") {
     value
     label
@@ -961,6 +1001,15 @@ query TestSharedDimensionsWithOptions {
     value
     label
   }
+}
+
+# Test 16.3d: Mix de schémas explicites et implicites (schéma par défaut)
+# Démontre que `schema` est optionnel cible par cible
+query TestSharedDimensionsMixedSchemas {
+  getSharedDimensions(targets: [
+    { catalog: "default", schema: "main" }
+    { catalog: "macroeconomics" }
+  ])
 }
 
 # ============================================
@@ -1255,7 +1304,7 @@ query TestFactTableFormatArraysMacro {
 # directement les menus <select> du frontend.
 #
 # Réutilise le loader catalogMetadata (cache Redis partagé avec
-# getDatabaseSchema) puis filtre en mémoire.
+# getCatalogSchema) puis filtre en mémoire.
 #
 # Tous les filtres sont optionnels et combinables (AND):
 #   - database       : alias du catalogue (par défaut: catalogue courant)
@@ -1360,7 +1409,7 @@ query TestGetFieldsInvalidDatabase {
 # schéma au sein du catalogue choisi par `catalog`. Omis => schéma par défaut
 # du catalogue (config SCHEMA, "main"). Les deux arguments sont disponibles sur
 # getMetaData, getDimensionTable, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
-# getSelectOptions, getGroupedSelectOptions, getDatabaseSchema et getFields.
+# getSelectOptions, getGroupedSelectOptions, getCatalogSchema et getFields.
 
 # Test 20.1: Métadonnées d'un schéma nommé au sein d'un catalogue
 query TestMetadataNamedSchema {
@@ -1382,8 +1431,8 @@ query TestFactTableNamedSchema {
 }
 
 # Test 20.3: Schéma (liste des champs) d'un schéma précis d'un catalogue
-query TestGetDatabaseSchemaNamedSchema {
-  getDatabaseSchema(catalog: "default", schema: "main") {
+query TestGetCatalogSchemaNamedSchema {
+  getCatalogSchema(catalog: "default", schema: "main") {
     name
     label
     is_categorical
@@ -1483,16 +1532,18 @@ query TestCrossDatabaseSelectOptionsWithSchemas {
 
 # Test 20bis.1: Introspection — liste des schémas exposés par chaque catalogue
 query TestIntrospectionSchemas {
-  getDatabases {
+  getCatalogs {
     id
-    schemas
-    dimensionNames
+    defaultSchema
+    schemas {
+      name
+    }
   }
 }
 
 # Test 20bis.2: Métadonnées d'un schéma non-défaut
-query TestGetDatabaseSchemaWithSchema {
-  getDatabaseSchema(catalog: "default", schema: "main") {
+query TestGetCatalogSchemaWithSchema {
+  getCatalogSchema(catalog: "default", schema: "main") {
     name
     label
     is_categorical
@@ -1509,18 +1560,18 @@ query TestFactTableWithSchema {
   }
 }
 
-# Test 20bis.4: Dimensions partagées entre deux schémas alignés par index
+# Test 20bis.4: Dimensions partagées entre deux schémas spécifiés explicitement
 query TestSharedDimensionsCrossSchema {
-  getSharedDimensions(
-    catalogs: ["default", "macroeconomics"],
-    schemas: ["main", "main"]
-  )
+  getSharedDimensions(targets: [
+    { catalog: "default", schema: "main" }
+    { catalog: "macroeconomics", schema: "main" }
+  ])
 }
 
 # Test 20bis.5: Schéma invalide — doit retourner une GraphQLError
 # explicite ("Schema '…' is not available for catalog '…'")
 query TestRejectsUnknownSchema {
-  getDatabaseSchema(catalog: "default", schema: "no_such_schema") {
+  getCatalogSchema(catalog: "default", schema: "no_such_schema") {
     name
   }
 }

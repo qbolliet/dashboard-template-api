@@ -7,8 +7,8 @@ import type { SelectOption } from '../../loaders/select-options.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Arguments for the getDatabaseSchema query. */
-export interface DatabaseSchemaArgs {
+/** Arguments for the getCatalogSchema query. */
+export interface CatalogSchemaArgs {
   catalog?: string | null;
   schema?: string | null;
 }
@@ -23,20 +23,34 @@ export interface FieldsArgs {
   namePattern?: string | null;
 }
 
+/** A single (catalog, schema) target as accepted by getSharedDimensions. */
+export interface CatalogSchemaTarget {
+  catalog: string;
+  schema?: string | null;
+}
+
 /** Arguments for the getSharedDimensions query. */
 export interface SharedDimensionsArgs {
-  catalogs: string[];
-  schemas?: (string | null)[];
+  targets: CatalogSchemaTarget[];
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Catalog entry for a catalog, containing its schemas, fields and dimension names. */
-export interface DatabaseCatalogEntry {
+/**
+ * Source object exposed by Catalog.schemas to resolve CatalogSchemaInfo
+ * sub-fields. Carries the parent catalog id so that the `fields` and
+ * `dimensionNames` field resolvers know which DataLoader key to use.
+ */
+export interface CatalogSchemaInfoSource {
+  catalogId: string;
+  name: string;
+}
+
+/** Catalog descriptor returned by getCatalogs. */
+export interface CatalogEntry {
   id: string;
-  schemas: string[];
-  fields: CatalogMetadataRow[];
-  dimensionNames: string[];
+  defaultSchema: string;
+  schemas: CatalogSchemaInfoSource[];
 }
 
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
@@ -65,59 +79,81 @@ function validateSchemaForCatalog(catalog: string, schema?: string | null): void
 
 // Construction d'un resolver pour le catalogue multi-bases
 /**
- * Resolvers for catalog queries.
+ * Resolvers for catalog introspection queries.
  *
- * Exposes the list of available catalogs, their schemas, and shared
- * dimensions across multiple catalogs for cross-catalog analysis.
+ * Exposes the list of available catalogs and their schemas (with lazy
+ * per-schema fields and dimension names via the CatalogSchemaInfo type
+ * resolvers), the field metadata of a specific (catalog, schema) pair,
+ * a filtered SelectOption view of those fields, and the intersection of
+ * dimensions across several (catalog, schema) targets.
  */
 const catalogResolvers = {
+  // ── Type resolver: per-schema lazy loading of fields and dimension names ──
+  CatalogSchemaInfo: {
+    /**
+     * Loads the metadata table rows of the schema this source describes.
+     *
+     * Invoked only when the client selects `fields` under `schemas { … }`,
+     * so a query that asks for `schemas { name }` does not pay this cost.
+     *
+     * @param parent - Source object {catalogId, name} carried from Catalog.schemas.
+     * @param _ - Field arguments (none).
+     * @param context - GraphQL context with loaders.
+     * @returns Array of catalog metadata rows for this schema.
+     */
+    fields: async (
+      parent: CatalogSchemaInfoSource,
+      _: Record<string, never>,
+      { loaders }: GraphQLContext,
+    ): Promise<CatalogMetadataRow[]> => {
+      return loaders.catalogMetadata.load({ catalog: parent.catalogId, schema: parent.name });
+    },
+
+    /**
+     * Loads the names of categorical fields in the schema this source describes.
+     *
+     * Invoked only when the client selects `dimensionNames` under `schemas { … }`.
+     *
+     * @param parent - Source object {catalogId, name} carried from Catalog.schemas.
+     * @param _ - Field arguments (none).
+     * @param context - GraphQL context with loaders.
+     * @returns Array of categorical field names for this schema.
+     */
+    dimensionNames: async (
+      parent: CatalogSchemaInfoSource,
+      _: Record<string, never>,
+      { loaders }: GraphQLContext,
+    ): Promise<string[]> => {
+      return loaders.catalogDimensionNames.load({
+        catalog: parent.catalogId,
+        schema: parent.name,
+      });
+    },
+  },
+
   Query: {
     /**
-     * Lists all available catalogs with their (default-schema) fields and dimension names.
+     * Lists all available catalogs with their hosted schemas.
      *
-     * Loads catalog metadata and dimension names for each catalog in
-     * parallel, using empty arrays as graceful fallbacks on error.
+     * Returns catalog identifiers and per-schema sources usable by the
+     * CatalogSchemaInfo type resolvers. The `fields` and `dimensionNames`
+     * sub-fields of each schema are loaded only when explicitly selected
+     * by the client (lazy cascade via GraphQL selection sets).
      *
      * @param _ - Parent resolver result (unused at root).
      * @param __ - Query arguments (none).
-     * @param context - GraphQL context with loaders.
-     * @returns Array of catalog catalog entries.
+     * @param ___ - GraphQL context (unused at this level).
+     * @returns Array of catalog descriptors.
      */
-    // Listage de tous les catalogues disponibles avec leur schéma par défaut
-    getDatabases: async (
-      _: unknown,
-      __: Record<string, never>,
-      { loaders }: GraphQLContext,
-    ): Promise<DatabaseCatalogEntry[]> => {
-      const catalogs = databaseManager.getAvailableCatalogs();
-
-      return Promise.all(
-        catalogs.map(async (id) => {
-          let fields: CatalogMetadataRow[];
-          let dimensionNames: string[];
-
-          // Chargement du schéma avec fallback sur tableau vide en cas d'erreur
-          try {
-            fields = await loaders.catalogMetadata.load({ catalog: id });
-          } catch {
-            fields = [];
-          }
-
-          // Chargement des noms de dimensions avec fallback sur tableau vide
-          try {
-            dimensionNames = await loaders.catalogDimensionNames.load({ catalog: id });
-          } catch {
-            dimensionNames = [];
-          }
-
-          return {
-            id,
-            schemas: databaseManager.getSchemas(id),
-            fields: fields ?? [],
-            dimensionNames: dimensionNames ?? [],
-          };
-        }),
-      );
+    // Listage de tous les catalogues disponibles
+    getCatalogs: (_: unknown, __: Record<string, never>, ___: GraphQLContext): CatalogEntry[] => {
+      return databaseManager.getAvailableCatalogs().map((id) => ({
+        id,
+        defaultSchema: databaseManager.getDefaultSchema(id),
+        // Source objects carry catalogId so CatalogSchemaInfo's field
+        // resolvers can scope their DataLoader keys to the right schema.
+        schemas: databaseManager.getSchemas(id).map((name) => ({ catalogId: id, name })),
+      }));
     },
 
     /**
@@ -129,9 +165,9 @@ const catalogResolvers = {
      * @returns Array of catalog metadata rows describing the schema.
      */
     // Récupération du schéma d'un catalogue spécifique
-    getDatabaseSchema: async (
+    getCatalogSchema: async (
       _: unknown,
-      { catalog, schema }: DatabaseSchemaArgs,
+      { catalog, schema }: CatalogSchemaArgs,
       { loaders }: GraphQLContext,
     ): Promise<CatalogMetadataRow[]> => {
       const targetCatalog = databaseManager.validateCatalogRouting(catalog);
@@ -143,7 +179,7 @@ const catalogResolvers = {
      * Returns field names as {value, label} options for select menus.
      *
      * Reuses the catalogMetadata DataLoader (same Redis cache as
-     * getDatabaseSchema) and applies all filters in memory. Each filter
+     * getCatalogSchema) and applies all filters in memory. Each filter
      * is optional; when several are provided they are combined with AND.
      *
      * @param _ - Parent resolver result (unused at root).
@@ -199,49 +235,45 @@ const catalogResolvers = {
     },
 
     /**
-     * Finds dimension names that are shared across all specified catalogs.
+     * Finds dimension names that are shared across all specified targets.
      *
-     * Validates each catalog alias before loading, then intersects the
-     * dimension name sets to return only the common dimensions. Schemas can
-     * be supplied per catalog (aligned by index) to compare specific schemas.
+     * Each target is a (catalog, schema) pair; schema is optional and
+     * defaults to the catalog's default schema. Catalogs and schemas
+     * are validated against the allow-list before loading. The result
+     * is the intersection of dimension name sets across all targets.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @param args - List of catalog aliases and optional aligned schemas.
+     * @param args - List of (catalog, schema) targets.
      * @param context - GraphQL context with loaders.
-     * @returns Array of dimension names present in every specified catalog.
-     * @throws {GraphQLError} When catalogs is empty or contains invalid aliases.
+     * @returns Array of dimension names present in every specified target.
+     * @throws {GraphQLError} When targets is empty or contains invalid identifiers.
      */
-    // Calcul de l'intersection des dimensions partagées entre plusieurs catalogues
+    // Calcul de l'intersection des dimensions partagées entre plusieurs cibles
     getSharedDimensions: async (
       _: unknown,
-      { catalogs, schemas }: SharedDimensionsArgs,
+      { targets }: SharedDimensionsArgs,
       { loaders }: GraphQLContext,
     ): Promise<string[]> => {
-      // Validation de la présence d'au moins un catalogue
-      if (!catalogs || catalogs.length === 0) {
-        throw new GraphQLError('At least one catalog must be specified');
+      // Validation de la présence d'au moins une cible
+      if (!targets || targets.length === 0) {
+        throw new GraphQLError('At least one target must be specified');
       }
 
-      // Validation de chaque identifiant de catalogue
-      catalogs.forEach((cat) => {
-        if (!databaseManager.isValidCatalog(cat)) {
+      // Validation de chaque cible : catalogue connu et schéma (si fourni) dans l'allow-list
+      targets.forEach(({ catalog, schema }) => {
+        if (!databaseManager.isValidCatalog(catalog)) {
           throw new GraphQLError(
-            `Catalog '${cat}' is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
+            `Catalog '${catalog}' is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
           );
         }
+        validateSchemaForCatalog(catalog, schema);
       });
 
-      // Validation des schémas fournis : chaque schéma doit appartenir à
-      // l'allow-list du catalogue auquel il est aligné par index.
-      schemas?.forEach((s, i) => validateSchemaForCatalog(catalogs[i], s));
-
       const dimensionSets = await Promise.all(
-        catalogs.map((cat, i) =>
-          loaders.catalogDimensionNames.load({ catalog: cat, schema: schemas?.[i] ?? null }),
+        targets.map(({ catalog, schema }) =>
+          loaders.catalogDimensionNames.load({ catalog, schema: schema ?? null }),
         ),
       );
-
-      if (dimensionSets.length === 0) return [];
 
       // Intersection des ensembles de dimensions
       const [first, ...rest] = dimensionSets;

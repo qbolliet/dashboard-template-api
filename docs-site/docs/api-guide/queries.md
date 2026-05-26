@@ -179,35 +179,55 @@ type Metadata {
 
 ## Catalog queries
 
-### `getDatabases`
+### `getCatalogs`
 
-Lists all registered catalogs with their fields and dimension names.
+Lists all registered catalogs with their default schema and the list of
+hosted schemas. Each schema is a `CatalogSchemaInfo` whose `fields` and
+`dimensionNames` sub-fields are **resolved lazily** — they only hit the
+database when the client selects them, so `schemas { name }` is just as
+cheap as the old string-list and `schemas { name fields { ... } }` fetches
+the whole cascade in one round-trip.
 
 ```graphql
-getDatabases: [DatabaseInfo!]!
+getCatalogs: [Catalog!]!
 
-type DatabaseInfo {
-  id: String!
-  schemas: [String!]!         # schemas hosted by the catalog (1st = default)
-  fields: [Metadata!]!        # field metadata for the default schema
-  dimensionNames: [String!]!  # categorical field names for the default schema
+type Catalog {
+  id: String!                       # catalog identifier
+  defaultSchema: String!            # schema used when `schema:` is omitted (1st of `schemas`)
+  schemas: [CatalogSchemaInfo!]!    # schemas hosted by this catalog
+}
+
+type CatalogSchemaInfo {
+  name: String!                # schema name (e.g., 'main', 'staging')
+  fields: [Metadata!]!         # field metadata (lazy — fetched on selection)
+  dimensionNames: [String!]!   # categorical field names (lazy — fetched on selection)
 }
 ```
 
-### `getDatabaseSchema`
+### `getCatalogSchema`
 
-Returns all field metadata for a catalog.
+Returns all field metadata for a given `(catalog, schema)` pair. Both
+arguments are optional: `catalog` falls back to the routed catalog
+(query argument, header, then default); `schema` falls back to the
+catalog's default schema.
 
 ```graphql
-getDatabaseSchema(catalog: String, schema: String): [Metadata!]!
+getCatalogSchema(catalog: String, schema: String): [Metadata!]!
 ```
 
 ### `getSharedDimensions`
 
-Returns the dimension names present in all specified catalogs.
+Returns the dimension names present in all specified targets. Each target
+is a `(catalog, schema)` pair; `schema` is optional and defaults to the
+catalog's default schema.
 
 ```graphql
-getSharedDimensions(catalogs: [String!]!, schemas: [String!]): [String!]!
+getSharedDimensions(targets: [CatalogSchemaInput!]!): [String!]!
+
+input CatalogSchemaInput {
+  catalog: String!  # required catalog identifier
+  schema: String    # optional schema; defaults to the catalog's default schema
+}
 ```
 
 ---

@@ -1,33 +1,79 @@
 /**
  * Tests for the catalog GraphQL type definitions.
  *
- * Validates the DatabaseInfo object type and the catalog-related query fields
- * exposed by the schema: getDatabases, getDatabaseSchema, and getSharedDimensions.
+ * Validates the Catalog object type, the CatalogSchemaInput input type,
+ * and the catalog-related query fields exposed by the schema:
+ * getCatalogs, getCatalogSchema, getFields, and getSharedDimensions.
  */
 
 import { schema } from '../../../../src/schema/index.js';
-import { assertObjectType, isNonNullType, GraphQLFieldMap } from 'graphql';
+import {
+  assertObjectType,
+  assertInputObjectType,
+  isNonNullType,
+  isListType,
+  GraphQLFieldMap,
+} from 'graphql';
 
 // ─── Types objet — catalog ────────────────────────────────────────────────────
 
 describe('Object types — catalog', () => {
   /**
-   * Verification that DatabaseInfo exposes the expected fields.
+   * Verification that Catalog exposes the expected fields.
    */
-  test('DatabaseInfo has id, schemas, fields, dimensionNames', () => {
-    // Extraction des champs du type DatabaseInfo
+  test('Catalog has id, defaultSchema, schemas (all non-null)', () => {
+    // Extraction des champs du type Catalog
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DatabaseInfo'),
+      schema.getType('Catalog'),
     ).getFields();
 
-    // Présence des champs obligatoires (dont la liste des schémas pour l'introspection)
-    for (const f of ['id', 'schemas', 'fields', 'dimensionNames']) {
+    // Présence des champs obligatoires
+    for (const f of ['id', 'defaultSchema', 'schemas']) {
       expect(fields).toHaveProperty(f);
     }
 
-    // Caractère non-null du champ identifiant et de la liste des schémas
+    // Caractère non-null des trois champs (id, defaultSchema, schemas)
     expect(isNonNullType(fields.id.type)).toBe(true);
+    expect(isNonNullType(fields.defaultSchema.type)).toBe(true);
     expect(isNonNullType(fields.schemas.type)).toBe(true);
+  });
+
+  /**
+   * Verification that CatalogSchemaInfo exposes the lazy cascade fields.
+   */
+  test('CatalogSchemaInfo has name, fields, dimensionNames (all non-null)', () => {
+    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
+      schema.getType('CatalogSchemaInfo'),
+    ).getFields();
+
+    // Présence des champs : name + cascade lazy (fields, dimensionNames)
+    for (const f of ['name', 'fields', 'dimensionNames']) {
+      expect(fields).toHaveProperty(f);
+    }
+
+    expect(isNonNullType(fields.name.type)).toBe(true);
+    expect(isNonNullType(fields.fields.type)).toBe(true);
+    expect(isNonNullType(fields.dimensionNames.type)).toBe(true);
+  });
+});
+
+// ─── Types input — catalog ────────────────────────────────────────────────────
+
+describe('Input types — catalog', () => {
+  /**
+   * Verification that CatalogSchemaInput exposes a required catalog and an
+   * optional schema field.
+   */
+  test('CatalogSchemaInput has required catalog and optional schema', () => {
+    // Extraction des champs du type input CatalogSchemaInput
+    const fields = assertInputObjectType(schema.getType('CatalogSchemaInput')).getFields();
+
+    expect(fields).toHaveProperty('catalog');
+    expect(fields).toHaveProperty('schema');
+
+    // Catalog obligatoire, schema optionnel
+    expect(isNonNullType(fields.catalog.type)).toBe(true);
+    expect(isNonNullType(fields.schema.type)).toBe(false);
   });
 });
 
@@ -42,49 +88,53 @@ describe('Query fields — catalog', () => {
   });
 
   /**
-   * Verification that getDatabases is present and returns a non-null list.
+   * Verification that getCatalogs is present and returns a non-null list.
    */
-  test('getDatabases returns a non-null list', () => {
-    expect(queryFields).toHaveProperty('getDatabases');
+  test('getCatalogs returns a non-null list', () => {
+    expect(queryFields).toHaveProperty('getCatalogs');
 
     // Caractère non-null du type de retour
-    expect(isNonNullType(queryFields.getDatabases.type)).toBe(true);
+    expect(isNonNullType(queryFields.getCatalogs.type)).toBe(true);
   });
 
   /**
-   * Verification that getDatabaseSchema accepts optional catalog and schema arguments.
+   * Verification that getCatalogSchema accepts optional catalog and schema arguments.
    */
-  test('getDatabaseSchema has optional catalog and schema args', () => {
-    expect(queryFields).toHaveProperty('getDatabaseSchema');
+  test('getCatalogSchema has optional catalog and schema args', () => {
+    expect(queryFields).toHaveProperty('getCatalogSchema');
 
     // Recherche de l'argument catalog
-    const catalogArg = queryFields.getDatabaseSchema.args.find((a) => a.name === 'catalog');
+    const catalogArg = queryFields.getCatalogSchema.args.find((a) => a.name === 'catalog');
     expect(catalogArg).toBeDefined();
     // Argument optionnel — pas de contrainte NonNull
     expect(isNonNullType(catalogArg!.type)).toBe(false);
 
-    // Recherche de l'argument schema (nouveau, multi-schéma par catalogue)
-    const schemaArg = queryFields.getDatabaseSchema.args.find((a) => a.name === 'schema');
+    // Recherche de l'argument schema (multi-schéma par catalogue)
+    const schemaArg = queryFields.getCatalogSchema.args.find((a) => a.name === 'schema');
     expect(schemaArg).toBeDefined();
     // Argument optionnel — schéma par défaut du catalogue utilisé quand absent
     expect(isNonNullType(schemaArg!.type)).toBe(false);
   });
 
   /**
-   * Verification that getSharedDimensions requires a non-null catalogs list and
-   * accepts an optional aligned schemas list.
+   * Verification that getSharedDimensions takes a single required targets argument
+   * typed as a non-null list of non-null CatalogSchemaInput.
    */
-  test('getSharedDimensions has required catalogs and optional schemas args', () => {
+  test('getSharedDimensions has a single required targets arg', () => {
     expect(queryFields).toHaveProperty('getSharedDimensions');
 
-    // Argument catalogs obligatoire (liste non-null)
-    const catalogsArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'catalogs');
-    expect(catalogsArg).toBeDefined();
-    expect(isNonNullType(catalogsArg!.type)).toBe(true);
+    // Un seul argument exposé : targets
+    const args = queryFields.getSharedDimensions.args.map((a) => a.name).sort();
+    expect(args).toEqual(['targets']);
 
-    // Argument schemas optionnel (aligné par index sur catalogs)
-    const schemasArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'schemas');
-    expect(schemasArg).toBeDefined();
-    expect(isNonNullType(schemasArg!.type)).toBe(false);
+    // Argument targets obligatoire (liste non-null d'inputs non-null)
+    const targetsArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'targets')!;
+    expect(isNonNullType(targetsArg.type)).toBe(true);
+
+    // Le contenu de la liste est lui aussi non-null (CatalogSchemaInput!)
+    const inner = (targetsArg.type as { ofType: unknown }).ofType;
+    expect(isListType(inner)).toBe(true);
+    const innerItem = (inner as { ofType: unknown }).ofType;
+    expect(isNonNullType(innerItem)).toBe(true);
   });
 });
