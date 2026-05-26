@@ -274,6 +274,7 @@ query TestFactTableSelectFields {
 }
 
 # Test 3.6: Requête avec détails des dimensions (enrichissement automatique)
+# /!\ Renvoie l'erreur suivante : "Cannot return null for non-nullable field DimensionDetail.label."
 query TestFactTableWithDimensionDetails {
   getFactTable(limit: 5, offset: 0) {
     data {
@@ -1013,12 +1014,12 @@ query TestSharedDimensionsMixedSchemas {
 }
 
 # ============================================
-# 17. TESTS CROSS-DATABASE (requiert ALLOW_CROSS_DATABASE_QUERIES=true)
+# 17. TESTS CROSS-DATABASE (requiert ALLOW_CROSS_CATALOG_QUERIES=true)
 # ============================================
 #
 # PRÉREQUIS: Définir la variable d'environnement avant de lancer le serveur:
-#   ALLOW_CROSS_DATABASE_QUERIES=true npm run dev
-# ou $env:ALLOW_CROSS_DATABASE_QUERIES="true"; npm run dev sur Powershell
+#   ALLOW_CROSS_CATALOG_QUERIES=true npm run dev
+# ou $env:ALLOW_CROSS_CATALOG_QUERIES="true"; npm run dev sur Powershell
 #
 # Ces requêtes exploitent le fait que tous les catalogues sont attachés
 # à la même instance DuckDB en mémoire – les JOINs sont natifs.
@@ -1049,6 +1050,7 @@ query TestCrossDatabaseSelectOptionsAll {
 }
 
 # Test 17.1c: Options communes pour indicator
+# /!\ Renvoie rien
 query TestCrossDatabaseSelectOptionsIndicator {
   crossDatabaseSelectOptions(
     fieldName: "indicator"
@@ -1111,6 +1113,7 @@ query TestCompareFactsSorted {
 
 # Test 17.2c: Comparaison avec jointure sur plusieurs champs
 # Joint sur (country, indicator) – clé composite séparée par '::'
+# Renvoit également rien
 query TestCompareFactsMultiJoin {
   compareFacts(
     catalogA: "default"
@@ -1159,6 +1162,7 @@ query TestCompareAggregatedFacts {
 }
 
 # Test 17.3b: Comparaison par indicator avec agrégation AVG
+# Renvoit rien
 query TestCompareAggregatedFactsByIndicator {
   compareAggregatedFacts(
     catalogA: "default"
@@ -1442,6 +1446,7 @@ query TestGetCatalogSchemaNamedSchema {
 # Test 20.4: Comparaison de DEUX SCHÉMAS d'un MÊME catalogue (cross-schéma)
 # Requiert ALLOW_CROSS_CATALOG_QUERIES=true. catalogA === catalogB, schémas différents.
 # Les champs catégoriels sont résolus en labels via dim_* avant la jointure.
+# /!\ Produit l'erreur suivante : "Cannot return null for non-nullable field Query.compareFacts."
 query TestCompareFactsSameCatalogTwoSchemas {
   compareFacts(
     catalogA: "default"
@@ -1464,6 +1469,7 @@ query TestCompareFactsSameCatalogTwoSchemas {
 }
 
 # Test 20.5: Agrégation cross-schéma même catalogue (jointure sur labels)
+# /!\ Produit l'erreur suivante : "message": "Cannot return null for non-nullable field Query.compareAggregatedFacts."
 query TestCompareAggregatedSameCatalogTwoSchemas {
   compareAggregatedFacts(
     catalogA: "default"
@@ -1487,6 +1493,7 @@ query TestCompareAggregatedSameCatalogTwoSchemas {
 }
 
 # Test 20.6: Cross-catalogue avec schémas explicites par côté
+# /!\ Ne retourne rien
 query TestCompareFactsCrossCatalogExplicitSchemas {
   compareFacts(
     catalogA: "default"
@@ -1552,6 +1559,7 @@ query TestGetCatalogSchemaWithSchema {
 }
 
 # Test 20bis.3: Table des faits dans un schéma explicite
+# /!\ Ne retourne rien
 query TestFactTableWithSchema {
   getFactTable(catalog: "default", schema: "main", limit: 5, offset: 0) {
     indicator
