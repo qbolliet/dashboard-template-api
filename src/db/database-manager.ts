@@ -61,7 +61,7 @@ export interface DatabaseStats {
  *       PATH: 'outputs/project_a.ducklake'
  *       DATA_PATH: 'outputs/project_a_data/'
  *       READ_ONLY: true
- *       SCHEMA: 'main'   # schéma par défaut du catalogue
+ *       SCHEMAS: ['main']   # liste des schémas hébergés, le 1er est le défaut
  *   DATABASE:
  *     POOL:
  *       MAX_CONNECTIONS: 5
@@ -73,8 +73,16 @@ class DatabaseManager {
   private readonly allowedCatalogs: string[];
   private readonly allowCrossCatalog: boolean;
   private sharedPool: DuckDBPool | null;
-  // Liste complète des schémas connus par catalogue (au moins un)
-  private readonly schemas: Record<string, string[]>;
+  // Liste effective des schémas par catalogue après réconciliation discovery↔config
+  // (allow-list utilisée par isValidSchema, getSchemas et l'introspection).
+  private schemas: Record<string, string[]>;
+  // Liste configurée par catalogue (snapshot statique du démarrage), utilisée par
+  // initSchemas() pour ré-appliquer la politique d'intersection après chaque reload.
+  private readonly configuredSchemas: Record<string, string[]>;
+  // Catalogues dont SCHEMAS est explicitement fourni en config (allow-list stricte).
+  // Sert au reconcilier post-ATTACH : ces catalogues sont restreints à l'intersection
+  // (config ∩ découverte), tandis que les autres adoptent la liste découverte.
+  private readonly explicitlyConfiguredSchemas: Set<string>;
 
   constructor() {
     // Configuration du routage des catalogues depuis le fichier de config
@@ -90,8 +98,12 @@ class DatabaseManager {
     // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
     this.sharedPool = null;
 
-    // Map catalogId -> schéma DuckLake par défaut (configurable via SCHEMA dans database.yaml)
+    // Map catalogId -> liste des schémas hébergés (le 1er est le schéma par défaut)
     this.schemas = {};
+    // Snapshot statique de la liste configurée (référence pour initSchemas)
+    this.configuredSchemas = {};
+    // Trace des catalogues à allow-list stricte (SCHEMAS explicitement fourni)
+    this.explicitlyConfiguredSchemas = new Set();
 
     // Initialisation automatique
     this.initializeDatabases();
@@ -114,9 +126,14 @@ class DatabaseManager {
     for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
       const type = catalogConfig.TYPE ?? 'file';
 
-      // Liste des schémas du catalogue : SCHEMAS prioritaire, sinon [SCHEMA], sinon ['main']
+      // Liste des schémas du catalogue (SCHEMAS), défaut ['main']
       // SCHEMAS peut arriver sous forme de string JSON depuis une variable d'env
-      this.schemas[catalogId] = this.resolveSchemas(catalogConfig);
+      const resolved = this.resolveSchemas(catalogConfig);
+      this.schemas[catalogId] = [...resolved];
+      this.configuredSchemas[catalogId] = [...resolved];
+      if (catalogConfig.SCHEMAS !== undefined) {
+        this.explicitlyConfiguredSchemas.add(catalogId);
+      }
 
       // Résolution du chemin de données (local résolu en absolu, URI distante telle quelle)
       const dataPath = this.resolveDataPath(catalogConfig.DATA_PATH);
@@ -237,27 +254,26 @@ class DatabaseManager {
   }
 
   /**
-   * Resolve the schema list for a catalog, accepting either a SCHEMAS list
-   * (array or JSON-string from env), a single SCHEMA, or neither (→ ['main']).
+   * Resolve the schema list for a catalog from its SCHEMAS field.
+   *
+   * SCHEMAS may be a YAML array or a JSON-string (from an env var). When the
+   * field is absent, the catalog is assumed to host the single 'main' schema.
    *
    * @param catalogConfig - Per-catalog configuration block.
-   * @returns Non-empty list of schemas, with SCHEMA (or 'main') guaranteed present.
+   * @returns Non-empty deduplicated list of schemas (defaults to ['main']).
    */
-  private resolveSchemas(catalogConfig: {
-    SCHEMA?: string;
-    SCHEMAS?: string[] | string;
-  }): string[] {
-    // Liste explicite SCHEMAS : prioritaire. Peut être un tableau YAML ou une chaîne JSON (env).
-    if (catalogConfig.SCHEMAS !== undefined) {
-      const raw = catalogConfig.SCHEMAS;
-      const list = typeof raw === 'string' ? (JSON.parse(raw) as string[]) : raw;
-      if (!Array.isArray(list) || list.length === 0) {
-        throw new Error('CATALOGS.<id>.SCHEMAS must be a non-empty list of schema names.');
-      }
-      return [...new Set(list)];
+  private resolveSchemas(catalogConfig: { SCHEMAS?: string[] | string }): string[] {
+    // Liste SCHEMAS absente : on retombe sur le mono-schéma par défaut.
+    if (catalogConfig.SCHEMAS === undefined) {
+      return ['main'];
     }
-    // Pas de SCHEMAS : on retombe sur le mono-schéma legacy (SCHEMA, ou 'main' par défaut)
-    return [catalogConfig.SCHEMA ?? 'main'];
+    // SCHEMAS peut être un tableau YAML ou une chaîne JSON (variable d'env).
+    const raw = catalogConfig.SCHEMAS;
+    const list = typeof raw === 'string' ? (JSON.parse(raw) as string[]) : raw;
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new Error('CATALOGS.<id>.SCHEMAS must be a non-empty list of schema names.');
+    }
+    return [...new Set(list)];
   }
 
   /**
@@ -311,18 +327,6 @@ class DatabaseManager {
    */
   getDefaultCatalog(): string {
     return this.defaultCatalog;
-  }
-
-  /**
-   * Get the default DuckLake schema name for a catalog.
-   * Used when a request does not specify an explicit schema.
-   * Falls back to the first schema of the default catalog, or 'main' if absent.
-   *
-   * @param catalogId - Catalog identifier.
-   * @returns Schema name (e.g. 'main').
-   */
-  getSchema(catalogId: string): string {
-    return this.getDefaultSchema(catalogId);
   }
 
   /**
@@ -415,6 +419,9 @@ class DatabaseManager {
     // Re-chargement des catalogues
     await this.sharedPool.reload();
 
+    // Ré-application de la politique d'allow-list contre la nouvelle découverte
+    await this.initSchemas();
+
     // Logging
     dbLogger.database('Catalogs reloaded successfully', {
       attachedCatalogs: this.sharedPool.catalogs.map((c) => c.alias),
@@ -449,7 +456,77 @@ class DatabaseManager {
     // Ré-attachement ciblé du seul catalogue
     await this.sharedPool.reloadOne(catalogId);
 
+    // Ré-application de la politique d'allow-list (la découverte est portée par
+    // une seule requête couvrant tous les catalogues, donc on relance tout)
+    await this.initSchemas();
+
     dbLogger.database('Catalog reloaded successfully', { catalog: catalogId });
+  }
+
+  /**
+   * Reconcile the per-catalog schema allow-list with what DuckLake actually exposes.
+   *
+   * Calls {@link DuckDBPool.discoverCatalogSchemas} and applies, per catalog:
+   *  - If SCHEMAS was explicitly configured: intersect with the discovered list
+   *    (any configured-but-missing schema triggers a warning). Treat the config
+   *    as an allow-list — never widen beyond it.
+   *  - If SCHEMAS was not configured: adopt the discovered list. Fall back to
+   *    ['main'] when the discovery is empty so the API never starts up with an
+   *    empty schema list.
+   *
+   * Idempotent and safe to call repeatedly (start-up, after reloadCatalogs(),
+   * after reloadCatalog()). The result is the source of truth for isValidSchema,
+   * getSchemas, getDefaultSchema, and the introspection payload.
+   *
+   * @throws {Error} If the shared pool is not initialized or discovery fails.
+   */
+  async initSchemas(): Promise<void> {
+    if (!this.sharedPool) {
+      throw new Error('Shared pool is not initialized.');
+    }
+
+    const discovered = await this.sharedPool.discoverCatalogSchemas();
+
+    for (const catalogId of Object.keys(this.configuredSchemas)) {
+      const discoveredList = discovered[catalogId] ?? [];
+
+      if (this.explicitlyConfiguredSchemas.has(catalogId)) {
+        // Allow-list stricte : intersection (config ∩ découverte), ordre de la config
+        const configured = this.configuredSchemas[catalogId];
+        const intersection = configured.filter((s) => discoveredList.includes(s));
+        const missing = configured.filter((s) => !discoveredList.includes(s));
+
+        if (missing.length > 0) {
+          dbLogger.warn(`Configured schemas missing from DuckLake for ${catalogId}`, {
+            missing,
+            discovered: discoveredList,
+          });
+        }
+
+        // Fallback : si l'intersection est vide (toute la config est manquante),
+        // on conserve la config pour ne pas casser les requêtes existantes,
+        // mais on logge un warn explicite.
+        if (intersection.length === 0) {
+          dbLogger.warn(`No configured schema was discovered for ${catalogId}; keeping config`, {
+            configured,
+            discovered: discoveredList,
+          });
+          this.schemas[catalogId] = [...configured];
+        } else {
+          this.schemas[catalogId] = intersection;
+        }
+      } else {
+        // Pas de SCHEMAS dans la config : on adopte la liste découverte.
+        // Fallback à ['main'] si la découverte est vide (catalogue vide / non encore peuplé).
+        this.schemas[catalogId] = discoveredList.length > 0 ? [...discoveredList] : ['main'];
+      }
+
+      dbLogger.database(`Schemas reconciled for ${catalogId}`, {
+        active: this.schemas[catalogId],
+        discovered: discoveredList,
+        explicit: this.explicitlyConfiguredSchemas.has(catalogId),
+      });
+    }
   }
 
   /**

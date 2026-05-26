@@ -87,6 +87,20 @@ describe('getDatabases', () => {
     expect(result.errors).toBeUndefined();
     expect(Array.isArray(result.data!.getDatabases)).toBe(true);
   });
+
+  test('introspection — each entry exposes its schemas list (multi-schema support)', async () => {
+    const query = `query { getDatabases { id schemas } }`;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeUndefined();
+    const databases = result.data!.getDatabases as Array<{ id: string; schemas: string[] }>;
+    expect(databases.length).toBeGreaterThan(0);
+    // Tous les catalogues exposent au moins un schéma (au minimum 'main' pour les jeux de test)
+    for (const db of databases) {
+      expect(Array.isArray(db.schemas)).toBe(true);
+      expect(db.schemas.length).toBeGreaterThan(0);
+    }
+  });
 });
 
 // ─── Tests getDatabaseSchema ──────────────────────────────────────────────────
@@ -125,7 +139,7 @@ describe('getDatabaseSchema', () => {
 
   test('same result with and without explicit empty database param', async () => {
     const noParam = `query { getDatabaseSchema { name is_categorical } }`;
-    const withEmpty = `query { getDatabaseSchema(database: "") { name is_categorical } }`;
+    const withEmpty = `query { getDatabaseSchema(catalog: "") { name is_categorical } }`;
 
     const r1 = await execute(server, { query: noParam });
     const r2 = await execute(server, { query: withEmpty });
@@ -157,17 +171,27 @@ describe('getDatabaseSchema', () => {
   });
 
   test('rejects an invalid database name', async () => {
-    const query = `query { getDatabaseSchema(database: "nonexistent_xyz") { name } }`;
+    const query = `query { getDatabaseSchema(catalog: "nonexistent_xyz") { name } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
+  });
+
+  test('rejects an unknown schema not in the catalog allow-list', async () => {
+    // 'totally_unknown_schema' n'est ni dans la config ni dans la découverte
+    // — l'allow-list (isValidSchema) doit rejeter, pas une simple validation regex.
+    const query = `query { getDatabaseSchema(catalog: "default", schema: "totally_unknown_schema") { name } }`;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].message).toMatch(/Schema 'totally_unknown_schema' is not available/);
   });
 
   test('multiple schemas in a single query', async () => {
     const query = `
       query {
         schema1: getDatabaseSchema { name is_categorical }
-        schema2: getDatabaseSchema(database: "") { name is_categorical }
+        schema2: getDatabaseSchema(catalog: "") { name is_categorical }
       }
     `;
     const result = await execute(server, { query });
@@ -319,7 +343,7 @@ describe('getFields', () => {
   });
 
   test('rejects an invalid database name', async () => {
-    const query = `query { getFields(database: "nonexistent_xyz") { value } }`;
+    const query = `query { getFields(catalog: "nonexistent_xyz") { value } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
@@ -359,7 +383,7 @@ describe('getSharedDimensions', () => {
 
     if (!defaultDb) return;
 
-    const query = `query { getSharedDimensions(databases: ["${defaultDb.id}"]) }`;
+    const query = `query { getSharedDimensions(catalogs: ["${defaultDb.id}"]) }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
@@ -379,7 +403,7 @@ describe('getSharedDimensions', () => {
     const firstId = (dbResult.data!.getDatabases as Array<{ id: string }>)[0]?.id;
     if (!firstId) return;
 
-    const query = `query { getSharedDimensions(databases: ["${firstId}", "${firstId}"]) }`;
+    const query = `query { getSharedDimensions(catalogs: ["${firstId}", "${firstId}"]) }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
@@ -387,14 +411,14 @@ describe('getSharedDimensions', () => {
   });
 
   test('rejects an empty databases list', async () => {
-    const query = `query { getSharedDimensions(databases: []) }`;
+    const query = `query { getSharedDimensions(catalogs: []) }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
   });
 
   test('rejects an unknown database name', async () => {
-    const query = `query { getSharedDimensions(databases: ["nonexistent_db"]) }`;
+    const query = `query { getSharedDimensions(catalogs: ["nonexistent_db"]) }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();

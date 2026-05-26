@@ -35,7 +35,8 @@ export interface AggregatedFactsArgs {
   limit?: number;
   offset?: number;
   sort?: AggregatedSortItem[];
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
@@ -148,15 +149,16 @@ const aggregatedFactsResolvers = {
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
-        database,
+        catalog,
+        schema,
       }: AggregatedFactsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
       // Validation centralisée des paramètres de la requête
       validateAggregatedArgs(aggregation, groupBy, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForDatabase(database);
+        const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
 
         const results = (await withTimeout(
@@ -213,15 +215,16 @@ const aggregatedFactsResolvers = {
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
-        database,
+        catalog,
+        schema,
       }: AggregatedFactsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
       // Validation centralisée des paramètres de la requête
       validateAggregatedArgs(aggregation, groupBy, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForDatabase(database);
+        const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
 
         const result = (await withTimeout(

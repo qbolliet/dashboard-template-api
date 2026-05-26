@@ -8,7 +8,8 @@ import type { GraphQLContext } from './types.js';
 /** Arguments for the getMetaData query. */
 export interface MetadataArgs {
   name: string;
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 // Construction d'un resolver pour les méta-données
@@ -29,11 +30,11 @@ const metadataResolvers = {
      */
     getMetaData: async (
       _: unknown,
-      { name, database }: MetadataArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { name, catalog, schema }: MetadataArgs,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
-      // Sélection du loader adapté à la base de données cible
-      const targetLoaders = getLoadersForDatabase(database);
+      // Sélection du loader adapté au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
       const loader = targetLoaders ? targetLoaders.metadata : loaders.metadata;
 
       return withTimeout(loader.load(name), config.API.TIMEOUTS.METADATA, 'Metadata fetch timeout');

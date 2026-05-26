@@ -17,7 +17,7 @@ describe('Object types — dimension', () => {
   test('Dimension has value and label fields', () => {
     // Extraction des champs du type Dimension
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('Dimension')
+      schema.getType('Dimension'),
     ).getFields();
 
     // Présence des champs d'affichage attendus
@@ -37,17 +37,14 @@ describe('Query fields — dimension', () => {
   });
 
   /**
-   * Verification that getDimensionTable exists with name and optional database arguments.
+   * Verification that getDimensionTable exists with name + optional catalog/schema arguments.
    */
-  test('getDimensionTable exists with name and optional database args', () => {
+  test('getDimensionTable exists with name + optional catalog/schema args', () => {
     expect(queryFields).toHaveProperty('getDimensionTable');
 
     // Présence des arguments de sélection de la table de dimension
-    expect(
-      queryFields.getDimensionTable.args.find((a) => a.name === 'name')
-    ).toBeDefined();
-    expect(
-      queryFields.getDimensionTable.args.find((a) => a.name === 'database')
-    ).toBeDefined();
+    expect(queryFields.getDimensionTable.args.find((a) => a.name === 'name')).toBeDefined();
+    expect(queryFields.getDimensionTable.args.find((a) => a.name === 'catalog')).toBeDefined();
+    expect(queryFields.getDimensionTable.args.find((a) => a.name === 'schema')).toBeDefined();
   });
 });

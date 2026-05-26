@@ -128,7 +128,8 @@ const factTypeDefs: DocumentNode = gql`
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
-      database: String
+      catalog: String
+      schema: String
     ): PaginatedFacts
 
     "Get fact data optimized for D3 visualization"
@@ -139,7 +140,8 @@ const factTypeDefs: DocumentNode = gql`
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
-      database: String
+      catalog: String
+      schema: String
       "Format de sérialisation des données : OBJECTS (défaut) ou ARRAYS (tableau de tableaux)"
       format: DataFormat = OBJECTS
     ): DatasetWithMetadata
@@ -154,7 +156,8 @@ const factTypeDefs: DocumentNode = gql`
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
-      database: String
+      catalog: String
+      schema: String
     ): [AggregatedFact]
 
     "Get aggregated facts with D3 metadata"
@@ -167,7 +170,8 @@ const factTypeDefs: DocumentNode = gql`
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
-      database: String
+      catalog: String
+      schema: String
     ): AggregatedFactsWithMetadata
   }
 `;

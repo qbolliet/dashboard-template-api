@@ -76,7 +76,7 @@ let createFactWithMetadataLoader: FactModule['createFactWithMetadataLoader'];
 
 beforeAll(async () => {
   ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } =
-    await import('../../../src/loaders/fact.js') as unknown as FactModule);
+    (await import('../../../src/loaders/fact.js')) as unknown as FactModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ describe('FactLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -112,13 +112,41 @@ describe('FactLoader', () => {
       const loader = createFactLoader();
       expect(loader).toBeDefined();
     });
+
+    test('qualifie la table avec le schéma explicite lors de la requête SQL', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      // catalog explicite + schema non-défaut : on doit voir "catalog1".staging.fact_table
+      const loader = createFactLoader('catalog1', 'staging');
+      await loader.load({ ...baseParams });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('"catalog1".staging.fact_table');
+      // L'appel à getDefaultSchema ne doit PAS être nécessaire (schéma fourni explicitement)
+      expect(mockDatabaseManager.getDefaultSchema).not.toHaveBeenCalled();
+    });
+
+    test('retombe sur le schéma par défaut quand schema est absent', async () => {
+      mockConnection.all.mockResolvedValue([]);
+      mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
+
+      const loader = createFactLoader('catalog1'); // pas de schema
+      await loader.load({ ...baseParams });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('"catalog1".main.fact_table');
+      expect(mockDatabaseManager.getDefaultSchema).toHaveBeenCalledWith('catalog1');
+    });
   });
 
   // ── Chargement au format par défaut ──────────────────────────────────────
 
   describe('loadFacts - format default', () => {
     test('retourne un tableau de lignes', async () => {
-      const rows = [{ id: 1, value: 100 }, { id: 2, value: 200 }];
+      const rows = [
+        { id: 1, value: 100 },
+        { id: 2, value: 200 },
+      ];
       mockConnection.all.mockResolvedValue(rows);
 
       const loader = createFactLoader('main');
@@ -202,11 +230,11 @@ describe('FactLoader', () => {
     test('retourne les données avec le comptage total', async () => {
       const rows = [{ id: 1, value: 100 }];
       mockConnection.all
-        .mockResolvedValueOnce(rows)                    // données principales
-        .mockResolvedValueOnce([{ total: 42 }]);        // comptage total
+        .mockResolvedValueOnce(rows) // données principales
+        .mockResolvedValueOnce([{ total: 42 }]); // comptage total
 
       const loader = createFactWithCountLoader('main');
-      const result = await loader.load({ ...baseParams }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams })) as Record<string, unknown>;
 
       expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('total', 42);
@@ -221,7 +249,10 @@ describe('FactLoader', () => {
         .mockResolvedValueOnce([{ total: 20 }]);
 
       const loader = createFactWithCountLoader('main');
-      const result = await loader.load({ ...baseParams, limit: 2, offset: 0 }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams, limit: 2, offset: 0 })) as Record<
+        string,
+        unknown
+      >;
 
       expect(result.hasNextPage).toBe(true);
       expect(result.currentPage).toBe(1);
@@ -229,12 +260,13 @@ describe('FactLoader', () => {
     });
 
     test('hasNextPage est false quand on est à la dernière page', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ id: 1 }])
-        .mockResolvedValueOnce([{ total: 5 }]);
+      mockConnection.all.mockResolvedValueOnce([{ id: 1 }]).mockResolvedValueOnce([{ total: 5 }]);
 
       const loader = createFactWithCountLoader('main');
-      const result = await loader.load({ ...baseParams, limit: 10, offset: 0 }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams, limit: 10, offset: 0 })) as Record<
+        string,
+        unknown
+      >;
 
       expect(result.hasNextPage).toBe(false);
     });

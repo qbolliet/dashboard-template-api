@@ -73,7 +73,7 @@ let createSelectOptionsLoader: SelectOptionsModule['createSelectOptionsLoader'];
 
 beforeAll(async () => {
   ({ createSelectOptionsLoader } =
-    await import('../../../src/loaders/select-options.js') as unknown as SelectOptionsModule);
+    (await import('../../../src/loaders/select-options.js')) as unknown as SelectOptionsModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ describe('SelectOptionsLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -106,8 +106,9 @@ describe('SelectOptionsLoader', () => {
   describe('loadSelectOptions - champ catégoriel', () => {
     test('charge depuis la table de dimension pour un champ catégoriel', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 1 }])         // métadonnée
-        .mockResolvedValueOnce([                                 // table de dimension
+        .mockResolvedValueOnce([{ is_categorical: 1 }]) // métadonnée
+        .mockResolvedValueOnce([
+          // table de dimension
           { value: '1', label: 'France' },
           { value: '2', label: 'Allemagne' },
         ]);
@@ -142,8 +143,9 @@ describe('SelectOptionsLoader', () => {
   describe('loadSelectOptions - champ non catégoriel', () => {
     test('charge les valeurs distinctes depuis la table des faits', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 0 }])         // métadonnée
-        .mockResolvedValueOnce([                                 // table des faits
+        .mockResolvedValueOnce([{ is_categorical: 0 }]) // métadonnée
+        .mockResolvedValueOnce([
+          // table des faits
           { value: '100' },
           { value: '200' },
         ]);
@@ -161,9 +163,7 @@ describe('SelectOptionsLoader', () => {
     });
 
     test('filtre par searchTerm dans les faits', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 0 }])
-        .mockResolvedValueOnce([]);
+      mockConnection.all.mockResolvedValueOnce([{ is_categorical: 0 }]).mockResolvedValueOnce([]);
 
       const loader = createSelectOptionsLoader('main');
       await loader.load({ fieldName: 'amount', limit: 50, searchTerm: '10' });

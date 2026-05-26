@@ -155,6 +155,8 @@ class DuckDBPool {
   private draining: ConnectionWrapper[];
   // Garde anti-concurrence pour reload() (déduplique les appels simultanés)
   private reloadPromise: Promise<void> | null;
+  // Gardes anti-concurrence par catalogue pour reloadOne() (un verrou par alias)
+  private readonly reloadOnePromises: Map<string, Promise<void>>;
   // Délai max d'attente du drainage des requêtes en vol avant fermeture forcée.
   // Doit dépasser le plus long timeout de requête (cf. API.TIMEOUTS, max 15s).
   private readonly drainTimeout: number;
@@ -181,6 +183,8 @@ class DuckDBPool {
     this.draining = [];
     // Garde de reload en cours
     this.reloadPromise = null;
+    // Gardes de reload par catalogue (vide au départ)
+    this.reloadOnePromises = new Map();
     // Délai de drainage configurable (défaut 30s, > timeout max de requête)
     this.drainTimeout = poolConfig.drainTimeout ?? 30000;
   }
@@ -321,6 +325,120 @@ class DuckDBPool {
     })();
 
     return this.reloadPromise;
+  }
+
+  /**
+   * Discover the list of schemas actually exposed by each attached catalog.
+   *
+   * Runs a single query against `information_schema.schemata` on the live shared
+   * instance, filtering out the engine's internal schemas. The result is the
+   * authoritative inventory of what DuckLake reports; the {@link DatabaseManager}
+   * then reconciles it with the configured allow-list (intersection + warn for
+   * configured-but-missing schemas).
+   *
+   * @returns Map from catalog alias to the list of schemas discovered for it.
+   *   Catalogs with no discovered schemas are returned as an empty array (the
+   *   caller decides the fallback policy).
+   */
+  async discoverCatalogSchemas(): Promise<Record<string, string[]>> {
+    const instance = await this.initializeInstance();
+    const conn = await instance.connect();
+    try {
+      const result = await conn.run(
+        `SELECT catalog_name, schema_name
+         FROM information_schema.schemata
+         WHERE schema_name NOT IN ('information_schema', 'pg_catalog')`,
+      );
+      const rows = await result.getRowObjectsJson();
+
+      // Initialisation à liste vide pour chaque catalogue attaché
+      const discovered: Record<string, string[]> = {};
+      for (const c of this.catalogs) {
+        discovered[c.alias] = [];
+      }
+
+      // Agrégation des schémas par catalogue (sans doublons, ordre stable)
+      for (const row of rows) {
+        const catalog = row['catalog_name'] as string | null;
+        const schema = row['schema_name'] as string | null;
+        if (!catalog || !schema) continue;
+        if (!(catalog in discovered)) continue;
+        if (!discovered[catalog].includes(schema)) {
+          discovered[catalog].push(schema);
+        }
+      }
+
+      return discovered;
+    } finally {
+      conn.closeSync();
+    }
+  }
+
+  /**
+   * Reattach a single catalog on the live shared instance (scoped DETACH + ATTACH).
+   *
+   * Unlike {@link reload}, this does not rebuild the whole instance: it runs a
+   * `DETACH` followed by the catalog's ATTACH statements on the current instance,
+   * so one catalog can be refreshed without touching the others. Calls are
+   * serialized per alias via {@link reloadOnePromises} to dedupe concurrent
+   * reattachments of the same catalog.
+   *
+   * Caveat (shared single instance): a query already running against this catalog
+   * during the brief DETACH/ATTACH window may error. This is an admin-triggered,
+   * low-frequency operation, so the tradeoff is accepted.
+   *
+   * @param catalogId - Alias of the catalog to reattach.
+   * @throws {Error} If the catalog is not attached, or the reattach fails.
+   */
+  async reloadOne(catalogId: string): Promise<void> {
+    // Déduplication des reattach concurrents du même catalogue
+    const inFlight = this.reloadOnePromises.get(catalogId);
+    if (inFlight) return inFlight;
+
+    // Recherche de l'entrée de catalogue par alias
+    const catalog = this.catalogs.find((c) => c.alias === catalogId);
+    if (!catalog) {
+      throw new Error(`Catalog '${catalogId}' is not attached to the pool.`);
+    }
+
+    const promise = (async (): Promise<void> => {
+      const dbLogger = createContextLogger({ component: 'database', module: 'pool' });
+      try {
+        dbLogger.database('Reattaching single catalog', { catalog: catalogId });
+
+        // Instance partagée vivante (initialisée paresseusement si nécessaire)
+        const instance = await this.initializeInstance();
+        const conn = await instance.connect();
+        try {
+          // DETACH du catalogue. Enveloppé dans un try/catch : si le catalogue
+          // n'était pas attaché, on poursuit vers le ré-ATTACH ; s'il est occupé,
+          // le ré-ATTACH échouera et l'erreur remontera à l'appelant (admin).
+          try {
+            await conn.run(`DETACH "${catalogId}"`);
+          } catch (detachError) {
+            dbLogger.warn('DETACH skipped during single-catalog reload (continuing)', {
+              catalog: catalogId,
+              error: (detachError as Error).message,
+            });
+          }
+
+          // Ré-ATTACH avec l'état le plus récent (secret Postgres recréé si besoin)
+          for (const statement of buildCatalogSql(catalog)) {
+            await conn.run(statement);
+          }
+        } finally {
+          conn.closeSync();
+        }
+
+        dbLogger.database('Single catalog reattached successfully', { catalog: catalogId });
+      } finally {
+        // Libération du verrou pour ce catalogue, succès comme échec
+        this.reloadOnePromises.delete(catalogId);
+      }
+    })();
+
+    this.reloadOnePromises.set(catalogId, promise);
+    return promise;
   }
 
   /**

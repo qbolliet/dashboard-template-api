@@ -45,7 +45,7 @@ describe('Object types — fact', () => {
   test('DimensionDetail has non-null name, value, label', () => {
     // Extraction des champs du type DimensionDetail
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DimensionDetail')
+      schema.getType('DimensionDetail'),
     ).getFields();
 
     // Caractère non-null de chaque champ descriptif
@@ -61,7 +61,7 @@ describe('Object types — fact', () => {
   test('Fact has value and dimensionDetails', () => {
     // Extraction des champs du type Fact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('Fact')
+      schema.getType('Fact'),
     ).getFields();
 
     expect(fields).toHaveProperty('value');
@@ -74,7 +74,7 @@ describe('Object types — fact', () => {
   test('PaginatedFacts has data, total, hasNextPage, currentPage, totalPages', () => {
     // Extraction des champs du type paginé
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('PaginatedFacts')
+      schema.getType('PaginatedFacts'),
     ).getFields();
 
     // Présence des champs de pagination
@@ -89,7 +89,7 @@ describe('Object types — fact', () => {
   test('DatasetMetadata has count, extents, pagination and generatedAt fields', () => {
     // Extraction des champs du type de métadonnées dataset
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DatasetMetadata')
+      schema.getType('DatasetMetadata'),
     ).getFields();
 
     // Présence des champs de métadonnées et de pagination
@@ -112,7 +112,7 @@ describe('Object types — fact', () => {
   test('DatasetWithMetadata has columns, data, metadata', () => {
     // Extraction des champs du type dataset enrichi
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DatasetWithMetadata')
+      schema.getType('DatasetWithMetadata'),
     ).getFields();
 
     // Présence des champs structurels du dataset
@@ -127,7 +127,7 @@ describe('Object types — fact', () => {
   test('AggregationStatistics has mean, median, stdDev, quartiles', () => {
     // Extraction des champs du type statistiques
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregationStatistics')
+      schema.getType('AggregationStatistics'),
     ).getFields();
 
     // Présence des indicateurs statistiques attendus
@@ -142,7 +142,7 @@ describe('Object types — fact', () => {
   test('AggregatedFactsMetadata has count, keyExtent, valueExtent, statistics, groupByFieldInfo, generatedAt', () => {
     // Extraction des champs du type métadonnées d'agrégation
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFactsMetadata')
+      schema.getType('AggregatedFactsMetadata'),
     ).getFields();
 
     // Présence des champs d'analyse d'agrégation
@@ -164,7 +164,7 @@ describe('Object types — fact', () => {
   test('AggregatedFactsWithMetadata has data and metadata', () => {
     // Extraction des champs du type agrégation enrichie
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFactsWithMetadata')
+      schema.getType('AggregatedFactsWithMetadata'),
     ).getFields();
 
     expect(fields).toHaveProperty('data');
@@ -183,13 +183,13 @@ describe('Query fields — fact', () => {
   });
 
   /**
-   * Verification that getFactTable exists with all expected filter and pagination args.
+   * Verification that getFactTable exists with all expected filter, pagination and routing args.
    */
-  test('getFactTable exists with limit, offset, structuredFilters, sort, database args', () => {
+  test('getFactTable exists with limit, offset, structuredFilters, sort, catalog, schema args', () => {
     expect(queryFields).toHaveProperty('getFactTable');
 
-    // Présence de chaque argument de filtrage et pagination
-    for (const arg of ['limit', 'offset', 'structuredFilters', 'sort', 'database']) {
+    // Présence de chaque argument de filtrage, pagination, et de routage multi-catalogue/schéma
+    for (const arg of ['limit', 'offset', 'structuredFilters', 'sort', 'catalog', 'schema']) {
       expect(queryFields.getFactTable.args.find((a) => a.name === arg)).toBeDefined();
     }
   });
@@ -201,9 +201,7 @@ describe('Query fields — fact', () => {
     expect(queryFields).toHaveProperty('getFactTableWithMetadata');
 
     // Recherche de l'argument de format de sortie
-    const formatArg = queryFields.getFactTableWithMetadata.args.find(
-      (a) => a.name === 'format'
-    );
+    const formatArg = queryFields.getFactTableWithMetadata.args.find((a) => a.name === 'format');
     expect(formatArg).toBeDefined();
 
     // Valeur par défaut du format de sérialisation
@@ -217,16 +215,12 @@ describe('Query fields — fact', () => {
     expect(queryFields).toHaveProperty('getAggregatedFacts');
 
     // Recherche de l'argument de regroupement obligatoire
-    const groupByArg = queryFields.getAggregatedFacts.args.find(
-      (a) => a.name === 'groupBy'
-    );
+    const groupByArg = queryFields.getAggregatedFacts.args.find((a) => a.name === 'groupBy');
     expect(groupByArg).toBeDefined();
 
     // Caractère obligatoire de l'argument groupBy
     expect(isNonNullType(groupByArg!.type)).toBe(true);
-    expect(
-      queryFields.getAggregatedFacts.args.find((a) => a.name === 'aggregation')
-    ).toBeDefined();
+    expect(queryFields.getAggregatedFacts.args.find((a) => a.name === 'aggregation')).toBeDefined();
   });
 
   /**
@@ -237,8 +231,8 @@ describe('Query fields — fact', () => {
 
     // Résolution du type de retour (nommé ou enveloppé dans NonNull/List)
     const returnType = queryFields.getAggregatedFactsWithMetadata.type;
-    expect(
-      isNamedType(returnType) ? returnType.name : returnType.ofType?.name
-    ).toBe('AggregatedFactsWithMetadata');
+    expect(isNamedType(returnType) ? returnType.name : returnType.ofType?.name).toBe(
+      'AggregatedFactsWithMetadata',
+    );
   });
 });

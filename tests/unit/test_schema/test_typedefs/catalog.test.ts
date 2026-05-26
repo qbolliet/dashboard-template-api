@@ -14,19 +14,20 @@ describe('Object types — catalog', () => {
   /**
    * Verification that DatabaseInfo exposes the expected fields.
    */
-  test('DatabaseInfo has id, fields, dimensionNames', () => {
+  test('DatabaseInfo has id, schemas, fields, dimensionNames', () => {
     // Extraction des champs du type DatabaseInfo
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DatabaseInfo')
+      schema.getType('DatabaseInfo'),
     ).getFields();
 
-    // Présence des champs obligatoires
-    for (const f of ['id', 'fields', 'dimensionNames']) {
+    // Présence des champs obligatoires (dont la liste des schémas pour l'introspection)
+    for (const f of ['id', 'schemas', 'fields', 'dimensionNames']) {
       expect(fields).toHaveProperty(f);
     }
 
-    // Caractère non-null du champ identifiant
+    // Caractère non-null du champ identifiant et de la liste des schémas
     expect(isNonNullType(fields.id.type)).toBe(true);
+    expect(isNonNullType(fields.schemas.type)).toBe(true);
   });
 });
 
@@ -51,34 +52,39 @@ describe('Query fields — catalog', () => {
   });
 
   /**
-   * Verification that getDatabaseSchema accepts an optional database argument.
+   * Verification that getDatabaseSchema accepts optional catalog and schema arguments.
    */
-  test('getDatabaseSchema has optional database arg', () => {
+  test('getDatabaseSchema has optional catalog and schema args', () => {
     expect(queryFields).toHaveProperty('getDatabaseSchema');
 
-    // Recherche de l'argument database
-    const dbArg = queryFields.getDatabaseSchema.args.find(
-      (a) => a.name === 'database'
-    );
-    expect(dbArg).toBeDefined();
-
+    // Recherche de l'argument catalog
+    const catalogArg = queryFields.getDatabaseSchema.args.find((a) => a.name === 'catalog');
+    expect(catalogArg).toBeDefined();
     // Argument optionnel — pas de contrainte NonNull
-    expect(isNonNullType(dbArg!.type)).toBe(false);
+    expect(isNonNullType(catalogArg!.type)).toBe(false);
+
+    // Recherche de l'argument schema (nouveau, multi-schéma par catalogue)
+    const schemaArg = queryFields.getDatabaseSchema.args.find((a) => a.name === 'schema');
+    expect(schemaArg).toBeDefined();
+    // Argument optionnel — schéma par défaut du catalogue utilisé quand absent
+    expect(isNonNullType(schemaArg!.type)).toBe(false);
   });
 
   /**
-   * Verification that getSharedDimensions requires a non-null databases list.
+   * Verification that getSharedDimensions requires a non-null catalogs list and
+   * accepts an optional aligned schemas list.
    */
-  test('getSharedDimensions has required databases list arg', () => {
+  test('getSharedDimensions has required catalogs and optional schemas args', () => {
     expect(queryFields).toHaveProperty('getSharedDimensions');
 
-    // Recherche de l'argument databases
-    const dbsArg = queryFields.getSharedDimensions.args.find(
-      (a) => a.name === 'databases'
-    );
-    expect(dbsArg).toBeDefined();
+    // Argument catalogs obligatoire (liste non-null)
+    const catalogsArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'catalogs');
+    expect(catalogsArg).toBeDefined();
+    expect(isNonNullType(catalogsArg!.type)).toBe(true);
 
-    // Argument obligatoire — contrainte NonNull
-    expect(isNonNullType(dbsArg!.type)).toBe(true);
+    // Argument schemas optionnel (aligné par index sur catalogs)
+    const schemasArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'schemas');
+    expect(schemasArg).toBeDefined();
+    expect(isNonNullType(schemasArg!.type)).toBe(false);
   });
 });

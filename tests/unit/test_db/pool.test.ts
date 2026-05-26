@@ -70,6 +70,8 @@ interface DuckDBPoolInstance {
   instancePromise: Promise<MockDuckInstance> | null;
   initializeInstance: () => Promise<MockDuckInstance>;
   reload: () => Promise<void>;
+  reloadOne: (catalogId: string) => Promise<void>;
+  discoverCatalogSchemas: () => Promise<Record<string, string[]>>;
   acquire: () => Promise<PoolEntry>;
   release: (conn: PoolEntry) => void;
   close: () => Promise<void>;
@@ -774,6 +776,105 @@ describe('DuckDBPool', () => {
       test('resolves to undefined', async () => {
         await expect(conn.exec('SET enable_progress_bar = false')).resolves.toBeUndefined();
       });
+    });
+  });
+
+  // ── Découverte SQL des schémas par catalogue ───────────────────────────────
+
+  describe('discoverCatalogSchemas', () => {
+    const makePool2Catalogs = (): DuckDBPoolInstance =>
+      new DuckDBPool({
+        catalogs: [
+          {
+            alias: 'main',
+            path: '/abs/main.ducklake',
+            dataPath: '/abs/data/main/',
+            readOnly: true,
+          },
+          {
+            alias: 'analytics',
+            path: '/abs/analytics.ducklake',
+            dataPath: '/abs/data/analytics/',
+            readOnly: true,
+          },
+        ],
+        maxConnections: 3,
+        acquireTimeout: 500,
+        retryDelay: 20,
+      });
+
+    test('queries information_schema.schemata and filters out engine internals', async () => {
+      const pool = makePool2Catalogs();
+      mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
+        { catalog_name: 'main', schema_name: 'main' },
+        { catalog_name: 'main', schema_name: 'staging' },
+        { catalog_name: 'analytics', schema_name: 'main' },
+      ]);
+
+      const result = await pool.discoverCatalogSchemas();
+
+      // La requête SQL doit cibler information_schema.schemata et exclure les schémas internes
+      const sqlCalls = mockDuckConn.run.mock.calls.map(([sql]) => sql as string);
+      const discoverySql = sqlCalls.find((s) => s.includes('information_schema.schemata'));
+      expect(discoverySql).toBeDefined();
+      expect(discoverySql).toContain("'information_schema'");
+      expect(discoverySql).toContain("'pg_catalog'");
+
+      expect(result).toEqual({
+        main: ['main', 'staging'],
+        analytics: ['main'],
+      });
+    });
+
+    test('returns an empty array for catalogs not present in the result', async () => {
+      const pool = makePool2Catalogs();
+      mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
+        { catalog_name: 'main', schema_name: 'main' },
+        // analytics absent → tableau vide
+      ]);
+
+      const result = await pool.discoverCatalogSchemas();
+
+      expect(result.main).toEqual(['main']);
+      expect(result.analytics).toEqual([]);
+    });
+
+    test('ignores rows whose catalog_name is not in the attached list', async () => {
+      const pool = makePool2Catalogs();
+      mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
+        { catalog_name: 'main', schema_name: 'main' },
+        { catalog_name: 'unattached', schema_name: 'foo' }, // pas dans this.catalogs
+      ]);
+
+      const result = await pool.discoverCatalogSchemas();
+
+      expect(result).not.toHaveProperty('unattached');
+      expect(Object.keys(result).sort()).toEqual(['analytics', 'main']);
+    });
+
+    test('deduplicates schemas reported multiple times by the engine', async () => {
+      const pool = makePool2Catalogs();
+      mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
+        { catalog_name: 'main', schema_name: 'main' },
+        { catalog_name: 'main', schema_name: 'main' }, // doublon
+        { catalog_name: 'main', schema_name: 'staging' },
+        { catalog_name: 'analytics', schema_name: 'main' },
+      ]);
+
+      const result = await pool.discoverCatalogSchemas();
+      expect(result.main).toEqual(['main', 'staging']);
+    });
+
+    test('skips rows with null catalog_name or schema_name', async () => {
+      const pool = makePool2Catalogs();
+      mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
+        { catalog_name: 'main', schema_name: 'main' },
+        { catalog_name: null, schema_name: 'orphan' },
+        { catalog_name: 'main', schema_name: null },
+      ]);
+
+      const result = await pool.discoverCatalogSchemas();
+      expect(result.main).toEqual(['main']);
     });
   });
 });

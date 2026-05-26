@@ -62,15 +62,17 @@ class FactLoader extends FactQueryLoader {
   /**
    * Creates a FactLoader bound to a specific database.
    *
-   * @param databaseId - Catalog alias to query; null uses the default database.
+   * @param catalogId - Catalog alias to query; null uses the default catalog.
+   * @param schema - DuckLake schema within the catalog; null uses the catalog default.
    */
-  constructor(databaseId: string | null = null) {
+  constructor(catalogId: string | null = null, schema: string | null = null) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'facts',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
-      databaseId,
+      catalogId,
+      schema,
     });
   }
 
@@ -184,11 +186,12 @@ class FactLoader extends FactQueryLoader {
 /**
  * Creates a DataLoader for fact table queries in default format.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by FactQueryParams, returning FactQueryResult.
  */
-const createFactLoader = (databaseId: string | null = null) => {
-  const loader = new FactLoader(databaseId);
+const createFactLoader = (catalogId: string | null = null, schema: string | null = null) => {
+  const loader = new FactLoader(catalogId, schema);
   return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
     loader.loadFacts(connection, params),
   );
@@ -198,11 +201,15 @@ const createFactLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for fact table queries with row count included.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader returning paginated fact results with total count.
  */
-const createFactWithCountLoader = (databaseId: string | null = null) => {
-  const loader = new FactLoader(databaseId);
+const createFactWithCountLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new FactLoader(catalogId, schema);
   return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
     loader.loadFacts(connection, { ...params, includeCount: true }),
   );
@@ -212,11 +219,15 @@ const createFactWithCountLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for fact table queries in D3 metadata format with count.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader returning D3-formatted facts with column metadata and count.
  */
-const createFactWithMetadataLoader = (databaseId: string | null = null) => {
-  const loader = new FactLoader(databaseId);
+const createFactWithMetadataLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new FactLoader(catalogId, schema);
   return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
     loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true }),
   );
