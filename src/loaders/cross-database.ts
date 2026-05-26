@@ -216,16 +216,6 @@ class CrossDatabaseLoader extends BaseQueryLoader {
       this.getCategoricalMap(connection, catalogB, schemaB, joinFields),
     ]);
 
-    // Cohérence : un champ doit être catégoriel des deux côtés ou d'aucun
-    joinFields.forEach((f) => {
-      if (Boolean(catMapA[f]) !== Boolean(catMapB[f])) {
-        throw new Error(
-          `Join field '${f}' is categorical in only one dataset; cannot compare ` +
-            `'${catalogA}.${schemaA}' with '${catalogB}.${schemaB}' on it.`,
-        );
-      }
-    });
-
     const selectA = this.buildSideSelect(catalogA, schemaA, 'da', joinFields, catMapA);
     const selectB = this.buildSideSelect(catalogB, schemaB, 'db', joinFields, catMapB);
 
@@ -297,7 +287,6 @@ class CrossDatabaseLoader extends BaseQueryLoader {
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Parameters defining datasets, groupBy, aggregation, and pagination.
    * @returns Paginated comparison result with aggregated delta values.
-   * @throws {Error} When groupBy is categorical on one side only.
    */
   async compareAggregatedFacts(
     connection: DuckDBConnection,
@@ -316,17 +305,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
       this.getCategoricalMap(connection, catalogA, schemaA, [groupBy]),
       this.getCategoricalMap(connection, catalogB, schemaB, [groupBy]),
     ]);
-    if (Boolean(catMapA[groupBy]) !== Boolean(catMapB[groupBy])) {
-      throw new Error(
-        `groupBy field '${groupBy}' is categorical in only one dataset; cannot compare ` +
-          `'${catalogA}.${schemaA}' with '${catalogB}.${schemaB}' on it.`,
-      );
-    }
-    const isCategorical = Boolean(catMapA[groupBy]);
-
-    // CTE d'agrégation d'un côté : clé = label (catégoriel) ou valeur brute (continu)
-    const aggSide = (catalog: string, schema: string): string =>
-      isCategorical
+    // CTE d'agrégation per-side : label si catégoriel dans ce schéma, valeur brute sinon
+    const aggSide = (catalog: string, schema: string, isCat: boolean): string =>
+      isCat
         ? `SELECT d.label AS key, ${aggFn}(f.value) AS value
            FROM "${catalog}".${schema}.fact_table f
            JOIN "${catalog}".${schema}.dim_${groupBy} d ON f.${groupBy} = d.value
@@ -336,8 +317,8 @@ class CrossDatabaseLoader extends BaseQueryLoader {
            GROUP BY ${groupBy}`;
 
     const query = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
-                 agg_b AS (${aggSide(catalogB, schemaB)})
+            WITH agg_a AS (${aggSide(catalogA, schemaA, Boolean(catMapA[groupBy]))}),
+                 agg_b AS (${aggSide(catalogB, schemaB, Boolean(catMapB[groupBy]))})
             SELECT
                 a.key,
                 a.value AS valueA,
@@ -353,8 +334,8 @@ class CrossDatabaseLoader extends BaseQueryLoader {
 
     // Comptage total des clés communes pour la pagination
     const countQuery = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
-                 agg_b AS (${aggSide(catalogB, schemaB)})
+            WITH agg_a AS (${aggSide(catalogA, schemaA, Boolean(catMapA[groupBy]))}),
+                 agg_b AS (${aggSide(catalogB, schemaB, Boolean(catMapB[groupBy]))})
             SELECT COUNT(*) AS total FROM agg_a a JOIN agg_b b ON a.key = b.key
         `;
 

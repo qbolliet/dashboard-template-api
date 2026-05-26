@@ -342,23 +342,34 @@ describe('CrossDatabaseLoader', () => {
       expect(mainQuery).toContain('"db_2023".schema_b.fact_table');
     });
 
-    test("lève une erreur si le champ est catégoriel d'un seul côté", async () => {
+    test('gère le cas asymétrique : catégoriel côté A, brut côté B', async () => {
       mockConnection.all
         .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // catMapA — catégoriel
-        .mockResolvedValueOnce([]); // catMapB — non catégoriel
+        .mockResolvedValueOnce([]) // catMapB — non catégoriel
+        .mockResolvedValueOnce([
+          { key: 'France', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
+        ])
+        .mockResolvedValueOnce([{ total: 1 }]);
 
       const loader = createCompareFacts();
-      const result = await loader.load({
+      const result = (await loader.load({
         catalogA: 'db_2023',
         catalogB: 'db_2024',
         joinFields: ['country'],
         limit: 10,
         offset: 0,
         sort: [],
-      } satisfies CompareFactsParams);
+      } satisfies CompareFactsParams)) as { data: CompareResult[] } | null;
 
-      // createLoader intercepte l'erreur et retourne null
-      expect(result).toBeNull();
+      // La requête réussit malgré l'asymétrie catégorielle
+      expect(result).not.toBeNull();
+      expect(result!.data[0]).toHaveProperty('key', 'France');
+
+      const mainQuery = mockConnection.all.mock.calls[2][0] as string;
+      // Côté A : dim join (champ catégoriel)
+      expect(mainQuery).toContain('JOIN "db_2023".main.dim_country');
+      // Côté B : valeur brute, pas de dim join
+      expect(mainQuery).not.toContain('JOIN "db_2024".main.dim_country');
     });
   });
 
