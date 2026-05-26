@@ -1,16 +1,18 @@
 # Requêtes de test pour l'API GraphQL – DuckLake (multi-catalog)
 # À utiliser dans Apollo Studio (https://studio.apollographql.com)
 #
-# ARCHITECTURE DUCKLAKE:
+# ARCHITECTURE DUCKLAKE (multi-catalogue, multi-schéma):
 # - Chaque catalogue DuckLake (.ducklake) est attaché à un DuckDB partagé.
-# - Les requêtes sont routées via l'alias du catalogue (ex: default.main.fact_table).
+# - Un catalogue peut contenir un OU PLUSIEURS schémas (défaut: "main").
+# - Les requêtes sont routées via "catalogue.schéma.table" (ex: default.main.fact_table).
 #
-# CONFIGURATION MULTI-DATABASE:
-# - HTTP Header: X-Database-ID: [database_name]
-# - GraphQL Parameter: database: "[database_name]"
+# CONFIGURATION MULTI-CATALOGUE / MULTI-SCHÉMA:
+# - HTTP Header: X-Catalog-ID: [catalog_name]   (+ X-Schema-ID: [schema_name], optionnel)
+# - Paramètres GraphQL: catalog: "[catalog_name]", schema: "[schema_name]" (optionnel)
+# - schema omis => schéma par défaut du catalogue (config SCHEMA, "main").
 # - Catalogues disponibles: default, macroeconomics, public_finance
 #
-# Priorité: GraphQL parameter > HTTP header > default database
+# Priorité: paramètre GraphQL > en-tête HTTP > catalogue/schéma par défaut
 #
 # SCHÉMA DES CATALOGUES:
 #
@@ -43,7 +45,7 @@ query TestGetMetadata {
 
 # Test 1.1b: Récupérer les métadonnées avec catalogue spécifique
 query TestGetMetadataSpecificDB {
-  getMetaData(name: "country", database: "macroeconomics") {
+  getMetaData(name: "country", catalog: "macroeconomics") {
     name
     label
     python_type
@@ -74,17 +76,17 @@ query TestMultipleMetadata {
 # Test 1.2b: Métadonnées depuis des catalogues différents
 # Chaque catalogue expose ses propres champs catégoriels distinctifs
 query TestMultipleMetadataCrossDB {
-  defaultKind: getMetaData(name: "kind", database: "default") {
+  defaultKind: getMetaData(name: "kind", catalog: "default") {
     name
     label
     is_categorical
   }
-  macroeconomicsScenario: getMetaData(name: "scenario", database: "macroeconomics") {
+  macroeconomicsScenario: getMetaData(name: "scenario", catalog: "macroeconomics") {
     name
     label
     is_categorical
   }
-  public_financeSector: getMetaData(name: "sector", database: "public_finance") {
+  public_financeSector: getMetaData(name: "sector", catalog: "public_finance") {
     name
     sql_type
     is_categorical
@@ -105,7 +107,7 @@ query TestGetDimension {
 
 # Test 2.1b: Récupérer une table de dimension depuis le catalogue macroeconomics
 query TestGetDimensionMacroeconomics {
-  getDimensionTable(name: "country", database: "macroeconomics") {
+  getDimensionTable(name: "country", catalog: "macroeconomics") {
     value
     label
   }
@@ -131,17 +133,17 @@ query TestMultipleDimensions {
 # Attention: chaque catalogue a ses propres dimensions catégorielles
 query TestMultipleDimensionsCrossDB {
   # default: indicator, country, kind, model, training, horizon
-  defaultCountries: getDimensionTable(name: "country", database: "default") {
+  defaultCountries: getDimensionTable(name: "country", catalog: "default") {
     value
     label
   }
   # macroeconomics: indicator, country, frequency, source, scenario, year
-  macroeconomicsScenarios: getDimensionTable(name: "scenario", database: "macroeconomics") {
+  macroeconomicsScenarios: getDimensionTable(name: "scenario", catalog: "macroeconomics") {
     value
     label
   }
   # public_finance: indicator, country, sector, category, classification, year
-  public_financeSectors: getDimensionTable(name: "sector", database: "public_finance") {
+  public_financeSectors: getDimensionTable(name: "sector", catalog: "public_finance") {
     value
     label
   }
@@ -166,7 +168,7 @@ query TestFactTableSimple {
 
 # Test 3.1b: Requête simple depuis le catalogue macroeconomics
 query TestFactTableMacroeconomics {
-  getFactTable(limit: 10, offset: 0, database: "macroeconomics") {
+  getFactTable(limit: 10, offset: 0, catalog: "macroeconomics") {
     data {
       value
     }
@@ -179,7 +181,7 @@ query TestFactTableMacroeconomics {
 
 # Test 3.1c: Requête simple depuis le catalogue public_finance
 query TestFactTablePublicFinance {
-  getFactTable(limit: 10, offset: 0, database: "public_finance") {
+  getFactTable(limit: 10, offset: 0, catalog: "public_finance") {
     data {
       value
     }
@@ -231,7 +233,7 @@ query TestFactTableStructuredFiltersMacro {
     ]
     limit: 10
     offset: 0
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     data {
       value
@@ -368,7 +370,7 @@ query TestAggregationFunctionsCrossDB {
   macroByScenario: getAggregatedFacts(
     groupBy: "scenario"
     aggregation: AVG
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     key
     aggregatedValue
@@ -376,7 +378,7 @@ query TestAggregationFunctionsCrossDB {
   financeBySector: getAggregatedFacts(
     groupBy: "sector"
     aggregation: SUM
-    database: "public_finance"
+    catalog: "public_finance"
   ) {
     key
     aggregatedValue
@@ -472,7 +474,7 @@ query TestAggregatedFactsWithMetadataMacro {
     aggregation: AVG
     limit: 10
     offset: 0
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     data {
       key
@@ -527,7 +529,7 @@ query TestSelectOptionsMacro {
   getSelectOptions(
     fieldName: "scenario"
     limit: 10
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     value
     label
@@ -738,10 +740,10 @@ query TestWithVariables(
 # 13. TESTS MULTI-DATABASE AVEC HTTP HEADERS
 # ============================================
 
-# Test 13.1: Utilisation du header HTTP X-Database-ID
+# Test 13.1: Utilisation du header HTTP X-Catalog-ID
 # Dans Apollo Studio, ajouter dans Headers:
 # {
-#   "X-Database-ID": "macroeconomics"
+#   "X-Catalog-ID": "macroeconomics"
 # }
 query TestWithHTTPHeader {
   getMetaData(name: "country") {
@@ -756,15 +758,15 @@ query TestWithHTTPHeader {
 }
 
 # Test 13.2: Override du header avec paramètre GraphQL
-# Header: X-Database-ID: macroeconomics
-# Paramètre GraphQL: database: "public_finance"
+# Header: X-Catalog-ID: macroeconomics
+# Paramètre GraphQL: catalog: "public_finance"
 # Le paramètre GraphQL a la priorité sur le header
 query TestParameterOverridesHeader {
   fromHeader: getMetaData(name: "country") {
     name
     label
   }
-  fromParameter: getMetaData(name: "country", database: "public_finance") {
+  fromParameter: getMetaData(name: "country", catalog: "public_finance") {
     name
     label
   }
@@ -773,14 +775,14 @@ query TestParameterOverridesHeader {
 # Test 13.3: Requête complexe multi-catalogue DuckLake
 query TestComplexMultiDB {
   # Métadonnées depuis default
-  defaultMeta: getMetaData(name: "kind", database: "default") {
+  defaultMeta: getMetaData(name: "kind", catalog: "default") {
     name
     label
     is_categorical
   }
 
   # Dimensions depuis macroeconomics (champs propres à ce catalogue)
-  macroeconomicsDims: getDimensionTable(name: "scenario", database: "macroeconomics") {
+  macroeconomicsDims: getDimensionTable(name: "scenario", catalog: "macroeconomics") {
     value
     label
   }
@@ -789,7 +791,7 @@ query TestComplexMultiDB {
   public_financeFacts: getFactTable(
     limit: 5
     offset: 0
-    database: "public_finance"
+    catalog: "public_finance"
   ) {
     data {
       value
@@ -801,7 +803,7 @@ query TestComplexMultiDB {
   macroeconomicsOptions: getSelectOptions(
     fieldName: "source"
     limit: 5
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     value
     label
@@ -814,7 +816,7 @@ query TestComplexMultiDB {
 
 # Test 14.1: Catalogue invalide (devrait lever une erreur)
 query TestInvalidDatabase {
-  getMetaData(name: "country", database: "nonexistent") {
+  getMetaData(name: "country", catalog: "nonexistent") {
     name
     label
   }
@@ -822,7 +824,7 @@ query TestInvalidDatabase {
 
 # Test 14.2: Catalogue vide (doit utiliser le catalogue du contexte ou default)
 query TestEmptyDatabase {
-  getMetaData(name: "country", database: "") {
+  getMetaData(name: "country", catalog: "") {
     name
     label
   }
@@ -837,12 +839,12 @@ query TestEmptyDatabase {
 # 1. HEADER HTTP:
 #    Dans l'onglet "Headers" d'Apollo Studio, ajouter:
 #    {
-#      "X-Database-ID": "macroeconomics"
+#      "X-Catalog-ID": "macroeconomics"
 #    }
 #
 # 2. PARAMÈTRE GRAPHQL:
 #    Utiliser le paramètre database dans vos requêtes:
-#    getMetaData(name: "country", database: "public_finance")
+#    getMetaData(name: "country", catalog: "public_finance")
 #
 # 3. PRIORITÉ:
 #    GraphQL parameter > HTTP header > default database
@@ -862,9 +864,9 @@ query TestEmptyDatabase {
 #    précédent qui revenait silencieusement au default).
 #
 # 7. EXEMPLES DE HEADERS:
-#    Valide:   { "X-Database-ID": "macroeconomics" }
-#    Invalide: { "X-Database-ID": "unknown" }  -> erreur levée
-#    Vide:     { "X-Database-ID": "" }         -> utilise default
+#    Valide:   { "X-Catalog-ID": "macroeconomics" }
+#    Invalide: { "X-Catalog-ID": "unknown" }  -> erreur levée
+#    Vide:     { "X-Catalog-ID": "" }         -> utilise default
 
 # ============================================
 # 16. TESTS CATALOGUE (getDatabases, getDatabaseSchema, getSharedDimensions)
@@ -896,7 +898,7 @@ query TestGetDatabasesLight {
 # Test 16.2: Schéma complet d'un catalogue spécifique
 # Équivalent de getDatabases mais pour un seul catalogue
 query TestGetDatabaseSchema {
-  getDatabaseSchema(database: "macroeconomics") {
+  getDatabaseSchema(catalog: "macroeconomics") {
     name
     label
     python_type
@@ -916,17 +918,17 @@ query TestGetDatabaseSchemaDefault {
 
 # Test 16.2c: Schémas de plusieurs catalogues en parallèle
 query TestGetDatabaseSchemaMultiple {
-  defaultSchema: getDatabaseSchema(database: "default") {
+  defaultSchema: getDatabaseSchema(catalog: "default") {
     name
     label
     is_categorical
   }
-  macroSchema: getDatabaseSchema(database: "macroeconomics") {
+  macroSchema: getDatabaseSchema(catalog: "macroeconomics") {
     name
     label
     is_categorical
   }
-  financeSchema: getDatabaseSchema(database: "public_finance") {
+  financeSchema: getDatabaseSchema(catalog: "public_finance") {
     name
     label
     is_categorical
@@ -936,26 +938,26 @@ query TestGetDatabaseSchemaMultiple {
 # Test 16.3: Dimensions communes à deux catalogues
 # Résultat attendu: ["indicator", "country"]
 query TestGetSharedDimensions {
-  getSharedDimensions(databases: ["default", "macroeconomics"])
+  getSharedDimensions(catalogs: ["default", "macroeconomics"])
 }
 
 # Test 16.3b: Dimensions communes aux trois catalogues
 # Résultat attendu: ["indicator", "country"]
 query TestGetSharedDimensionsAll {
-  getSharedDimensions(databases: ["default", "macroeconomics", "public_finance"])
+  getSharedDimensions(catalogs: ["default", "macroeconomics", "public_finance"])
 }
 
 # Test 16.3c: Dimensions communes puis récupération des options disponibles
 # Utile pour construire un filtre partagé cross-catalogue dans l'UI
 query TestSharedDimensionsWithOptions {
   sharedDimensions: getSharedDimensions(
-    databases: ["default", "macroeconomics"]
+    catalogs: ["default", "macroeconomics"]
   )
-  countryOptions: getDimensionTable(name: "country", database: "default") {
+  countryOptions: getDimensionTable(name: "country", catalog: "default") {
     value
     label
   }
-  indicatorOptions: getDimensionTable(name: "indicator", database: "default") {
+  indicatorOptions: getDimensionTable(name: "indicator", catalog: "default") {
     value
     label
   }
@@ -977,7 +979,7 @@ query TestSharedDimensionsWithOptions {
 query TestCrossDatabaseSelectOptions {
   crossDatabaseSelectOptions(
     fieldName: "country"
-    databases: ["default", "macroeconomics"]
+    catalogs: ["default", "macroeconomics"]
     limit: 50
   ) {
     value
@@ -989,7 +991,7 @@ query TestCrossDatabaseSelectOptions {
 query TestCrossDatabaseSelectOptionsAll {
   crossDatabaseSelectOptions(
     fieldName: "country"
-    databases: ["default", "macroeconomics", "public_finance"]
+    catalogs: ["default", "macroeconomics", "public_finance"]
     limit: 50
   ) {
     value
@@ -1001,7 +1003,7 @@ query TestCrossDatabaseSelectOptionsAll {
 query TestCrossDatabaseSelectOptionsIndicator {
   crossDatabaseSelectOptions(
     fieldName: "indicator"
-    databases: ["default", "macroeconomics"]
+    catalogs: ["default", "macroeconomics"]
     limit: 50
   ) {
     value
@@ -1014,8 +1016,8 @@ query TestCrossDatabaseSelectOptionsIndicator {
 # → Pour chaque ligne de default, trouve la ligne correspondante dans macroeconomics
 query TestCompareFacts {
   compareFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     joinFields: ["country"]
     limit: 10
     offset: 0
@@ -1037,8 +1039,8 @@ query TestCompareFacts {
 # Test 17.2b: Comparaison avec tri par delta décroissant
 query TestCompareFactsSorted {
   compareFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     joinFields: ["country"]
     limit: 20
     offset: 0
@@ -1062,8 +1064,8 @@ query TestCompareFactsSorted {
 # Joint sur (country, indicator) – clé composite séparée par '::'
 query TestCompareFactsMultiJoin {
   compareFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     joinFields: ["country", "indicator"]
     limit: 10
     offset: 0
@@ -1086,8 +1088,8 @@ query TestCompareFactsMultiJoin {
 # Agrège (SUM) les valeurs par country dans chaque catalogue puis compare
 query TestCompareAggregatedFacts {
   compareAggregatedFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     groupBy: "country"
     aggregation: SUM
     limit: 10
@@ -1110,8 +1112,8 @@ query TestCompareAggregatedFacts {
 # Test 17.3b: Comparaison par indicator avec agrégation AVG
 query TestCompareAggregatedFactsByIndicator {
   compareAggregatedFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     groupBy: "indicator"
     aggregation: AVG
     limit: 10
@@ -1134,8 +1136,8 @@ query TestCompareAggregatedFactsByIndicator {
 # Test 17.3c: Comparaison entre macroeconomics et public_finance
 query TestCompareAggregatedFactsOtherPair {
   compareAggregatedFacts(
-    databaseA: "macroeconomics"
-    databaseB: "public_finance"
+    catalogA: "macroeconomics"
+    catalogB: "public_finance"
     groupBy: "country"
     aggregation: AVG
     limit: 10
@@ -1159,8 +1161,8 @@ query TestCompareAggregatedFactsOtherPair {
 # Pour tester sans ALLOW_CROSS_DATABASE_QUERIES=true
 query TestCrossDatabaseDisabled {
   compareFacts(
-    databaseA: "default"
-    databaseB: "macroeconomics"
+    catalogA: "default"
+    catalogB: "macroeconomics"
     joinFields: ["country"]
     limit: 5
   ) {
@@ -1233,7 +1235,7 @@ query TestFactTableFormatArraysMacro {
     limit: 5
     offset: 0
     format: ARRAYS
-    database: "macroeconomics"
+    catalog: "macroeconomics"
   ) {
     columns
     data
@@ -1320,7 +1322,7 @@ query TestGetFieldsCombined {
 
 # Test 19.8: Sur un catalogue spécifique
 query TestGetFieldsOnDatabase {
-  getFields(database: "macroeconomics", isCategorical: true) {
+  getFields(catalog: "macroeconomics", isCategorical: true) {
     value
     label
   }
@@ -1344,8 +1346,196 @@ query TestGetFieldsMultiAlias {
 
 # Test 19.10: Catalogue inconnu — doit lever une erreur
 query TestGetFieldsInvalidDatabase {
-  getFields(database: "nonexistent_xyz") {
+  getFields(catalog: "nonexistent_xyz") {
     value
     label
   }
 }
+
+# ============================================
+# 20. TESTS MULTI-SCHÉMA (argument schema)
+# ============================================
+#
+# Un catalogue peut contenir plusieurs schémas. L'argument `schema` choisit le
+# schéma au sein du catalogue choisi par `catalog`. Omis => schéma par défaut
+# du catalogue (config SCHEMA, "main"). Les deux arguments sont disponibles sur
+# getMetaData, getDimensionTable, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
+# getSelectOptions, getGroupedSelectOptions, getDatabaseSchema et getFields.
+
+# Test 20.1: Métadonnées d'un schéma nommé au sein d'un catalogue
+query TestMetadataNamedSchema {
+  getMetaData(name: "country", catalog: "default", schema: "main") {
+    name
+    label
+    is_categorical
+  }
+}
+
+# Test 20.2: Table des faits depuis un schéma précis
+query TestFactTableNamedSchema {
+  getFactTable(limit: 10, offset: 0, catalog: "default", schema: "main") {
+    data {
+      value
+    }
+    total
+  }
+}
+
+# Test 20.3: Schéma (liste des champs) d'un schéma précis d'un catalogue
+query TestGetDatabaseSchemaNamedSchema {
+  getDatabaseSchema(catalog: "default", schema: "main") {
+    name
+    label
+    is_categorical
+  }
+}
+
+# Test 20.4: Comparaison de DEUX SCHÉMAS d'un MÊME catalogue (cross-schéma)
+# Requiert ALLOW_CROSS_CATALOG_QUERIES=true. catalogA === catalogB, schémas différents.
+# Les champs catégoriels sont résolus en labels via dim_* avant la jointure.
+query TestCompareFactsSameCatalogTwoSchemas {
+  compareFacts(
+    catalogA: "default"
+    schemaA: "main"
+    catalogB: "default"
+    schemaB: "predictions"
+    joinFields: ["country"]
+    limit: 10
+    offset: 0
+  ) {
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+  }
+}
+
+# Test 20.5: Agrégation cross-schéma même catalogue (jointure sur labels)
+query TestCompareAggregatedSameCatalogTwoSchemas {
+  compareAggregatedFacts(
+    catalogA: "default"
+    schemaA: "main"
+    catalogB: "default"
+    schemaB: "predictions"
+    groupBy: "country"
+    aggregation: SUM
+    limit: 10
+    offset: 0
+  ) {
+    data {
+      key
+      valueA
+      valueB
+      delta
+      deltaPercent
+    }
+    total
+  }
+}
+
+# Test 20.6: Cross-catalogue avec schémas explicites par côté
+query TestCompareFactsCrossCatalogExplicitSchemas {
+  compareFacts(
+    catalogA: "default"
+    schemaA: "main"
+    catalogB: "macroeconomics"
+    schemaB: "main"
+    joinFields: ["country", "indicator"]
+    limit: 10
+    offset: 0
+  ) {
+    data {
+      key
+      valueA
+      valueB
+      delta
+    }
+    total
+  }
+}
+
+# Test 20.7: Options communes avec schémas alignés sur les catalogues
+query TestCrossDatabaseSelectOptionsWithSchemas {
+  crossDatabaseSelectOptions(
+    fieldName: "country"
+    catalogs: ["default", "macroeconomics"]
+    schemas: ["main", "main"]
+    limit: 50
+  ) {
+    value
+    label
+  }
+}
+
+# ============================================
+# 20bis. MULTI-SCHÉMA (ciblage explicite d'un schéma au sein d'un catalogue)
+# ============================================
+#
+# Un catalogue peut héberger plusieurs schémas DuckLake (ex: main, staging).
+# L'argument `schema` permet de cibler explicitement un schéma autre que le
+# schéma par défaut (premier élément de SCHEMAS dans la config).
+# La validation passe par l'allow-list `databaseManager.isValidSchema()` :
+# un schéma absent de la liste (config + découverte SQL) est rejeté.
+
+# Test 20bis.1: Introspection — liste des schémas exposés par chaque catalogue
+query TestIntrospectionSchemas {
+  getDatabases {
+    id
+    schemas
+    dimensionNames
+  }
+}
+
+# Test 20bis.2: Métadonnées d'un schéma non-défaut
+query TestGetDatabaseSchemaWithSchema {
+  getDatabaseSchema(catalog: "default", schema: "main") {
+    name
+    label
+    is_categorical
+    sql_type
+  }
+}
+
+# Test 20bis.3: Table des faits dans un schéma explicite
+query TestFactTableWithSchema {
+  getFactTable(catalog: "default", schema: "main", limit: 5, offset: 0) {
+    indicator
+    country
+    value
+  }
+}
+
+# Test 20bis.4: Dimensions partagées entre deux schémas alignés par index
+query TestSharedDimensionsCrossSchema {
+  getSharedDimensions(
+    catalogs: ["default", "macroeconomics"],
+    schemas: ["main", "main"]
+  )
+}
+
+# Test 20bis.5: Schéma invalide — doit retourner une GraphQLError
+# explicite ("Schema '…' is not available for catalog '…'")
+query TestRejectsUnknownSchema {
+  getDatabaseSchema(catalog: "default", schema: "no_such_schema") {
+    name
+  }
+}
+
+# ============================================
+# 21. RECHARGEMENT / INVALIDATION PAR CATALOGUE (endpoints REST admin)
+# ============================================
+#
+# Ces opérations ne sont PAS du GraphQL : ce sont des endpoints REST admin
+# protégés par l'en-tête x-admin-key (cf. docs deployment/data-refresh.md).
+#
+#   # Recharger UN seul catalogue (DETACH + ATTACH ciblé sur l'instance vivante)
+#   curl -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+#     http://localhost:4000/api/catalog/reload/macroeconomics
+#
+#   # Puis invalider le cache de CE catalogue (tous ses schémas)
+#   curl -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+#     http://localhost:4000/api/cache/invalidate/macroeconomics

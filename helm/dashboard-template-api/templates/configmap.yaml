@@ -12,3 +12,25 @@ data:
   {{ $key }}: {{ $value | quote }}
   {{- end }}
   {{- end }}
+  {{- /*
+  Per-catalog env vars: each entry under .Values.catalogs produces a block of
+  <NAME_UPPER>_* variables (CATALOG_TYPE / CATALOG_PATH / DATA_PATH / READ_ONLY /
+  SCHEMAS, plus PG_HOST/PORT/DATABASE when type=postgres).
+  */}}
+  {{- range $name, $catalog := .Values.catalogs }}
+  {{- $upper := upper $name }}
+  {{ $upper }}_CATALOG_TYPE: {{ default "file" $catalog.type | quote }}
+  {{- if $catalog.path }}
+  {{ $upper }}_CATALOG_PATH: {{ $catalog.path | quote }}
+  {{- end }}
+  {{ $upper }}_DATA_PATH: {{ required (printf "catalogs.%s.dataPath is required" $name) $catalog.dataPath | quote }}
+  {{ $upper }}_READ_ONLY: {{ default true $catalog.readOnly | quote }}
+  {{ $upper }}_SCHEMAS: {{ default "[\"main\"]" $catalog.schemas | quote }}
+  {{- if eq (default "file" $catalog.type) "postgres" }}
+  {{- with $catalog.postgres }}
+  {{ $upper }}_PG_HOST: {{ .host | quote }}
+  {{ $upper }}_PG_PORT: {{ default 5432 .port | quote }}
+  {{ $upper }}_PG_DATABASE: {{ .database | quote }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
