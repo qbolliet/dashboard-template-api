@@ -9,36 +9,44 @@ import type { AggregationType } from './aggregated-facts.js';
 
 // ─── Interfaces des paramètres de requêtes cross-database ─────────────────────
 
-/** Parameters for comparing the fact table between two databases. */
+/** Parameters for comparing the fact table between two catalogs/schemas. */
 interface CompareFactsParams {
-  databaseA: string;
-  databaseB: string;
+  catalogA: string;
+  catalogB: string;
+  /** Schema within catalogA. Null/undefined uses the catalog's default schema. */
+  schemaA?: string | null;
+  /** Schema within catalogB. Null/undefined uses the catalog's default schema. */
+  schemaB?: string | null;
   joinFields: string[];
   limit: number;
   offset: number;
   sort?: SortItem[];
 }
 
-/** Parameters for comparing aggregated facts between two databases. */
+/** Parameters for comparing aggregated facts between two catalogs/schemas. */
 interface CompareAggregatedFactsParams {
-  databaseA: string;
-  databaseB: string;
+  catalogA: string;
+  catalogB: string;
+  schemaA?: string | null;
+  schemaB?: string | null;
   groupBy: string;
   aggregation?: AggregationType;
   limit: number;
   offset: number;
 }
 
-/** Parameters for cross-database select option intersection queries. */
+/** Parameters for cross-catalog select option intersection queries. */
 interface CrossDatabaseSelectOptionsParams {
   fieldName: string;
-  databases: string[];
+  catalogs: string[];
+  /** Schemas aligned by index with `catalogs`. Missing entries use the default. */
+  schemas?: (string | null)[];
   limit: number;
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Comparison row between two databases (delta and delta%). */
+/** Comparison row between two catalogs (delta and delta%). */
 interface ComparisonRow {
   key: string;
   valueA: number | null;
@@ -47,7 +55,7 @@ interface ComparisonRow {
   deltaPercent: number | null;
 }
 
-/** Paginated result of a cross-database comparison. */
+/** Paginated result of a cross-catalog comparison. */
 interface ComparisonResult {
   data: ComparisonRow[];
   total: number;
@@ -56,7 +64,7 @@ interface ComparisonResult {
   totalPages: number;
 }
 
-/** Select option from a cross-database query. */
+/** Select option from a cross-catalog query. */
 interface CrossDatabaseSelectOption {
   value: unknown;
   label?: unknown;
@@ -64,17 +72,25 @@ interface CrossDatabaseSelectOption {
 
 // Classe de chargement des requêtes cross-database
 /**
- * Loader for cross-database comparison queries.
+ * Loader for cross-catalog / cross-schema comparison queries.
  *
- * Compares fact and aggregated fact data between two catalogs, and
- * computes the intersection of select options across multiple catalogs.
+ * Compares fact and aggregated fact data between two datasets (catalog + schema),
+ * and computes the intersection of select options across multiple datasets.
+ *
+ * IMPORTANT — correctness: categorical columns in the fact table store an integer
+ * ID whose meaning is local to each catalog/schema (it depends on the order in
+ * which modalities were ingested). The same ID can therefore denote different
+ * modalities across datasets. All cross-dataset matching here resolves IDs to
+ * their human-readable labels via the dim_* tables BEFORE joining, never on the
+ * raw ID. Continuous (non-categorical) columns carry the same meaning across
+ * datasets and are matched directly.
  */
 class CrossDatabaseLoader extends BaseQueryLoader {
-  // Initialisation sans identifiant de base de données (requêtes cross-catalog)
+  // Initialisation sans identifiant de catalogue (requêtes cross-catalog)
   /**
-   * Creates a CrossDatabaseLoader with no specific database binding.
+   * Creates a CrossDatabaseLoader with no specific catalog binding.
    *
-   * Database identifiers are passed through the query params at load time.
+   * Catalog/schema identifiers are passed through the query params at load time.
    */
   constructor() {
     super({
@@ -82,45 +98,152 @@ class CrossDatabaseLoader extends BaseQueryLoader {
       cachePrefix: 'cross-database',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
-      databaseId: null,
+      catalogId: null,
     });
   }
 
-  // Méthode de comparaison des tables de faits entre deux bases de données
+  // Résolution du schéma d'un côté (explicite ou schéma par défaut du catalogue)
   /**
-   * Compares fact table rows between two databases via a JOIN on shared fields.
+   * Resolves the schema for one side, validating it as a SQL identifier.
    *
-   * Returns delta (B - A) and deltaPercent ((B - A) / A * 100) per row.
-   * Pagination metadata (total, hasNextPage, etc.) is included in the result.
+   * @param catalog - Catalog alias.
+   * @param schema - Explicit schema, or null/undefined for the catalog default.
+   * @returns Validated schema name.
+   */
+  private resolveSchema(catalog: string, schema?: string | null): string {
+    const resolved = schema || databaseManager.getDefaultSchema(catalog);
+    validateIdentifier(resolved, 'schema');
+    return resolved;
+  }
+
+  // Détermination des champs catégoriels via la table metadata d'un dataset
+  /**
+   * Builds a map fieldName → is_categorical for the given fields of a dataset.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Parameters defining the two databases, join fields, and pagination.
+   * @param catalog - Catalog alias.
+   * @param schema - Resolved schema name.
+   * @param fields - Field names to look up.
+   * @returns Record mapping each found field to its categorical flag.
+   */
+  private async getCategoricalMap(
+    connection: DuckDBConnection,
+    catalog: string,
+    schema: string,
+    fields: string[],
+  ): Promise<Record<string, boolean>> {
+    if (fields.length === 0) return {};
+    const placeholders = fields.map(() => '?').join(',');
+    const rows = await connection.all(
+      `SELECT name, is_categorical FROM "${catalog}".${schema}.metadata WHERE name IN (${placeholders})`,
+      fields,
+    );
+    const map: Record<string, boolean> = {};
+    rows.forEach((r) => {
+      map[String(r.name)] = Boolean(r.is_categorical);
+    });
+    return map;
+  }
+
+  // Construction du SELECT d'un côté : valeur mesurée + clés résolues en labels
+  /**
+   * Builds the per-side SELECT that exposes the measure plus one key column per
+   * join field — the dim label for categorical fields, the raw value otherwise.
+   *
+   * @param catalog - Catalog alias for this side.
+   * @param schema - Resolved schema for this side.
+   * @param dimPrefix - Alias prefix to disambiguate dim joins (e.g. 'da'/'db').
+   * @param joinFields - Fields participating in the join.
+   * @param catMap - Categorical flags for this side's fields.
+   * @returns A SQL SELECT statement (no trailing semicolon).
+   */
+  private buildSideSelect(
+    catalog: string,
+    schema: string,
+    dimPrefix: string,
+    joinFields: string[],
+    catMap: Record<string, boolean>,
+  ): string {
+    const dimJoins: string[] = [];
+    const keyCols: string[] = [];
+    for (const f of joinFields) {
+      if (catMap[f]) {
+        // Champ catégoriel : on joint la table de dimension et on expose le label
+        const d = `${dimPrefix}_${f}`;
+        dimJoins.push(`JOIN "${catalog}".${schema}.dim_${f} ${d} ON f.${f} = ${d}.value`);
+        keyCols.push(`${d}.label AS k_${f}`);
+      } else {
+        // Champ continu : même sens d'un dataset à l'autre, valeur brute exposée
+        keyCols.push(`f.${f} AS k_${f}`);
+      }
+    }
+    return (
+      `SELECT f.value AS value, ${keyCols.join(', ')} ` +
+      `FROM "${catalog}".${schema}.fact_table f ${dimJoins.join(' ')}`
+    );
+  }
+
+  // Méthode de comparaison des tables de faits entre deux datasets
+  /**
+   * Compares fact table rows between two datasets via a JOIN on shared fields.
+   *
+   * Categorical join fields are matched on their dim_* labels (never the raw ID);
+   * continuous fields are matched directly. Returns delta (B - A) and deltaPercent
+   * per row, with pagination metadata.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param params - Parameters defining the two datasets, join fields, and pagination.
    * @returns Paginated comparison result with delta values.
+   * @throws {Error} When a join field is categorical on one side only.
    */
   async compareFacts(
     connection: DuckDBConnection,
     params: CompareFactsParams,
   ): Promise<ComparisonResult> {
-    const { databaseA, databaseB, joinFields, limit, offset, sort = [] } = params;
+    const { catalogA, catalogB, joinFields, limit, offset, sort = [] } = params;
 
-    const dm = databaseManager as { getSchema: (id: string) => string };
-    const schemaA = dm.getSchema(databaseA);
-    const schemaB = dm.getSchema(databaseB);
+    const schemaA = this.resolveSchema(catalogA, params.schemaA);
+    const schemaB = this.resolveSchema(catalogB, params.schemaB);
 
     // Validation des identifiants de jointure pour éviter les injections SQL
     joinFields.forEach((f) => validateIdentifier(f, 'joinField'));
-    const joinCondition = joinFields.map((f) => `a.${f} = b.${f}`).join(' AND ');
+    // Validation des champs de tri (interpolés dans ORDER BY)
+    sort.forEach((s) => validateIdentifier(s.field, 'sortField'));
+
+    // Détermination des champs catégoriels de chaque côté
+    const [catMapA, catMapB] = await Promise.all([
+      this.getCategoricalMap(connection, catalogA, schemaA, joinFields),
+      this.getCategoricalMap(connection, catalogB, schemaB, joinFields),
+    ]);
+
+    // Cohérence : un champ doit être catégoriel des deux côtés ou d'aucun
+    joinFields.forEach((f) => {
+      if (Boolean(catMapA[f]) !== Boolean(catMapB[f])) {
+        throw new Error(
+          `Join field '${f}' is categorical in only one dataset; cannot compare ` +
+            `'${catalogA}.${schemaA}' with '${catalogB}.${schemaB}' on it.`,
+        );
+      }
+    });
+
+    const selectA = this.buildSideSelect(catalogA, schemaA, 'da', joinFields, catMapA);
+    const selectB = this.buildSideSelect(catalogB, schemaB, 'db', joinFields, catMapB);
+
+    // Condition de jointure a↔b sur les labels (catégoriels) / valeurs (continus)
+    const joinCondition = joinFields.map((f) => `a.k_${f} = b.k_${f}`).join(' AND ');
+
+    // Expression de la clé principale dans le résultat (labels résolus)
+    const keyExpr =
+      joinFields.length === 1
+        ? `a.k_${joinFields[0]}`
+        : `CONCAT(${joinFields.map((f) => `CAST(a.k_${f} AS VARCHAR)`).join(", '::', ")})`;
 
     const sortClause =
       sort.length > 0 ? `ORDER BY ${sort.map((s) => `${s.field} ${s.order}`).join(', ')}` : '';
 
-    // Expression de la clé principale dans le résultat
-    const keyExpr =
-      joinFields.length === 1
-        ? `a.${joinFields[0]}`
-        : `CONCAT(${joinFields.map((f) => `CAST(a.${f} AS VARCHAR)`).join(", '::', ")})`;
-
     const query = `
+            WITH a AS (${selectA}),
+                 b AS (${selectB})
             SELECT
                 ${keyExpr} AS key,
                 a.value AS valueA,
@@ -129,19 +252,17 @@ class CrossDatabaseLoader extends BaseQueryLoader {
                 CASE WHEN a.value IS NOT NULL AND a.value != 0
                     THEN (b.value - a.value) / a.value * 100.0
                 END AS deltaPercent
-            FROM "${databaseA}".${schemaA}.fact_table a
-            JOIN "${databaseB}".${schemaB}.fact_table b
-                ON ${joinCondition}
+            FROM a JOIN b ON ${joinCondition}
             ${sortClause}
             LIMIT ${limit} OFFSET ${offset}
         `;
 
     // Comptage total pour le calcul de la pagination
     const countQuery = `
+            WITH a AS (${selectA}),
+                 b AS (${selectB})
             SELECT COUNT(*) AS total
-            FROM "${databaseA}".${schemaA}.fact_table a
-            JOIN "${databaseB}".${schemaB}.fact_table b
-                ON ${joinCondition}
+            FROM a JOIN b ON ${joinCondition}
         `;
 
     const [results, countResult] = await Promise.all([
@@ -165,42 +286,58 @@ class CrossDatabaseLoader extends BaseQueryLoader {
     };
   }
 
-  // Méthode de comparaison des faits agrégés entre deux bases de données
+  // Méthode de comparaison des faits agrégés entre deux datasets
   /**
-   * Compares aggregated fact values between two databases.
+   * Compares aggregated fact values between two datasets.
    *
-   * Uses CTEs to pre-aggregate each side before joining, avoiding
-   * Cartesian products. Returns delta and deltaPercent per group key.
+   * When groupBy is categorical, each side is aggregated by the dim_* label
+   * (never the raw ID) before joining on the label. Continuous groupBy keys are
+   * aggregated directly. Uses CTEs to pre-aggregate, avoiding Cartesian products.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Parameters defining databases, groupBy, aggregation, and pagination.
+   * @param params - Parameters defining datasets, groupBy, aggregation, and pagination.
    * @returns Paginated comparison result with aggregated delta values.
+   * @throws {Error} When groupBy is categorical on one side only.
    */
   async compareAggregatedFacts(
     connection: DuckDBConnection,
     params: CompareAggregatedFactsParams,
   ): Promise<ComparisonResult> {
-    const { databaseA, databaseB, groupBy, aggregation = 'SUM', limit, offset } = params;
+    const { catalogA, catalogB, groupBy, aggregation = 'SUM', limit, offset } = params;
 
-    const dm = databaseManager as { getSchema: (id: string) => string };
-    const schemaA = dm.getSchema(databaseA);
-    const schemaB = dm.getSchema(databaseB);
+    const schemaA = this.resolveSchema(catalogA, params.schemaA);
+    const schemaB = this.resolveSchema(catalogB, params.schemaB);
 
     validateIdentifier(groupBy, 'groupBy');
     const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation as AggregationType] || 'SUM';
 
-    // CTEs pour pré-agréger chaque côté avant la jointure — évite le produit cartésien
+    // Détermination du caractère catégoriel du champ de regroupement de chaque côté
+    const [catMapA, catMapB] = await Promise.all([
+      this.getCategoricalMap(connection, catalogA, schemaA, [groupBy]),
+      this.getCategoricalMap(connection, catalogB, schemaB, [groupBy]),
+    ]);
+    if (Boolean(catMapA[groupBy]) !== Boolean(catMapB[groupBy])) {
+      throw new Error(
+        `groupBy field '${groupBy}' is categorical in only one dataset; cannot compare ` +
+          `'${catalogA}.${schemaA}' with '${catalogB}.${schemaB}' on it.`,
+      );
+    }
+    const isCategorical = Boolean(catMapA[groupBy]);
+
+    // CTE d'agrégation d'un côté : clé = label (catégoriel) ou valeur brute (continu)
+    const aggSide = (catalog: string, schema: string): string =>
+      isCategorical
+        ? `SELECT d.label AS key, ${aggFn}(f.value) AS value
+           FROM "${catalog}".${schema}.fact_table f
+           JOIN "${catalog}".${schema}.dim_${groupBy} d ON f.${groupBy} = d.value
+           GROUP BY d.label`
+        : `SELECT ${groupBy} AS key, ${aggFn}(value) AS value
+           FROM "${catalog}".${schema}.fact_table
+           GROUP BY ${groupBy}`;
+
     const query = `
-            WITH agg_a AS (
-                SELECT ${groupBy} AS key, ${aggFn}(value) AS value
-                FROM "${databaseA}".${schemaA}.fact_table
-                GROUP BY ${groupBy}
-            ),
-            agg_b AS (
-                SELECT ${groupBy} AS key, ${aggFn}(value) AS value
-                FROM "${databaseB}".${schemaB}.fact_table
-                GROUP BY ${groupBy}
-            )
+            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
+                 agg_b AS (${aggSide(catalogB, schemaB)})
             SELECT
                 a.key,
                 a.value AS valueA,
@@ -214,11 +351,11 @@ class CrossDatabaseLoader extends BaseQueryLoader {
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-    // Comptage total des groupes communs pour la pagination
+    // Comptage total des clés communes pour la pagination
     const countQuery = `
-            WITH keys_a AS (SELECT DISTINCT ${groupBy} AS key FROM "${databaseA}".${schemaA}.fact_table),
-                 keys_b AS (SELECT DISTINCT ${groupBy} AS key FROM "${databaseB}".${schemaB}.fact_table)
-            SELECT COUNT(*) AS total FROM keys_a JOIN keys_b ON keys_a.key = keys_b.key
+            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
+                 agg_b AS (${aggSide(catalogB, schemaB)})
+            SELECT COUNT(*) AS total FROM agg_a a JOIN agg_b b ON a.key = b.key
         `;
 
     const [results, countResult] = await Promise.all([
@@ -242,45 +379,49 @@ class CrossDatabaseLoader extends BaseQueryLoader {
     };
   }
 
-  // Méthode de calcul de l'intersection des options de sélection entre catalogues
+  // Méthode de calcul de l'intersection des options de sélection entre datasets
   /**
-   * Computes the intersection of select options across multiple catalogs.
+   * Computes the intersection of select options across multiple datasets.
    *
-   * Uses the primary catalog for labels and applies IN/INTERSECT subqueries
-   * to restrict results to values present in all other catalogs.
+   * For categorical fields the intersection is computed on the dim_* labels
+   * (the raw IDs are not comparable across datasets); the returned value is the
+   * primary dataset's ID and the label is the shared modality. For continuous
+   * fields the raw values are comparable and are intersected directly.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Parameters defining the field, database list, and limit.
-   * @returns Array of options present in all provided catalogs.
+   * @param params - Parameters defining the field, catalog/schema list, and limit.
+   * @returns Array of options present in all provided datasets.
    */
   async crossDatabaseSelectOptions(
     connection: DuckDBConnection,
     params: CrossDatabaseSelectOptionsParams,
   ): Promise<CrossDatabaseSelectOption[]> {
-    const { fieldName, databases, limit } = params;
+    const { fieldName, catalogs, limit } = params;
     validateIdentifier(fieldName, 'fieldName');
 
-    if (databases.length === 0) return [];
+    if (catalogs.length === 0) return [];
 
-    const dm = databaseManager as { getSchema: (id: string) => string };
-    const [primaryDb, ...otherDbs] = databases;
-    const primarySchema = dm.getSchema(primaryDb);
+    // Résolution + validation des schémas alignés par index sur les catalogues
+    const schemas = catalogs.map((cat, i) => this.resolveSchema(cat, params.schemas?.[i]));
 
-    // Détermination du type du champ via les méta-données du premier catalogue
-    const metaQuery = `SELECT is_categorical FROM "${primaryDb}".${primarySchema}.metadata WHERE name = ?`;
+    const primaryCat = catalogs[0];
+    const primarySchema = schemas[0];
+    const others = catalogs.slice(1).map((cat, i) => ({ cat, schema: schemas[i + 1] }));
+
+    // Détermination du type du champ via les méta-données du premier dataset
+    const metaQuery = `SELECT is_categorical FROM "${primaryCat}".${primarySchema}.metadata WHERE name = ?`;
     const metaResult = await connection.all(metaQuery, [fieldName]);
     const isCategorical = metaResult[0]?.is_categorical;
 
     if (isCategorical) {
-      // Intersection des valeurs des tables de dimension, labels du premier catalogue
-      const inClauses = otherDbs.map((db) => {
-        const schema = dm.getSchema(db);
-        return `SELECT value FROM "${db}".${schema}.dim_${fieldName}`;
-      });
+      // Intersection des LABELS des tables de dimension (les IDs ne sont pas comparables)
+      const inClauses = others.map(
+        ({ cat, schema }) => `SELECT label FROM "${cat}".${schema}.dim_${fieldName}`,
+      );
 
-      let query = `SELECT value, label FROM "${primaryDb}".${primarySchema}.dim_${fieldName}`;
+      let query = `SELECT value, label FROM "${primaryCat}".${primarySchema}.dim_${fieldName}`;
       if (inClauses.length > 0) {
-        query += ` WHERE value IN (${inClauses.join(' INTERSECT ')})`;
+        query += ` WHERE label IN (${inClauses.join(' INTERSECT ')})`;
       }
       query += ` LIMIT ${limit}`;
 
@@ -288,13 +429,13 @@ class CrossDatabaseLoader extends BaseQueryLoader {
       const rows = await connection.all(query);
       return rows as unknown as CrossDatabaseSelectOption[];
     } else {
-      // Intersection des valeurs distinctes de la table des faits
-      const inClauses = otherDbs.map((db) => {
-        const schema = dm.getSchema(db);
-        return `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value FROM "${db}".${schema}.fact_table`;
-      });
+      // Intersection des valeurs distinctes de la table des faits (continu : comparable)
+      const inClauses = others.map(
+        ({ cat, schema }) =>
+          `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value FROM "${cat}".${schema}.fact_table`,
+      );
 
-      let query = `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value, CAST(${fieldName} AS VARCHAR) AS label FROM "${primaryDb}".${primarySchema}.fact_table`;
+      let query = `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value, CAST(${fieldName} AS VARCHAR) AS label FROM "${primaryCat}".${primarySchema}.fact_table`;
       if (inClauses.length > 0) {
         query += ` WHERE CAST(${fieldName} AS VARCHAR) IN (${inClauses.join(' INTERSECT ')})`;
       }
@@ -307,9 +448,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
   }
 }
 
-// Fonction de création d'un loader pour la comparaison des faits entre bases de données
+// Fonction de création d'un loader pour la comparaison des faits entre datasets
 /**
- * Creates a DataLoader for fact table comparison between two databases.
+ * Creates a DataLoader for fact table comparison between two datasets.
  *
  * @returns DataLoader keyed by CompareFactsParams, returning ComparisonResult.
  */
@@ -322,7 +463,7 @@ const createCompareFacts = () => {
 
 // Fonction de création d'un loader pour la comparaison des faits agrégés
 /**
- * Creates a DataLoader for aggregated fact comparison between two databases.
+ * Creates a DataLoader for aggregated fact comparison between two datasets.
  *
  * @returns DataLoader keyed by CompareAggregatedFactsParams, returning ComparisonResult.
  */
@@ -335,7 +476,7 @@ const createCompareAggregatedFacts = () => {
 
 // Fonction de création d'un loader pour les options cross-database
 /**
- * Creates a DataLoader for cross-database select option intersection queries.
+ * Creates a DataLoader for cross-catalog select option intersection queries.
  *
  * @returns DataLoader keyed by CrossDatabaseSelectOptionsParams.
  */

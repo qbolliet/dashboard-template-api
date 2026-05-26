@@ -18,7 +18,7 @@ describe('Object types — cross-database', () => {
   test('ComparedFact has key, keyLabel, valueA, valueB, delta, deltaPercent', () => {
     // Extraction des champs du type ComparedFact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('ComparedFact')
+      schema.getType('ComparedFact'),
     ).getFields();
 
     // Présence des champs de comparaison attendus
@@ -36,7 +36,7 @@ describe('Object types — cross-database', () => {
   test('PaginatedComparedFacts has data, total, hasNextPage, currentPage, totalPages', () => {
     // Extraction des champs du type paginé
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('PaginatedComparedFacts')
+      schema.getType('PaginatedComparedFacts'),
     ).getFields();
 
     // Présence des champs de pagination
@@ -57,13 +57,13 @@ describe('Query fields — cross-database', () => {
   });
 
   /**
-   * Verification that compareFacts requires databaseA, databaseB, and joinFields.
+   * Verification that compareFacts requires catalogA, catalogB, and joinFields.
    */
-  test('compareFacts has databaseA, databaseB, joinFields (all NonNull)', () => {
+  test('compareFacts has catalogA, catalogB, joinFields (all NonNull)', () => {
     expect(queryFields).toHaveProperty('compareFacts');
 
     // Validation du caractère obligatoire de chaque argument de jointure
-    for (const argName of ['databaseA', 'databaseB', 'joinFields']) {
+    for (const argName of ['catalogA', 'catalogB', 'joinFields']) {
       const arg = queryFields.compareFacts.args.find((a) => a.name === argName);
       expect(arg).toBeDefined();
 
@@ -79,26 +79,24 @@ describe('Query fields — cross-database', () => {
     expect(queryFields).toHaveProperty('compareAggregatedFacts');
 
     // Présence des arguments d'agrégation
+    expect(queryFields.compareAggregatedFacts.args.find((a) => a.name === 'groupBy')).toBeDefined();
     expect(
-      queryFields.compareAggregatedFacts.args.find((a) => a.name === 'groupBy')
-    ).toBeDefined();
-    expect(
-      queryFields.compareAggregatedFacts.args.find((a) => a.name === 'aggregation')
+      queryFields.compareAggregatedFacts.args.find((a) => a.name === 'aggregation'),
     ).toBeDefined();
   });
 
   /**
-   * Verification that crossDatabaseSelectOptions accepts fieldName and databases args.
+   * Verification that crossDatabaseSelectOptions accepts fieldName and catalogs args.
    */
-  test('crossDatabaseSelectOptions has fieldName and databases args', () => {
+  test('crossDatabaseSelectOptions has fieldName and catalogs args', () => {
     expect(queryFields).toHaveProperty('crossDatabaseSelectOptions');
 
-    // Présence des arguments de sélection multi-base
+    // Présence des arguments de sélection multi-catalogue
     expect(
-      queryFields.crossDatabaseSelectOptions.args.find((a) => a.name === 'fieldName')
+      queryFields.crossDatabaseSelectOptions.args.find((a) => a.name === 'fieldName'),
     ).toBeDefined();
     expect(
-      queryFields.crossDatabaseSelectOptions.args.find((a) => a.name === 'databases')
+      queryFields.crossDatabaseSelectOptions.args.find((a) => a.name === 'catalogs'),
     ).toBeDefined();
   });
 });
