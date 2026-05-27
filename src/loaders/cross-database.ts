@@ -1,4 +1,5 @@
 // Importation des modules
+import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { config } from '../utils/config-loader.js';
@@ -104,14 +105,22 @@ class CrossDatabaseLoader extends BaseQueryLoader {
 
   // Résolution du schéma d'un côté (explicite ou schéma par défaut du catalogue)
   /**
-   * Resolves the schema for one side, validating it as a SQL identifier.
+   * Resolves the schema for one side, validating it both against the catalog's
+   * allow-list and as a SQL identifier.
    *
    * @param catalog - Catalog alias.
    * @param schema - Explicit schema, or null/undefined for the catalog default.
    * @returns Validated schema name.
+   * @throws {GraphQLError} When the schema is not configured for the catalog.
    */
   private resolveSchema(catalog: string, schema?: string | null): string {
     const resolved = schema || databaseManager.getDefaultSchema(catalog);
+    if (!databaseManager.isValidSchema(catalog, resolved)) {
+      throw new GraphQLError(
+        `Schema '${resolved}' is not available for catalog '${catalog}'. ` +
+          `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
+      );
+    }
     validateIdentifier(resolved, 'schema');
     return resolved;
   }

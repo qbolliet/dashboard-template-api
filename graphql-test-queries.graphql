@@ -1049,11 +1049,10 @@ query TestCrossDatabaseSelectOptionsAll {
   }
 }
 
-# Test 17.1c: Options communes pour indicator
-# /!\ Renvoie rien
-query TestCrossDatabaseSelectOptionsIndicator {
+# Test 17.1c: Options communes pour country
+query TestCrossDatabaseSelectOptionsCountry {
   crossDatabaseSelectOptions(
-    fieldName: "indicator"
+    fieldName: "country"
     catalogs: ["default", "macroeconomics"]
     limit: 50
   ) {
@@ -1443,16 +1442,16 @@ query TestGetCatalogSchemaNamedSchema {
   }
 }
 
-# Test 20.4: Comparaison de DEUX SCHÉMAS d'un MÊME catalogue (cross-schéma)
-# Requiert ALLOW_CROSS_CATALOG_QUERIES=true. catalogA === catalogB, schémas différents.
+# Test 20.4: Comparaison cross-catalogue (default vs public_finance) sur 'country'
+# Requiert ALLOW_CROSS_CATALOG_QUERIES=true. Schémas par défaut ('main') de chaque côté.
 # Les champs catégoriels sont résolus en labels via dim_* avant la jointure.
-# /!\ Produit l'erreur suivante : "Cannot return null for non-nullable field Query.compareFacts."
-query TestCompareFactsSameCatalogTwoSchemas {
+# Pour comparer DEUX SCHÉMAS d'un MÊME catalogue (ex: default.main vs default.predictions),
+# ajouter le schéma cible à DEFAULT_SCHEMAS dans la config (ex: ["main","predictions"])
+# avant de fixer catalogA === catalogB avec schemaA / schemaB différents.
+query TestCompareFactsCrossCatalog {
   compareFacts(
     catalogA: "default"
-    schemaA: "main"
-    catalogB: "default"
-    schemaB: "predictions"
+    catalogB: "public_finance"
     joinFields: ["country"]
     limit: 10
     offset: 0
@@ -1468,14 +1467,12 @@ query TestCompareFactsSameCatalogTwoSchemas {
   }
 }
 
-# Test 20.5: Agrégation cross-schéma même catalogue (jointure sur labels)
-# /!\ Produit l'erreur suivante : "message": "Cannot return null for non-nullable field Query.compareAggregatedFacts."
-query TestCompareAggregatedSameCatalogTwoSchemas {
+# Test 20.5: Agrégation cross-catalogue (default vs public_finance), groupBy catégoriel
+# Jointure sur les labels de la dimension 'country' (et non sur l'ID brut).
+query TestCompareAggregatedCrossCatalog {
   compareAggregatedFacts(
     catalogA: "default"
-    schemaA: "main"
-    catalogB: "default"
-    schemaB: "predictions"
+    catalogB: "public_finance"
     groupBy: "country"
     aggregation: SUM
     limit: 10
@@ -1493,14 +1490,13 @@ query TestCompareAggregatedSameCatalogTwoSchemas {
 }
 
 # Test 20.6: Cross-catalogue avec schémas explicites par côté
-# /!\ Ne retourne rien
 query TestCompareFactsCrossCatalogExplicitSchemas {
   compareFacts(
     catalogA: "default"
     schemaA: "main"
     catalogB: "macroeconomics"
     schemaB: "main"
-    joinFields: ["country", "indicator"]
+    joinFields: ["country"]
     limit: 10
     offset: 0
   ) {
@@ -1559,12 +1555,18 @@ query TestGetCatalogSchemaWithSchema {
 }
 
 # Test 20bis.3: Table des faits dans un schéma explicite
-# /!\ Ne retourne rien
+# /!\ Renvoie l'erreur : "Cannot return null for non-nullable field DimensionDetail.label."
 query TestFactTableWithSchema {
   getFactTable(catalog: "default", schema: "main", limit: 5, offset: 0) {
-    indicator
-    country
-    value
+    data {
+      value
+      dimensionDetails {
+        name
+        value
+        label
+      }
+    }
+    total
   }
 }
 

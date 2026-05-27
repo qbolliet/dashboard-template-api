@@ -1,5 +1,6 @@
 // Importation des modules
 import DataLoader from 'dataloader';
+import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
@@ -206,6 +207,10 @@ class BaseQueryLoader {
                 }
                 return await this.loadWithCache(key, async () => await loadFn(connection, key));
               } catch (error) {
+                // Les erreurs GraphQL (validation métier explicite) doivent
+                // remonter au client ; sinon le filet ci-dessous masque le
+                // vrai message en renvoyant null pour un champ non-nullable.
+                if (error instanceof GraphQLError) throw error;
                 logger.error(`Error loading ${this.cachePrefix} for key:`, key, error);
                 // Retourne null ou tableau vide selon le contexte
                 return (Array.isArray(key) ? [] : null) as unknown as V;
@@ -247,6 +252,8 @@ class BaseQueryLoader {
             // Alignement du résultat sur l'ordre des clés d'entrée
             return keys.map((_, index) => results[index] ?? (null as unknown as V));
           } catch (error) {
+            // Mêmes règles que createLoader : les GraphQLError remontent.
+            if (error instanceof GraphQLError) throw error;
             logger.error(`Batch error in ${this.cachePrefix} loader:`, error);
             // Valeurs par défaut pour chaque clé en cas d'erreur
             return keys.map(() => null as unknown as V);
