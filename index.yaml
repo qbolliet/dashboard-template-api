@@ -2,6 +2,33 @@ apiVersion: v1
 entries:
   dashboard-template-api:
   - apiVersion: v2
+    appVersion: 0.2.0
+    created: "2026-05-29T21:38:39.75517949Z"
+    dependencies:
+    - condition: redis.enabled
+      name: redis
+      repository: https://charts.bitnami.com/bitnami
+      version: ~20.6.0
+    description: GraphQL DuckLake API — read-only, multi-catalog, Redis-cached
+    digest: 73759982b3199473601c0b683b90c526973094cd6b06c74f0f345e62f7bceba0
+    home: https://qbolliet.github.io/dashboard-template-api/
+    icon: https://raw.githubusercontent.com/qbolliet/dashboard-template-api/main/docs-site/static/img/logo.svg
+    keywords:
+    - graphql
+    - ducklake
+    - duckdb
+    - api
+    kubeVersion: '>=1.27.0-0'
+    maintainers:
+    - name: Quentin Bolliet
+    name: dashboard-template-api
+    sources:
+    - https://github.com/qbolliet/dashboard-template-api
+    type: application
+    urls:
+    - https://github.com/qbolliet/dashboard-template-api/releases/download/dashboard-template-api-0.2.0/dashboard-template-api-0.2.0.tgz
+    version: 0.2.0
+  - apiVersion: v2
     appVersion: 0.1.0
     created: "2026-05-23T14:15:51.895369293Z"
     dependencies:
@@ -28,4 +55,4 @@ entries:
     urls:
     - https://github.com/qbolliet/dashboard-template-api/releases/download/dashboard-template-api-0.1.0/dashboard-template-api-0.1.0.tgz
     version: 0.1.0
-generated: "2026-05-23T14:15:51.895375663Z"
+generated: "2026-05-29T21:38:39.755185882Z"
