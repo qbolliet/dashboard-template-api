@@ -17,14 +17,16 @@ const selectTypeDefs: DocumentNode = gql`
       fieldName: String!
       limit: Int = 50
       searchTerm: String = ""
-      database: String
+      catalog: String
+      schema: String
     ): [SelectOption!]!
 
     getGroupedSelectOptions(
       groupField: String!
       optionsField: String!
       limit: Int = 50
-      database: String
+      catalog: String
+      schema: String
     ): GroupedSelectOptions!
   }
 

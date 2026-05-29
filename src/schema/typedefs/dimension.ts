@@ -17,7 +17,7 @@ const dimensionTypeDefs: DocumentNode = gql`
   }
 
   type Query {
-    getDimensionTable(name: String!, database: String): [Dimension]
+    getDimensionTable(name: String!, catalog: String, schema: String): [Dimension]
   }
 `;
 

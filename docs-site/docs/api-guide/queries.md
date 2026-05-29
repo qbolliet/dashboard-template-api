@@ -15,10 +15,10 @@ Applies a condition on a field:
 
 ```graphql
 input Filter {
-  key: String!        # field name
-  operator: String!   # "=", "!=", ">", ">=", "<", "<=", "IN", "NOT IN", "LIKE"
-  value: String       # single value
-  values: [String!]   # list of values (for IN / NOT IN)
+  key: String! # field name
+  operator: String! # "=", "!=", ">", ">=", "<", "<=", "IN", "NOT IN", "LIKE"
+  value: String # single value
+  values: [String!] # list of values (for IN / NOT IN)
 }
 ```
 
@@ -27,7 +27,7 @@ input Filter {
 ```graphql
 input SortInput {
   field: String!
-  order: SortOrder  # ASC (default) | DESC
+  order: SortOrder # ASC (default) | DESC
 }
 ```
 
@@ -51,7 +51,8 @@ getFactTable(
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
-  database: String             # catalog ID (falls back to DEFAULT_DATABASE)
+  catalog: String              # catalog ID (falls back to DEFAULT_CATALOG)
+  schema: String               # schema within the catalog (falls back to its default)
 ): PaginatedFacts
 ```
 
@@ -92,7 +93,8 @@ getFactTableWithMetadata(
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
-  database: String
+  catalog: String
+  schema: String
   format: DataFormat = OBJECTS   # OBJECTS | ARRAYS
 ): DatasetWithMetadata
 ```
@@ -116,7 +118,8 @@ getAggregatedFacts(
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
-  database: String
+  catalog: String
+  schema: String
 ): [AggregatedFact]
 ```
 
@@ -137,7 +140,8 @@ Returns the full list of values and labels for a categorical dimension.
 ```graphql
 getDimensionTable(
   name: String!       # dimension field name
-  database: String
+  catalog: String
+  schema: String
 ): [Dimension]
 
 type Dimension {
@@ -157,7 +161,8 @@ Returns schema metadata for a single field.
 ```graphql
 getMetaData(
   name: String!
-  database: String
+  catalog: String
+  schema: String
 ): Metadata
 
 type Metadata {
@@ -174,34 +179,55 @@ type Metadata {
 
 ## Catalog queries
 
-### `getDatabases`
+### `getCatalogs`
 
-Lists all registered catalogs with their fields and dimension names.
+Lists all registered catalogs with their default schema and the list of
+hosted schemas. Each schema is a `CatalogSchemaInfo` whose `fields` and
+`dimensionNames` sub-fields are **resolved lazily** — they only hit the
+database when the client selects them, so `schemas { name }` is just as
+cheap as the old string-list and `schemas { name fields { ... } }` fetches
+the whole cascade in one round-trip.
 
 ```graphql
-getDatabases: [DatabaseInfo!]!
+getCatalogs: [Catalog!]!
 
-type DatabaseInfo {
-  id: String!
-  fields: [Metadata!]!
-  dimensionNames: [String!]!
+type Catalog {
+  id: String!                       # catalog identifier
+  defaultSchema: String!            # schema used when `schema:` is omitted (1st of `schemas`)
+  schemas: [CatalogSchemaInfo!]!    # schemas hosted by this catalog
+}
+
+type CatalogSchemaInfo {
+  name: String!                # schema name (e.g., 'main', 'staging')
+  fields: [Metadata!]!         # field metadata (lazy — fetched on selection)
+  dimensionNames: [String!]!   # categorical field names (lazy — fetched on selection)
 }
 ```
 
-### `getDatabaseSchema`
+### `getCatalogSchema`
 
-Returns all field metadata for a catalog.
+Returns all field metadata for a given `(catalog, schema)` pair. Both
+arguments are optional: `catalog` falls back to the routed catalog
+(query argument, header, then default); `schema` falls back to the
+catalog's default schema.
 
 ```graphql
-getDatabaseSchema(database: String): [Metadata!]!
+getCatalogSchema(catalog: String, schema: String): [Metadata!]!
 ```
 
 ### `getSharedDimensions`
 
-Returns the dimension names present in all specified catalogs.
+Returns the dimension names present in all specified targets. Each target
+is a `(catalog, schema)` pair; `schema` is optional and defaults to the
+catalog's default schema.
 
 ```graphql
-getSharedDimensions(databases: [String!]!): [String!]!
+getSharedDimensions(targets: [CatalogSchemaInput!]!): [String!]!
+
+input CatalogSchemaInput {
+  catalog: String!  # required catalog identifier
+  schema: String    # optional schema; defaults to the catalog's default schema
+}
 ```
 
 ---
@@ -217,7 +243,8 @@ getSelectOptions(
   fieldName: String!
   limit: Int = 50
   searchTerm: String = ""
-  database: String
+  catalog: String
+  schema: String
 ): [SelectOption!]!
 ```
 
@@ -230,7 +257,8 @@ getGroupedSelectOptions(
   groupField: String!
   optionsField: String!
   limit: Int = 50
-  database: String
+  catalog: String
+  schema: String
 ): GroupedSelectOptions!
 
 type GroupedSelectOptions {
@@ -241,7 +269,9 @@ type GroupedSelectOptions {
 
 ---
 
-## Cross-database queries
+## Cross-catalog queries
+
+Categorical fields are matched on their `dim_*` labels (never the raw ID, which is local to each catalog/schema). Catalog A and B may be the same catalog with different schemas. `schemaA`/`schemaB` default to each catalog's configured schema.
 
 ### `compareFacts`
 
@@ -249,9 +279,11 @@ Joins facts from two catalogs on shared fields and computes deltas.
 
 ```graphql
 compareFacts(
-  databaseA: String!      # reference catalog
-  databaseB: String!      # comparison catalog
-  joinFields: [String!]!  # fields present in both catalogs
+  catalogA: String!       # reference catalog
+  catalogB: String!       # comparison catalog
+  schemaA: String         # schema within catalogA (default: catalog's schema)
+  schemaB: String         # schema within catalogB (default: catalog's schema)
+  joinFields: [String!]!  # fields present in both datasets
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
@@ -264,8 +296,10 @@ Same as `compareFacts` but for aggregated values with a shared `groupBy`.
 
 ```graphql
 compareAggregatedFacts(
-  databaseA: String!
-  databaseB: String!
+  catalogA: String!
+  catalogB: String!
+  schemaA: String
+  schemaB: String
   groupBy: String!
   aggregation: Aggregation! = SUM
   limit: Int! = 100
@@ -282,7 +316,8 @@ Returns only the select options that exist in all specified catalogs (intersecti
 ```graphql
 crossDatabaseSelectOptions(
   fieldName: String!
-  databases: [String!]!
+  catalogs: [String!]!
+  schemas: [String!]      # aligned by index with catalogs
   limit: Int! = 50
 ): [SelectOption!]!
 ```

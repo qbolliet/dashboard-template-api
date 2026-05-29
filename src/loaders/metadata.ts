@@ -25,16 +25,18 @@ class MetadataLoader extends BaseQueryLoader {
   /**
    * Creates a MetadataLoader bound to a specific database.
    *
-   * @param databaseId - Catalog alias to query; null uses the default database.
+   * @param catalogId - Catalog alias to query; null uses the default catalog.
+   * @param schema - DuckLake schema within the catalog; null uses the catalog default.
    */
-  constructor(databaseId: string | null = null) {
+  constructor(catalogId: string | null = null, schema: string | null = null) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'metadata',
       cache: true,
       // Durée de mise en cache plus longue car les méta-données changent rarement
       cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT,
-      databaseId,
+      catalogId,
+      schema,
     });
   }
 
@@ -78,11 +80,12 @@ class MetadataLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for metadata lookups.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by field name, returning MetadataRow or null.
  */
-const createMetadataLoader = (databaseId: string | null = null) => {
-  const loader = new MetadataLoader(databaseId);
+const createMetadataLoader = (catalogId: string | null = null, schema: string | null = null) => {
+  const loader = new MetadataLoader(catalogId, schema);
   return loader.createLoader<string, MetadataRow | null>((connection, name) =>
     loader.loadSingle(connection, name),
   );

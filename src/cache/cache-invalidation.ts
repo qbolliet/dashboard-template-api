@@ -2,7 +2,7 @@
 import type { Request, Response, Express } from 'express';
 import { redis } from './index.js';
 import { createContextLogger } from '../utils/logger.js';
-import { config } from '../utils/config-loader.js';
+import { databaseManager } from '../db/index.js';
 import { requireAdminKey } from '../security/admin-auth.js';
 
 // Initialisation du logger spécifique au module d'invalidation de cache
@@ -14,12 +14,17 @@ const cacheLogger = createContextLogger({
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
 /**
- * Function that generates a Redis key pattern for a given database identifier.
+ * Generates a Redis key glob pattern for a (catalog, schema?) pair.
  *
- * @param dbId - Database identifier, or null/undefined to use 'default'.
+ * When `schema` is null/undefined, the resulting pattern matches **every**
+ * schema of the catalog (the schema segment becomes a `*`). When both
+ * arguments are null, the pattern matches the legacy 'default' catalog.
+ *
+ * @param catalog - Catalog identifier, or null/undefined to use 'default'.
+ * @param schema - Schema name, or null/undefined to match all schemas.
  * @returns Redis glob pattern string.
  */
-type KeyPatternFn = (dbId?: string | null) => string;
+type KeyPatternFn = (catalog?: string | null, schema?: string | null) => string;
 
 /** Dictionary of Redis key-pattern generators indexed by cache type. */
 interface KeyPatterns {
@@ -29,48 +34,60 @@ interface KeyPatterns {
   facts: KeyPatternFn;
   aggregatedFacts: KeyPatternFn;
   selectOptions: KeyPatternFn;
-  /** Global pattern — matches all keys for a given database. */
-  allDatabase: KeyPatternFn;
+  /** Global pattern — matches every cache type for the given (catalog, schema?). */
+  allCatalog: KeyPatternFn;
 }
 
-/** Result of a single cache invalidation attempt for a database. */
+/** Result of a single cache invalidation attempt for a catalog. */
 interface InvalidationResult {
-  database: string;
+  catalog: string;
   error?: string;
 }
 
-/** Redis key count per cache type for a single database. */
-type DatabaseStats = Record<string, number>;
+/** Redis key count per cache type within a single schema. */
+type SchemaStats = Record<string, number>;
 
-/** Global cache statistics indexed by database identifier. */
-type CacheStats = Record<string, DatabaseStats>;
+/** Per-schema stats inside a catalog (schema → type → count). */
+type CatalogStats = Record<string, SchemaStats>;
+
+/** Global cache statistics (catalog → schema → type → count). */
+type CacheStats = Record<string, CatalogStats>;
 
 // ─── Gestionnaire d'invalidation de cache ────────────────────────────────────
 
 /**
  * Cache invalidation manager for handling database updates.
  *
- * Provides methods to invalidate Redis cache entries by database, cache type,
- * or globally across all configured databases. Uses non-blocking SCAN to avoid
- * locking Redis during key discovery.
+ * Provides three granularities of invalidation, all backed by non-blocking
+ * Redis SCAN:
+ *  - **schema**: a single (catalog, schema) pair
+ *  - **catalog**: every schema of a given catalog (schema wildcard)
+ *  - **all**: every configured catalog in turn
+ *
+ * Cache keys are written by loaders in the form
+ * `<type>:<catalog>:<schema>:<queryKey>` (see `BaseQueryLoader.loadWithCache`),
+ * so the patterns here align with that layout.
  */
 class CacheInvalidationManager {
   // Dictionnaire des générateurs de motifs de clés par type de cache
   readonly keyPatterns: KeyPatterns;
 
   constructor() {
-    // Définition des motifs de clés pour chaque type de cache
-    // Permet de cibler précisément les caches à invalider par base de données
+    // Motifs de clés : segment catalog obligatoire, segment schema soit explicite
+    // soit wildcard (=> tous les schémas du catalogue).
+    // Note : || (et non ??) — une chaîne vide doit également retomber sur le défaut.
     this.keyPatterns = {
-      // Motifs spécifiques aux bases de données — chaque type a son propre espace de noms
-      metadata: (dbId) => `metadata:${dbId || 'default'}:*`,
-      dimension: (dbId) => `dimension:${dbId || 'default'}:*`,
-      dimensionValue: (dbId) => `dimension-value:${dbId || 'default'}:*`,
-      facts: (dbId) => `facts:${dbId || 'default'}:*`,
-      aggregatedFacts: (dbId) => `aggregated-facts:${dbId || 'default'}:*`,
-      selectOptions: (dbId) => `select-options:${dbId || 'default'}:*`,
-      // Motif global pour invalider tous les caches d'une base de données
-      allDatabase: (dbId) => `*:${dbId || 'default'}:*`,
+      metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
+      dimension: (catalog, schema) => `dimension:${catalog || 'default'}:${schema || '*'}:*`,
+      dimensionValue: (catalog, schema) =>
+        `dimension-value:${catalog || 'default'}:${schema || '*'}:*`,
+      facts: (catalog, schema) => `facts:${catalog || 'default'}:${schema || '*'}:*`,
+      aggregatedFacts: (catalog, schema) =>
+        `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,
+      selectOptions: (catalog, schema) =>
+        `select-options:${catalog || 'default'}:${schema || '*'}:*`,
+      // Tous les types pour un (catalog, schema?) donné
+      allCatalog: (catalog, schema) => `*:${catalog || 'default'}:${schema || '*'}:*`,
     };
   }
 
@@ -80,7 +97,7 @@ class CacheInvalidationManager {
    * Avoids the blocking KEYS command by iterating with cursor-based SCAN,
    * collecting results in batches of 100.
    *
-   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:*").
+   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:main:*").
    * @returns Array of all matching Redis key strings.
    * @throws {Error} When the Redis SCAN command fails.
    */
@@ -97,22 +114,28 @@ class CacheInvalidationManager {
   }
 
   /**
-   * Invalidate all cache entries for a specific database.
+   * Invalidate cache entries for a catalog — optionally narrowed to one schema.
    *
-   * Uses the 'allDatabase' key pattern to find and delete every cache entry
-   * associated with the given database identifier.
+   * Without `schema`, every schema of the catalog is invalidated (the schema
+   * segment is matched with `*`). With `schema`, only that (catalog, schema)
+   * namespace is touched, leaving the rest of the catalog intact.
    *
-   * @param databaseId - Database identifier. Defaults to 'default' when null.
+   * @param catalog - Catalog identifier. Defaults to 'default' when null.
+   * @param schema - Optional schema name; null/omitted means "all schemas".
    * @throws {Error} When the Redis DEL operation fails.
    */
-  async invalidateDatabase(databaseId: string | null = null): Promise<void> {
-    // Utilisation de 'default' comme base de données par défaut si aucune n'est spécifiée
-    const dbId = databaseId ?? 'default';
-    cacheLogger.cache(`Starting cache invalidation for database: ${dbId}`);
+  async invalidateCatalog(
+    catalog: string | null = null,
+    schema: string | null = null,
+  ): Promise<void> {
+    // Utilisation de 'default' comme catalogue par défaut si aucun n'est spécifié
+    const catalogId = catalog ?? 'default';
+    const scope = schema ? `${catalogId}/${schema}` : catalogId;
+    cacheLogger.cache(`Starting cache invalidation for: ${scope}`);
 
     try {
-      // Construction du motif pour trouver toutes les clés liées à cette base de données
-      const pattern = this.keyPatterns.allDatabase(dbId);
+      // Construction du motif englobant tous les types pour ce (catalog, schema?)
+      const pattern = this.keyPatterns.allCatalog(catalogId, schema);
 
       // Récupération de toutes les clés correspondant au motif
       const keys = await this.scanKeys(pattern);
@@ -121,34 +144,43 @@ class CacheInvalidationManager {
       if (keys.length > 0) {
         // Suppression en lot pour optimiser les performances
         await redis.del(...keys);
-        cacheLogger.cache(`Invalidated ${keys.length} cache entries for database: ${dbId}`, {
-          databaseId: dbId,
+        cacheLogger.cache(`Invalidated ${keys.length} cache entries for: ${scope}`, {
+          catalogId,
+          schema: schema ?? null,
           keysCount: keys.length,
         });
       } else {
         // Aucune clé trouvée — le cache était déjà vide ou inexistant
-        cacheLogger.cache(`No cache entries found for database: ${dbId}`, {
-          databaseId: dbId,
+        cacheLogger.cache(`No cache entries found for: ${scope}`, {
+          catalogId,
+          schema: schema ?? null,
         });
       }
     } catch (error) {
       // Gestion des erreurs avec logging détaillé
-      cacheLogger.error(`Failed to invalidate cache for database: ${dbId}`, error, {
-        databaseId: dbId,
+      cacheLogger.error(`Failed to invalidate cache for: ${scope}`, error, {
+        catalogId,
+        schema: schema ?? null,
       });
       throw error;
     }
   }
 
   /**
-   * Invalidate a specific cache type for a given database.
+   * Invalidate a specific cache type for a given catalog (and optional schema).
    *
    * @param cacheType - Cache type key (metadata, dimension, facts, etc.).
-   * @param databaseId - Database identifier. Defaults to 'default' when null.
+   * @param catalog - Catalog identifier. Defaults to 'default' when null.
+   * @param schema - Optional schema name; null/omitted means "all schemas".
    * @throws {Error} When the cache type is unknown or the Redis operation fails.
    */
-  async invalidateCacheType(cacheType: string, databaseId: string | null = null): Promise<void> {
-    const dbId = databaseId ?? 'default';
+  async invalidateCacheType(
+    cacheType: string,
+    catalog: string | null = null,
+    schema: string | null = null,
+  ): Promise<void> {
+    const catalogId = catalog ?? 'default';
+    const scope = schema ? `${catalogId}/${schema}` : catalogId;
 
     // Vérification que le type de cache existe dans nos motifs définis
     if (!(cacheType in this.keyPatterns)) {
@@ -157,7 +189,7 @@ class CacheInvalidationManager {
 
     try {
       // Construction du motif spécifique au type de cache demandé
-      const pattern = this.keyPatterns[cacheType as keyof KeyPatterns](dbId);
+      const pattern = this.keyPatterns[cacheType as keyof KeyPatterns](catalogId, schema);
 
       // Recherche des clés correspondant à ce type de cache
       const keys = await this.scanKeys(pattern);
@@ -165,47 +197,47 @@ class CacheInvalidationManager {
       // Suppression sélective des clés trouvées
       if (keys.length > 0) {
         await redis.del(...keys);
-        cacheLogger.cache(`Invalidated ${cacheType} cache for database: ${dbId}`, {
+        cacheLogger.cache(`Invalidated ${cacheType} cache for: ${scope}`, {
           cacheType,
-          databaseId: dbId,
+          catalogId,
+          schema: schema ?? null,
           keysCount: keys.length,
         });
       }
     } catch (error) {
       // Gestion d'erreur avec contexte spécifique au type de cache
-      cacheLogger.error(`Failed to invalidate ${cacheType} cache for database: ${dbId}`, error, {
+      cacheLogger.error(`Failed to invalidate ${cacheType} cache for: ${scope}`, error, {
         cacheType,
-        databaseId: dbId,
+        catalogId,
+        schema: schema ?? null,
       });
       throw error;
     }
   }
 
   /**
-   * Invalidate all caches across all configured databases in parallel.
+   * Invalidate all caches across all configured catalogs in parallel.
    *
-   * Individual database failures are logged and captured but do not abort
-   * the remaining invalidations.
+   * Each catalog invalidation covers every schema of that catalog. Individual
+   * catalog failures are logged and captured but do not abort the remaining
+   * invalidations.
    *
-   * @throws {Error} When the database list cannot be retrieved from config.
+   * @throws {Error} When the catalog list cannot be retrieved.
    */
-  async invalidateAllDatabases(): Promise<void> {
+  async invalidateAllCatalogs(): Promise<void> {
     cacheLogger.cache('Starting global cache invalidation');
 
     try {
-      // Récupération de la liste de toutes les bases de données configurées
-      const rawDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
-      const databases: string[] = Array.isArray(rawDatabases)
-        ? rawDatabases
-        : (JSON.parse(rawDatabases) as string[]);
+      // Liste de tous les catalogues configurés (source de vérité = databaseManager)
+      const catalogs = databaseManager.getAvailableCatalogs();
 
-      // Création des promesses d'invalidation pour chaque base de données
+      // Création des promesses d'invalidation pour chaque catalogue
       // Capture des erreurs individuelles pour ne pas bloquer le reste du processus
-      const invalidationPromises = databases.map((dbId) =>
-        this.invalidateDatabase(dbId).catch((error: Error): InvalidationResult => {
-          // Journalisation de l'erreur mais continuation pour les autres bases
-          cacheLogger.error(`Failed to invalidate database ${dbId}`, error);
-          return { database: dbId, error: error.message };
+      const invalidationPromises = catalogs.map((catalogId) =>
+        this.invalidateCatalog(catalogId).catch((error: Error): InvalidationResult => {
+          // Journalisation de l'erreur mais continuation pour les autres catalogues
+          cacheLogger.error(`Failed to invalidate catalog ${catalogId}`, error);
+          return { catalog: catalogId, error: error.message };
         }),
       );
 
@@ -223,7 +255,7 @@ class CacheInvalidationManager {
       if (failures.length > 0) {
         cacheLogger.warn('Some cache invalidations failed', {
           failures: failures.length,
-          total: databases.length,
+          total: catalogs.length,
         });
       } else {
         cacheLogger.cache('Global cache invalidation completed successfully');
@@ -236,40 +268,48 @@ class CacheInvalidationManager {
   }
 
   /**
-   * Collect Redis key counts per cache type for all configured databases.
+   * Collect Redis key counts per cache type, broken down by catalog and schema.
    *
-   * @returns Nested record mapping each database ID to a per-type key count map.
+   * For each configured catalog the manager iterates its declared schemas
+   * (via {@link databaseManager.getSchemas}) and counts keys per type.
+   *
+   * @returns Nested record `catalog → schema → type → count`.
    * @throws {Error} When the Redis SCAN operation fails.
    */
   async getCacheStats(): Promise<CacheStats> {
     try {
-      // Récupération de toutes les bases de données configurées
-      const rawDatabases = config.DATABASE_ROUTING.ALLOWED_DATABASES;
-      const databases: string[] = Array.isArray(rawDatabases)
-        ? rawDatabases
-        : (JSON.parse(rawDatabases) as string[]);
+      // Liste de tous les catalogues configurés
+      const catalogs = databaseManager.getAvailableCatalogs();
       const stats: CacheStats = {};
 
-      // Parcours de chaque base de données pour collecter les statistiques
-      for (const dbId of databases) {
-        const dbStats: DatabaseStats = {};
+      // Parcours de chaque catalogue
+      for (const catalogId of catalogs) {
+        const schemas = databaseManager.getSchemas(catalogId);
+        const catalogStats: CatalogStats = {};
 
-        // Parcours de chaque type de cache pour compter les clés correspondantes
-        for (const [type, patternFn] of Object.entries(this.keyPatterns) as [
-          keyof KeyPatterns,
-          KeyPatternFn,
-        ][]) {
-          // Exclusion du motif global — il chevauche tous les autres types
-          if (type === 'allDatabase') continue;
+        // Parcours de chaque schéma déclaré pour ce catalogue
+        for (const schema of schemas) {
+          const schemaStats: SchemaStats = {};
 
-          // Construction du motif et comptage des clés correspondantes
-          const pattern = patternFn(dbId);
-          const keys = await this.scanKeys(pattern);
-          dbStats[type] = keys.length;
+          // Parcours de chaque type de cache pour compter les clés correspondantes
+          for (const [type, patternFn] of Object.entries(this.keyPatterns) as [
+            keyof KeyPatterns,
+            KeyPatternFn,
+          ][]) {
+            // Exclusion du motif global — il chevauche tous les autres types
+            if (type === 'allCatalog') continue;
+
+            // Construction du motif et comptage des clés correspondantes
+            const pattern = patternFn(catalogId, schema);
+            const keys = await this.scanKeys(pattern);
+            schemaStats[type] = keys.length;
+          }
+
+          catalogStats[schema] = schemaStats;
         }
 
-        // Stockage des statistiques pour cette base de données
-        stats[dbId] = dbStats;
+        // Stockage des statistiques pour ce catalogue
+        stats[catalogId] = catalogStats;
       }
 
       return stats;
@@ -292,30 +332,43 @@ const cacheInvalidationManager = new CacheInvalidationManager();
  * All routes are protected by the `requireAdminKey` middleware.
  *
  * Routes registered:
- * - `POST /api/cache/invalidate/:database` — invalidate a single database cache.
- * - `POST /api/cache/invalidate-all` — invalidate all database caches.
- * - `GET  /api/cache/stats` — retrieve per-type key counts.
+ * - `POST /api/cache/invalidate/:catalog` — invalidate every schema of a catalog.
+ * - `POST /api/cache/invalidate/:catalog/:schema` — invalidate a single schema.
+ * - `POST /api/cache/invalidate-all` — invalidate every catalog in turn.
+ * - `GET  /api/cache/stats` — retrieve nested catalog → schema → type key counts.
  *
  * @param app - Express application instance to register routes on.
  */
 const createCacheInvalidationRoutes = (app: Express): void => {
-  // Route pour invalider le cache d'une base de données spécifique
-  // POST /api/cache/invalidate/:database
+  // Helper d'extraction du paramètre :catalog ou :schema, robuste à Express qui
+  // renvoie parfois un tableau quand la route est dupliquée
+  const pickParam = (raw: string | string[] | undefined): string | null => {
+    if (Array.isArray(raw)) return raw[0] ?? null;
+    return raw ?? null;
+  };
+
+  // POST /api/cache/invalidate/:catalog — tous les schémas du catalogue
   app.post(
-    '/api/cache/invalidate/:database',
+    '/api/cache/invalidate/:catalog',
     requireAdminKey,
     async (req: Request, res: Response) => {
       try {
-        // Extraction et normalisation du paramètre de base de données depuis l'URL
-        const database = Array.isArray(req.params['database'])
-          ? req.params['database'][0]
-          : req.params['database'];
+        const catalog = pickParam(req.params['catalog']);
 
-        // Exécution de l'invalidation du cache pour la base spécifiée
-        await cacheInvalidationManager.invalidateDatabase(database);
+        // Validation 404 du catalogue avant toute opération Redis
+        if (!catalog || !databaseManager.isValidCatalog(catalog)) {
+          res.status(404).json({
+            error: `Catalog '${catalog ?? ''}' is not available.`,
+            availableCatalogs: databaseManager.getAvailableCatalogs(),
+          });
+          return;
+        }
+
+        // Exécution de l'invalidation pour tous les schémas du catalogue
+        await cacheInvalidationManager.invalidateCatalog(catalog);
 
         // Réponse de succès avec horodatage
-        res.json({ success: true, database, timestamp: new Date().toISOString() });
+        res.json({ success: true, catalog, timestamp: new Date().toISOString() });
       } catch (error) {
         // Gestion des erreurs avec logging et réponse d'erreur appropriée
         cacheLogger.error('Cache invalidation endpoint error', error);
@@ -324,12 +377,55 @@ const createCacheInvalidationRoutes = (app: Express): void => {
     },
   );
 
-  // Route pour invalider tous les caches de toutes les bases de données
+  // POST /api/cache/invalidate/:catalog/:schema — un seul schéma d'un catalogue
+  app.post(
+    '/api/cache/invalidate/:catalog/:schema',
+    requireAdminKey,
+    async (req: Request, res: Response) => {
+      try {
+        const catalog = pickParam(req.params['catalog']);
+        const schema = pickParam(req.params['schema']);
+
+        // Validation 404 du catalogue avant validation du schéma
+        if (!catalog || !databaseManager.isValidCatalog(catalog)) {
+          res.status(404).json({
+            error: `Catalog '${catalog ?? ''}' is not available.`,
+            availableCatalogs: databaseManager.getAvailableCatalogs(),
+          });
+          return;
+        }
+
+        // Validation 404 du schéma à l'intérieur du catalogue
+        if (!schema || !databaseManager.isValidSchema(catalog, schema)) {
+          res.status(404).json({
+            error: `Schema '${schema ?? ''}' is not configured for catalog '${catalog}'.`,
+            availableSchemas: databaseManager.getSchemas(catalog),
+          });
+          return;
+        }
+
+        // Invalidation ciblée sur (catalog, schema)
+        await cacheInvalidationManager.invalidateCatalog(catalog, schema);
+
+        res.json({
+          success: true,
+          catalog,
+          schema,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        cacheLogger.error('Per-schema cache invalidation endpoint error', error);
+        res.status(500).json({ error: (error as Error).message });
+      }
+    },
+  );
+
+  // Route pour invalider tous les caches de tous les catalogues
   // POST /api/cache/invalidate-all
   app.post('/api/cache/invalidate-all', requireAdminKey, async (_req: Request, res: Response) => {
     try {
       // Invalidation globale de tous les caches
-      await cacheInvalidationManager.invalidateAllDatabases();
+      await cacheInvalidationManager.invalidateAllCatalogs();
 
       // Confirmation de succès avec horodatage
       res.json({ success: true, timestamp: new Date().toISOString() });
@@ -344,7 +440,7 @@ const createCacheInvalidationRoutes = (app: Express): void => {
   // GET /api/cache/stats
   app.get('/api/cache/stats', requireAdminKey, async (_req: Request, res: Response) => {
     try {
-      // Collecte des statistiques de cache pour toutes les bases
+      // Collecte des statistiques de cache pour tous les (catalog, schema)
       const stats = await cacheInvalidationManager.getCacheStats();
 
       // Retour des statistiques avec horodatage
@@ -358,4 +454,11 @@ const createCacheInvalidationRoutes = (app: Express): void => {
 };
 
 export { cacheInvalidationManager, CacheInvalidationManager, createCacheInvalidationRoutes };
-export type { KeyPatterns, KeyPatternFn, InvalidationResult, DatabaseStats, CacheStats };
+export type {
+  KeyPatterns,
+  KeyPatternFn,
+  InvalidationResult,
+  SchemaStats,
+  CatalogStats,
+  CacheStats,
+};

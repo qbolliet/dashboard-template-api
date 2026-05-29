@@ -21,7 +21,8 @@ interface BaseQueryLoaderInstance {
   batchSize: number;
   cachePrefix: string;
   cacheEnabled: boolean;
-  databaseId: string | null;
+  catalogId: string | null;
+  schema: string | null;
   cacheTimeout: number;
   executeWithConnection: (fn: (conn: unknown) => Promise<unknown>) => Promise<unknown>;
   qualifyTable: (tableName: string) => string;
@@ -33,7 +34,8 @@ interface BaseQueryLoaderOptions {
   batchSize?: number;
   cachePrefix?: string;
   cache?: boolean;
-  databaseId?: string | null;
+  catalogId?: string | null;
+  schema?: string | null;
   cacheTimeout?: number;
 }
 
@@ -101,7 +103,7 @@ let FactQueryLoader: FactQueryLoaderConstructor;
 
 beforeAll(async () => {
   ({ BaseQueryLoader, FactQueryLoader } =
-    await import('../../../src/loaders/base-loader.js') as unknown as BaseLoaderModule);
+    (await import('../../../src/loaders/base-loader.js')) as unknown as BaseLoaderModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -110,8 +112,8 @@ describe('BaseQueryLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
-    mockDatabaseManager.defaultDatabase = 'main';
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultCatalog.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -123,7 +125,7 @@ describe('BaseQueryLoader', () => {
       expect(loader.batchSize).toBe(5);
       expect(loader.cachePrefix).toBe('default');
       expect(loader.cacheEnabled).toBe(true);
-      expect(loader.databaseId).toBeNull();
+      expect(loader.catalogId).toBeNull();
       expect(loader.cacheTimeout).toBe(300000);
     });
 
@@ -132,13 +134,13 @@ describe('BaseQueryLoader', () => {
         batchSize: 15,
         cachePrefix: 'custom',
         cache: false,
-        databaseId: 'analytics',
+        catalogId: 'analytics',
         cacheTimeout: 99999,
       });
       expect(loader.batchSize).toBe(15);
       expect(loader.cachePrefix).toBe('custom');
       expect(loader.cacheEnabled).toBe(false);
-      expect(loader.databaseId).toBe('analytics');
+      expect(loader.catalogId).toBe('analytics');
       expect(loader.cacheTimeout).toBe(99999);
     });
 
@@ -157,7 +159,7 @@ describe('BaseQueryLoader', () => {
 
   describe('executeWithConnection', () => {
     test('acquiert et libère la connexion correctement', async () => {
-      const loader = new BaseQueryLoader({ databaseId: 'main' });
+      const loader = new BaseQueryLoader({ catalogId: 'main' });
       const queryFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
 
       const result = await loader.executeWithConnection(queryFn);
@@ -187,8 +189,8 @@ describe('BaseQueryLoader', () => {
       expect(queryFn).not.toHaveBeenCalled();
     });
 
-    test('utilise null comme databaseId par défaut', async () => {
-      const loader = new BaseQueryLoader({ databaseId: null });
+    test('utilise null comme catalogId par défaut', async () => {
+      const loader = new BaseQueryLoader({ catalogId: null });
       const queryFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
 
       await loader.executeWithConnection(queryFn);
@@ -198,7 +200,7 @@ describe('BaseQueryLoader', () => {
     test('gère plusieurs opérations concurrentes', async () => {
       const loader = new BaseQueryLoader();
       const ops = Array.from({ length: 5 }, (_, i) =>
-        loader.executeWithConnection(async () => `result-${i}`)
+        loader.executeWithConnection(async () => `result-${i}`),
       );
 
       const results = await Promise.all(ops);
@@ -211,27 +213,27 @@ describe('BaseQueryLoader', () => {
   // ── Qualification des noms de tables ──────────────────────────────────────
 
   describe('qualifyTable', () => {
-    test('utilise databaseId quand il est défini', () => {
-      const loader = new BaseQueryLoader({ databaseId: 'mydb' });
-      mockDatabaseManager.getSchema.mockReturnValue('main');
+    test('utilise catalogId quand il est défini', () => {
+      const loader = new BaseQueryLoader({ catalogId: 'mydb' });
+      mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
 
       const result = loader.qualifyTable('fact_table');
       expect(result).toBe('"mydb".main.fact_table');
-      expect(mockDatabaseManager.getSchema).toHaveBeenCalledWith('mydb');
+      expect(mockDatabaseManager.getDefaultSchema).toHaveBeenCalledWith('mydb');
     });
 
-    test('utilise defaultDatabase quand databaseId est null', () => {
-      const loader = new BaseQueryLoader({ databaseId: null });
-      mockDatabaseManager.defaultDatabase = 'defaultdb';
-      mockDatabaseManager.getSchema.mockReturnValue('main');
+    test('utilise defaultDatabase quand catalogId est null', () => {
+      const loader = new BaseQueryLoader({ catalogId: null });
+      mockDatabaseManager.getDefaultCatalog.mockReturnValue('defaultdb');
+      mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
 
       const result = loader.qualifyTable('metadata');
       expect(result).toBe('"defaultdb".main.metadata');
     });
 
     test('formate correctement les noms de tables avec les guillemets', () => {
-      const loader = new BaseQueryLoader({ databaseId: 'catalog1' });
-      mockDatabaseManager.getSchema.mockReturnValue('myschema');
+      const loader = new BaseQueryLoader({ catalogId: 'catalog1' });
+      mockDatabaseManager.getDefaultSchema.mockReturnValue('myschema');
 
       const result = loader.qualifyTable('dim_country');
       expect(result).toBe('"catalog1".myschema.dim_country');
@@ -242,16 +244,18 @@ describe('BaseQueryLoader', () => {
 
   describe('loadWithCache', () => {
     test('appelle withCache quand le cache est activé', async () => {
-      const loader = new BaseQueryLoader({ cachePrefix: 'test', databaseId: 'main' });
+      const loader = new BaseQueryLoader({ cachePrefix: 'test', catalogId: 'main' });
       const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
-      mockWithCache.mockImplementation(async (_key: unknown, fn: () => Promise<unknown>) => await fn());
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
 
       const result = await loader.loadWithCache('mykey', loaderFn);
 
       expect(mockWithCache).toHaveBeenCalledWith(
-        'test:main:"mykey"',
+        'test:main:_:"mykey"',
         loaderFn,
-        loader.cacheTimeout
+        loader.cacheTimeout,
       );
       expect(result).toBe('result');
     });
@@ -279,32 +283,32 @@ describe('BaseQueryLoader', () => {
     });
 
     test('génère la clé cache correcte pour un objet complexe', async () => {
-      const loader = new BaseQueryLoader({ cachePrefix: 'test', databaseId: 'main' });
+      const loader = new BaseQueryLoader({ cachePrefix: 'test', catalogId: 'main' });
       const complexKey = { field: 'value', nested: { prop: 123 } };
       const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
-      mockWithCache.mockImplementation(async (_key: unknown, fn: () => Promise<unknown>) => await fn());
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
 
       await loader.loadWithCache(complexKey, loaderFn);
 
       expect(mockWithCache).toHaveBeenCalledWith(
-        `test:main:${JSON.stringify(complexKey)}`,
+        `test:main:_:${JSON.stringify(complexKey)}`,
         loaderFn,
-        loader.cacheTimeout
+        loader.cacheTimeout,
       );
     });
 
-    test('utilise "default" dans la clé cache quand databaseId est null', async () => {
-      const loader = new BaseQueryLoader({ cachePrefix: 'pre', databaseId: null });
+    test('utilise "default" dans la clé cache quand catalogId est null', async () => {
+      const loader = new BaseQueryLoader({ cachePrefix: 'pre', catalogId: null });
       const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
-      mockWithCache.mockImplementation(async (_key: unknown, fn: () => Promise<unknown>) => await fn());
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
 
       await loader.loadWithCache('k', loaderFn);
 
-      expect(mockWithCache).toHaveBeenCalledWith(
-        'pre:default:"k"',
-        loaderFn,
-        expect.any(Number)
-      );
+      expect(mockWithCache).toHaveBeenCalledWith('pre:default:_:"k"', loaderFn, expect.any(Number));
     });
 
     test('fait le fallback si JSON.stringify échoue (référence circulaire)', async () => {
@@ -398,7 +402,7 @@ describe('FactQueryLoader', () => {
       expect(() => loader.validatePagination(100, 1000)).not.toThrow();
     });
 
-    test('ne lève pas d\'erreur aux valeurs limites exactes', () => {
+    test("ne lève pas d'erreur aux valeurs limites exactes", () => {
       const loader = new FactQueryLoader();
       expect(() => loader.validatePagination(1000, 10000)).not.toThrow();
     });

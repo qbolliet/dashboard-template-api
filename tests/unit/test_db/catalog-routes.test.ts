@@ -11,9 +11,12 @@ import { jest } from '@jest/globals';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
-/** Gestionnaire de base de données mocké — seule reloadCatalogs est utilisée. */
+/** Gestionnaire de catalogues mocké — reload global + reload/validation par catalogue. */
 interface MockDatabaseManager {
   reloadCatalogs: jest.Mock;
+  reloadCatalog: jest.Mock;
+  isValidCatalog: jest.Mock;
+  getAvailableCatalogs: jest.Mock;
 }
 
 /** Application Express mockée — enregistrement des routes POST. */
@@ -44,6 +47,9 @@ interface CatalogRoutesModule {
 // Gestionnaire de base de données mocké — référence stable réutilisée par les tests
 const mockDatabaseManager: MockDatabaseManager = {
   reloadCatalogs: jest.fn(),
+  reloadCatalog: jest.fn(),
+  isValidCatalog: jest.fn().mockReturnValue(true),
+  getAvailableCatalogs: jest.fn().mockReturnValue(['default', 'macroeconomics']),
 };
 
 // Middleware d'authentification mocké — laisse passer en appelant next()
@@ -109,9 +115,72 @@ describe('createCatalogRoutes', () => {
       expect(paths).toContain('/api/catalog/reload');
     });
 
+    test('registers POST /api/catalog/reload/:catalog', () => {
+      const paths: string[] = mockApp.post.mock.calls.map((c: unknown[]) => c[0] as string);
+      expect(paths).toContain('/api/catalog/reload/:catalog');
+    });
+
     test('guards the route with the shared requireAdminKey middleware', () => {
       const call = mockApp.post.mock.calls.find((c: unknown[]) => c[0] === '/api/catalog/reload');
       expect(call![1]).toBe(mockRequireAdminKey);
+    });
+
+    test('guards the per-catalog route with requireAdminKey', () => {
+      const call = mockApp.post.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/catalog/reload/:catalog',
+      );
+      expect(call![1]).toBe(mockRequireAdminKey);
+    });
+  });
+
+  // ── Handler POST /api/catalog/reload/:catalog ─────────────────────────────
+
+  describe('POST /api/catalog/reload/:catalog handler', () => {
+    let handler: (req: MockRequest, res: MockResponse) => Promise<void>;
+
+    beforeEach(() => {
+      const call = mockApp.post.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/catalog/reload/:catalog',
+      );
+      handler = call![2] as typeof handler;
+    });
+
+    test('reloads a known catalog and returns success with its name', async () => {
+      mockDatabaseManager.isValidCatalog.mockReturnValueOnce(true);
+      mockDatabaseManager.reloadCatalog.mockResolvedValueOnce(undefined);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'macroeconomics' } }), res);
+
+      expect(mockDatabaseManager.reloadCatalog).toHaveBeenCalledWith('macroeconomics');
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          catalog: 'macroeconomics',
+          timestamp: expect.any(String),
+        }),
+      );
+    });
+
+    test('returns 404 for an unknown catalog without reloading', async () => {
+      mockDatabaseManager.isValidCatalog.mockReturnValueOnce(false);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'nope' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(mockDatabaseManager.reloadCatalog).not.toHaveBeenCalled();
+    });
+
+    test('returns 500 with the error message on reload failure', async () => {
+      mockDatabaseManager.isValidCatalog.mockReturnValueOnce(true);
+      mockDatabaseManager.reloadCatalog.mockRejectedValueOnce(new Error('DETACH failed'));
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'macroeconomics' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'DETACH failed' }));
     });
   });
 

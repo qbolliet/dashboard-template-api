@@ -23,6 +23,7 @@ interface AggregatedFactsParams {
   filters: string | null;
   structuredFilters: unknown | null;
   groupBy: string;
+  measure: string;
   aggregation: string;
   limit: number;
   offset: number;
@@ -121,7 +122,8 @@ beforeAll(async () => {
     createAggregatedFactsWithMetadataLoader,
     createAggregatedFactsWithCountLoader,
     AggregatedFactsLoader,
-  } = await import('../../../src/loaders/aggregated-facts.js') as unknown as AggregatedFactsModule);
+  } =
+    (await import('../../../src/loaders/aggregated-facts.js')) as unknown as AggregatedFactsModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -133,6 +135,7 @@ describe('AggregatedFactsLoader', () => {
     filters: null,
     structuredFilters: null,
     groupBy: 'country',
+    measure: 'value',
     aggregation: 'SUM',
     limit: 10,
     offset: 0,
@@ -142,7 +145,7 @@ describe('AggregatedFactsLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -185,7 +188,7 @@ describe('AggregatedFactsLoader', () => {
       ]);
 
       const loader = createAggregatedFactsLoader('main');
-      const result = await loader.load({ ...baseParams }) as AggregatedResult[];
+      const result = (await loader.load({ ...baseParams })) as AggregatedResult[];
 
       expect(result).toHaveLength(2);
       expect(result[0]).toMatchObject({
@@ -197,12 +200,10 @@ describe('AggregatedFactsLoader', () => {
     });
 
     test('convertit les valeurs en nombres', async () => {
-      mockConnection.all.mockResolvedValue([
-        { key: '1', aggregatedValue: '42.5', count: '3' },
-      ]);
+      mockConnection.all.mockResolvedValue([{ key: '1', aggregatedValue: '42.5', count: '3' }]);
 
       const loader = createAggregatedFactsLoader('main');
-      const result = await loader.load({ ...baseParams }) as AggregatedResult[];
+      const result = (await loader.load({ ...baseParams })) as AggregatedResult[];
 
       expect(typeof result[0].aggregatedValue).toBe('number');
       expect(typeof result[0].count).toBe('number');
@@ -210,12 +211,10 @@ describe('AggregatedFactsLoader', () => {
     });
 
     test('convertit les clés en chaînes', async () => {
-      mockConnection.all.mockResolvedValue([
-        { key: 42, aggregatedValue: 100, count: 1 },
-      ]);
+      mockConnection.all.mockResolvedValue([{ key: 42, aggregatedValue: 100, count: 1 }]);
 
       const loader = createAggregatedFactsLoader('main');
-      const result = await loader.load({ ...baseParams }) as AggregatedResult[];
+      const result = (await loader.load({ ...baseParams })) as AggregatedResult[];
 
       expect(result[0].key).toBe('42');
     });
@@ -230,7 +229,7 @@ describe('AggregatedFactsLoader', () => {
       expect(query).toContain('AVG(value)');
     });
 
-    test("utilise SUM par défaut pour une agrégation inconnue", async () => {
+    test('utilise SUM par défaut pour une agrégation inconnue', async () => {
       mockConnection.all.mockResolvedValue([]);
 
       const loader = createAggregatedFactsLoader('main');
@@ -238,6 +237,16 @@ describe('AggregatedFactsLoader', () => {
 
       const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('SUM(value)');
+    });
+
+    test('agrège la colonne mesure spécifiée', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({ ...baseParams, measure: 'lower_bound', aggregation: 'AVG' });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('AVG(lower_bound)');
     });
 
     test('inclut LIMIT et OFFSET', async () => {
@@ -257,13 +266,11 @@ describe('AggregatedFactsLoader', () => {
   describe('createAggregatedFactsWithCountLoader', () => {
     test('retourne les données avec le comptage des groupes', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([
-          { key: 'FR', aggregatedValue: 500, count: 10 },
-        ])
+        .mockResolvedValueOnce([{ key: 'FR', aggregatedValue: 500, count: 10 }])
         .mockResolvedValueOnce([{ totalGroups: 25 }]);
 
       const loader = createAggregatedFactsWithCountLoader('main');
-      const result = await loader.load({ ...baseParams }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams })) as Record<string, unknown>;
 
       expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('totalGroups', 25);
@@ -278,13 +285,11 @@ describe('AggregatedFactsLoader', () => {
   describe('createAggregatedFactsWithMetadataLoader', () => {
     test('retourne les données avec les métadonnées', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([
-          { key: 'FR', aggregatedValue: 500, count: 10 },
-        ])
+        .mockResolvedValueOnce([{ key: 'FR', aggregatedValue: 500, count: 10 }])
         .mockResolvedValueOnce([{ name: 'country', type: 'string', is_categorical: 1 }]);
 
       const loader = createAggregatedFactsWithMetadataLoader('main');
-      const result = await loader.load({ ...baseParams }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams })) as Record<string, unknown>;
 
       expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('metadata');
@@ -295,12 +300,10 @@ describe('AggregatedFactsLoader', () => {
     });
 
     test('retourne des métadonnées vides pour un résultat vide', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
       const loader = createAggregatedFactsWithMetadataLoader('main');
-      const result = await loader.load({ ...baseParams }) as Record<string, unknown>;
+      const result = (await loader.load({ ...baseParams })) as Record<string, unknown>;
       const metadata = result['metadata'] as Record<string, unknown>;
 
       expect(metadata.count).toBe(0);

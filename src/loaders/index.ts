@@ -18,13 +18,14 @@ import {
   createCompareAggregatedFacts,
   createCrossDatabaseSelectOptions,
 } from './cross-database.js';
+import { databaseManager } from '../db/index.js';
 
 import type { MetadataRow } from './metadata.js';
 import type { DimensionRecord, DimensionValue, DimensionValueParams } from './dimension.js';
 import type { FactQueryParams, FactQueryResult } from './fact.js';
 import type { SelectOptionsParams, SelectOption } from './select-options.js';
 import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
-import type { CatalogMetadataRow } from './catalog.js';
+import type { CatalogMetadataRow, CatalogSchemaKey } from './catalog.js';
 import type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
@@ -72,8 +73,8 @@ interface LoadersCollection {
   aggregatedFactsWithMetadata: Loader<AggregatedQueryParams, AggregatedResult>;
   aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
-  catalogMetadata: Loader<string, CatalogMetadataRow[]>;
-  catalogDimensionNames: Loader<string, string[]>;
+  catalogMetadata: Loader<CatalogSchemaKey, CatalogMetadataRow[]>;
+  catalogDimensionNames: Loader<CatalogSchemaKey, string[]>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
   compareAggregatedFacts: Loader<CompareAggregatedFactsParams, ComparisonResult>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
@@ -86,31 +87,52 @@ interface LoadersCollection {
  * Creates and initializes all data loaders for a given database.
  *
  * Instantiates one DataLoader per query type. Catalog and cross-database
- * loaders are shared and independent of databaseId.
+ * loaders are shared and independent of catalogId.
  *
- * @param databaseId - Catalog alias to use for all single-database loaders.
- *   Null uses the configured default database.
+ * @param catalogId - Catalog alias to use for all single-catalog loaders.
+ *   Null uses the configured default catalog.
+ * @param schema - DuckLake schema within the catalog. Null uses the catalog's
+ *   configured default schema. Validated against the catalog's allow-list
+ *   (anti-injection: the schema is interpolated into qualified table names).
  * @returns LoadersCollection with all loaders plus clearAll and prime helpers.
  */
-const createLoaders = (databaseId: string | null = null): LoadersCollection => {
+const createLoaders = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+): LoadersCollection => {
+  // Validation du schéma contre l'allow-list du catalogue cible (le schéma
+  // sera interpolé dans le SQL via qualifyTable, donc jamais une chaîne libre).
+  if (schema) {
+    const targetCatalog = catalogId ?? databaseManager.getDefaultCatalog();
+    if (!databaseManager.isValidSchema(targetCatalog, schema)) {
+      throw new Error(
+        `Schema '${schema}' is not available for catalog '${targetCatalog}'. ` +
+          `Available: ${databaseManager.getSchemas(targetCatalog).join(', ')}`,
+      );
+    }
+  }
+
   // Initialisation des loaders de méta-données et dimensions
-  const metadataLoader = createMetadataLoader(databaseId);
-  const dimensionLoader = createDimensionLoader(databaseId);
-  const dimensionValueLoader = createDimensionValueLoader(databaseId);
+  const metadataLoader = createMetadataLoader(catalogId, schema);
+  const dimensionLoader = createDimensionLoader(catalogId, schema);
+  const dimensionValueLoader = createDimensionValueLoader(catalogId, schema);
 
   // Loaders pour les faits
-  const factLoader = createFactLoader(databaseId);
-  const factWithCountLoader = createFactWithCountLoader(databaseId);
-  const factWithMetadataLoader = createFactWithMetadataLoader(databaseId);
+  const factLoader = createFactLoader(catalogId, schema);
+  const factWithCountLoader = createFactWithCountLoader(catalogId, schema);
+  const factWithMetadataLoader = createFactWithMetadataLoader(catalogId, schema);
 
   // Loaders pour les faits agrégés
-  const aggregatedFactsLoader = createAggregatedFactsLoader(databaseId);
-  const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader(databaseId);
-  const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(databaseId);
+  const aggregatedFactsLoader = createAggregatedFactsLoader(catalogId, schema);
+  const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader(
+    catalogId,
+    schema,
+  );
+  const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(catalogId, schema);
 
-  const selectOptionsLoader = createSelectOptionsLoader(databaseId);
+  const selectOptionsLoader = createSelectOptionsLoader(catalogId, schema);
 
-  // Loaders catalog et cross-database — partagés, indépendants du databaseId
+  // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
   const catalogDimensionNamesLoader = createCatalogDimensionNamesLoader();
   const compareFactsLoader = createCompareFacts();
@@ -211,11 +233,15 @@ const createLoaders = (databaseId: string | null = null): LoadersCollection => {
  * Ensures per-request DataLoader instances to prevent data leaking
  * between concurrent requests while sharing the Redis cache layer.
  *
- * @param databaseId - Catalog alias to use; null uses the default database.
+ * @param catalogId - Catalog alias to use; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns New LoadersCollection for the current request.
  */
-const createLoadersForRequest = (databaseId: string | null = null): LoadersCollection => {
-  return createLoaders(databaseId);
+const createLoadersForRequest = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+): LoadersCollection => {
+  return createLoaders(catalogId, schema);
 };
 
 export { createLoaders, createLoadersForRequest };

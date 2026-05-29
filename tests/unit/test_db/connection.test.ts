@@ -13,55 +13,55 @@ import { jest } from '@jest/globals';
 
 /** Pool partagé mocké — simulation du DuckDBPool pour les tests de connection. */
 interface MockSharedPool {
-  pool:           unknown[];
+  pool: unknown[];
   maxConnections: number;
-  catalogs:       { alias: string }[];
-  acquire:        jest.Mock;
-  release:        jest.Mock;
-  close:          jest.Mock;
+  catalogs: { alias: string }[];
+  acquire: jest.Mock;
+  release: jest.Mock;
+  close: jest.Mock;
 }
 
 /** Gestionnaire de base de données mocké — simulation du singleton DatabaseManager. */
 interface MockDatabaseManager {
-  getPool:                 jest.Mock;
-  isValidDatabase:         jest.Mock;
-  getAvailableDatabases:   jest.Mock;
-  getDefaultDatabase:      jest.Mock;
-  isCrossDatabaseAllowed:  jest.Mock;
-  validateDatabaseRouting: jest.Mock;
-  getStatistics:           jest.Mock;
-  close:                   jest.Mock;
+  getPool: jest.Mock;
+  isValidCatalog: jest.Mock;
+  getAvailableCatalogs: jest.Mock;
+  getDefaultCatalog: jest.Mock;
+  isCrossCatalogAllowed: jest.Mock;
+  validateCatalogRouting: jest.Mock;
+  getStatistics: jest.Mock;
+  close: jest.Mock;
 }
 
 /** Module connection.js après import dynamique — exports attendus. */
 interface ConnectionModule {
-  dbPool:              MockSharedPool;
-  closeConnections:    () => Promise<void>;
-  getDefaultPool:      () => MockSharedPool;
-  databaseManager:     MockDatabaseManager;
+  dbPool: MockSharedPool;
+  closeConnections: () => Promise<void>;
+  getDefaultPool: () => MockSharedPool;
+  databaseManager: MockDatabaseManager;
   closeAllConnections: jest.Mock;
 }
 
 // ─── État des mocks ───────────────────────────────────────────────────────────
 
 const mockSharedPool: MockSharedPool = {
-  pool:           [],
+  pool: [],
   maxConnections: 5,
-  catalogs:       [{ alias: 'main' }],
-  acquire:        jest.fn().mockResolvedValue({}),
-  release:        jest.fn(),
-  close:          jest.fn().mockResolvedValue(undefined)
+  catalogs: [{ alias: 'main' }],
+  acquire: jest.fn().mockResolvedValue({}),
+  release: jest.fn(),
+  close: jest.fn().mockResolvedValue(undefined),
 };
 
 const mockDatabaseManager: MockDatabaseManager = {
-  getPool:                   jest.fn().mockReturnValue(mockSharedPool),
-  isValidDatabase:           jest.fn().mockReturnValue(true),
-  getAvailableDatabases:     jest.fn().mockReturnValue(['main']),
-  getDefaultDatabase:        jest.fn().mockReturnValue('main'),
-  isCrossDatabaseAllowed:    jest.fn().mockReturnValue(false),
-  validateDatabaseRouting:   jest.fn().mockReturnValue('main'),
-  getStatistics:             jest.fn().mockReturnValue({}),
-  close:                     jest.fn().mockResolvedValue(undefined)
+  getPool: jest.fn().mockReturnValue(mockSharedPool),
+  isValidCatalog: jest.fn().mockReturnValue(true),
+  getAvailableCatalogs: jest.fn().mockReturnValue(['main']),
+  getDefaultCatalog: jest.fn().mockReturnValue('main'),
+  isCrossCatalogAllowed: jest.fn().mockReturnValue(false),
+  validateCatalogRouting: jest.fn().mockReturnValue('main'),
+  getStatistics: jest.fn().mockReturnValue({}),
+  close: jest.fn().mockResolvedValue(undefined),
 };
 
 // Fonction de fermeture globale mockée — délégation depuis closeConnections
@@ -70,36 +70,31 @@ const mockCloseAllConnections: jest.Mock = jest.fn().mockResolvedValue(undefined
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/db/database-manager.js', () => ({
-  databaseManager:     mockDatabaseManager,
+  databaseManager: mockDatabaseManager,
   closeAllConnections: mockCloseAllConnections,
-  DatabaseManager:     jest.fn()
+  DatabaseManager: jest.fn(),
 }));
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   createContextLogger: () => ({
     database: jest.fn(),
-    warn:     jest.fn(),
-    error:    jest.fn()
-  })
+    warn: jest.fn(),
+    error: jest.fn(),
+  }),
 }));
 
 // ─── Import dynamique ─────────────────────────────────────────────────────────
 
 // Variables déclarées avant beforeAll — remplies après résolution des mocks
-let dbPool:              MockSharedPool;
-let closeConnections:    () => Promise<void>;
-let getDefaultPool:      () => MockSharedPool;
-let databaseManager:     MockDatabaseManager;
+let dbPool: MockSharedPool;
+let closeConnections: () => Promise<void>;
+let getDefaultPool: () => MockSharedPool;
+let databaseManager: MockDatabaseManager;
 let closeAllConnections: jest.Mock;
 
 beforeAll(async () => {
-  ({
-    dbPool,
-    closeConnections,
-    getDefaultPool,
-    databaseManager,
-    closeAllConnections
-  } = await import('../../../src/db/connection.js') as unknown as ConnectionModule);
+  ({ dbPool, closeConnections, getDefaultPool, databaseManager, closeAllConnections } =
+    (await import('../../../src/db/connection.js')) as unknown as ConnectionModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

@@ -6,6 +6,7 @@ docs-site/code-reference/
 docs-site/.docusaurus/
 docs-site/node_modules/
 helm/dashboard-template-api/charts/
+helm/**/templates/
 *.tsbuildinfo
 package-lock.json
 docs-site/package-lock.json

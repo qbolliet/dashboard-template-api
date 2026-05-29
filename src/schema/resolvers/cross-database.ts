@@ -12,15 +12,17 @@ import type {
 
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
 
-/** Supported SQL aggregation operations for cross-database queries. */
+/** Supported SQL aggregation operations for cross-catalog queries. */
 export type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Arguments for the compareFacts query. */
 export interface CompareFactsArgs {
-  databaseA: string;
-  databaseB: string;
+  catalogA: string;
+  catalogB: string;
+  schemaA?: string | null;
+  schemaB?: string | null;
   joinFields: string[];
   limit?: number;
   offset?: number;
@@ -29,8 +31,10 @@ export interface CompareFactsArgs {
 
 /** Arguments for the compareAggregatedFacts query. */
 export interface CompareAggregatedFactsArgs {
-  databaseA: string;
-  databaseB: string;
+  catalogA: string;
+  catalogB: string;
+  schemaA?: string | null;
+  schemaB?: string | null;
   groupBy: string;
   aggregation?: AggregationType;
   limit?: number;
@@ -40,7 +44,8 @@ export interface CompareAggregatedFactsArgs {
 /** Arguments for the crossDatabaseSelectOptions query. */
 export interface CrossDatabaseSelectOptionsArgs {
   fieldName: string;
-  databases: string[];
+  catalogs: string[];
+  schemas?: (string | null)[];
   limit?: number;
 }
 
@@ -60,57 +65,61 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
 
 /**
- * Checks that cross-database queries are enabled and throws if not.
+ * Checks that cross-catalog queries are enabled and throws if not.
  *
- * @throws {GraphQLError} When cross-database queries are disabled.
+ * @throws {GraphQLError} When cross-catalog queries are disabled.
  */
-// Vérification de l'activation des requêtes cross-base
+// Vérification de l'activation des requêtes cross-catalog
 function assertCrossDatabaseAllowed(): void {
-  if (!databaseManager.isCrossDatabaseAllowed()) {
+  if (!databaseManager.isCrossCatalogAllowed()) {
     throw new GraphQLError(
-      'Cross-database queries are disabled. Set ALLOW_CROSS_DATABASE_QUERIES=true to enable them.',
+      'Cross-catalog queries are disabled. Set ALLOW_CROSS_CATALOG_QUERIES=true to enable them.',
       { extensions: { code: 'CROSS_DATABASE_DISABLED' } },
     );
   }
 }
 
 /**
- * Validates a database alias and throws a descriptive error when invalid.
+ * Validates a catalog alias and throws a descriptive error when invalid.
  *
- * @param db - Database alias to validate.
+ * @param catalog - Catalog alias to validate.
  * @throws {GraphQLError} When the alias is not registered in the database manager.
  */
-// Validation d'un identifiant de base de données
-function assertValidDatabase(db: string): void {
-  if (!databaseManager.isValidDatabase(db)) {
-    throw new GraphQLError(`Database '${db}' is not available.`);
+// Validation d'un identifiant de catalogue
+function assertValidCatalog(catalog: string): void {
+  if (!databaseManager.isValidCatalog(catalog)) {
+    throw new GraphQLError(`Catalog '${catalog}' is not available.`);
   }
 }
 
-// Resolver pour les requêtes cross-base
+// Resolver pour les requêtes cross-catalog
 /**
- * Resolvers for cross-database query operations.
+ * Resolvers for cross-catalog / cross-schema query operations.
  *
- * All resolvers check that cross-database queries are enabled and that
- * each provided database alias is valid before dispatching to the loader.
+ * All resolvers check that cross-catalog queries are enabled and that each
+ * provided catalog alias is valid before dispatching to the loader. Comparing
+ * two schemas of the same catalog (catalogA === catalogB, distinct schemas) is
+ * supported and gated by the same flag.
  */
 const crossDatabaseResolvers = {
   Query: {
     /**
-     * Compares fact rows across two databases joined on common fields.
+     * Compares fact rows across two datasets joined on common fields.
      * Arguments follow {@link CompareFactsArgs}.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Comparison result with rows from both databases.
-     * @throws {GraphQLError} When cross-database is disabled, databases are
+     * @returns Comparison result with rows from both datasets.
+     * @throws {GraphQLError} When cross-catalog is disabled, catalogs are
      *     invalid, joinFields is empty, or limit exceeds the maximum.
      */
-    // Comparaison des faits entre deux bases de données
+    // Comparaison des faits entre deux datasets
     compareFacts: async (
       _: unknown,
       {
-        databaseA,
-        databaseB,
+        catalogA,
+        catalogB,
+        schemaA = null,
+        schemaB = null,
         joinFields,
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
@@ -118,11 +127,11 @@ const crossDatabaseResolvers = {
       }: CompareFactsArgs,
       { loaders }: GraphQLContext,
     ) => {
-      // Vérification de l'activation des requêtes cross-base
+      // Vérification de l'activation des requêtes cross-catalog
       assertCrossDatabaseAllowed();
 
-      // Validation des identifiants de bases de données
-      [databaseA, databaseB].forEach(assertValidDatabase);
+      // Validation des identifiants de catalogues
+      [catalogA, catalogB].forEach(assertValidCatalog);
 
       // Vérification de la présence des champs de jointure
       if (!joinFields || joinFields.length === 0) {
@@ -136,8 +145,10 @@ const crossDatabaseResolvers = {
 
       return withTimeout(
         loaders.compareFacts.load({
-          databaseA,
-          databaseB,
+          catalogA,
+          catalogB,
+          schemaA,
+          schemaB,
           joinFields,
           limit,
           offset,
@@ -149,20 +160,22 @@ const crossDatabaseResolvers = {
     },
 
     /**
-     * Compares aggregated facts across two databases grouped by a dimension.
+     * Compares aggregated facts across two datasets grouped by a dimension.
      * Arguments follow {@link CompareAggregatedFactsArgs}.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Comparison result with aggregated rows from both databases.
-     * @throws {GraphQLError} When cross-database is disabled, databases or
+     * @returns Comparison result with aggregated rows from both datasets.
+     * @throws {GraphQLError} When cross-catalog is disabled, catalogs or
      *     aggregation type are invalid, or groupBy is missing.
      */
-    // Comparaison des faits agrégés entre deux bases de données
+    // Comparaison des faits agrégés entre deux datasets
     compareAggregatedFacts: async (
       _: unknown,
       {
-        databaseA,
-        databaseB,
+        catalogA,
+        catalogB,
+        schemaA = null,
+        schemaB = null,
         groupBy,
         aggregation = 'SUM',
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
@@ -170,11 +183,11 @@ const crossDatabaseResolvers = {
       }: CompareAggregatedFactsArgs,
       { loaders }: GraphQLContext,
     ) => {
-      // Vérification de l'activation des requêtes cross-base
+      // Vérification de l'activation des requêtes cross-catalog
       assertCrossDatabaseAllowed();
 
-      // Validation des identifiants de bases de données
-      [databaseA, databaseB].forEach(assertValidDatabase);
+      // Validation des identifiants de catalogues
+      [catalogA, catalogB].forEach(assertValidCatalog);
 
       // Vérification de la présence du champ de regroupement
       if (!groupBy) {
@@ -195,8 +208,10 @@ const crossDatabaseResolvers = {
 
       return withTimeout(
         loaders.compareAggregatedFacts.load({
-          databaseA,
-          databaseB,
+          catalogA,
+          catalogB,
+          schemaA,
+          schemaB,
           groupBy,
           aggregation,
           limit,
@@ -208,35 +223,36 @@ const crossDatabaseResolvers = {
     },
 
     /**
-     * Fetches select options for a field across multiple databases.
+     * Fetches select options for a field across multiple datasets.
      * Arguments follow {@link CrossDatabaseSelectOptionsArgs}.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Merged list of select options from all databases.
-     * @throws {GraphQLError} When cross-database is disabled, fewer than two
-     *     databases are specified, or any alias is invalid.
+     * @returns Merged list of select options from all datasets.
+     * @throws {GraphQLError} When cross-catalog is disabled, fewer than two
+     *     catalogs are specified, or any alias is invalid.
      */
-    // Récupération des options de sélection sur plusieurs bases de données
+    // Récupération des options de sélection sur plusieurs datasets
     crossDatabaseSelectOptions: async (
       _: unknown,
-      { fieldName, databases, limit = 50 }: CrossDatabaseSelectOptionsArgs,
+      { fieldName, catalogs, schemas, limit = 50 }: CrossDatabaseSelectOptionsArgs,
       { loaders }: GraphQLContext,
     ) => {
-      // Vérification de l'activation des requêtes cross-base
+      // Vérification de l'activation des requêtes cross-catalog
       assertCrossDatabaseAllowed();
 
-      // Vérification de la présence d'au moins deux bases de données
-      if (!databases || databases.length < 2) {
-        throw new GraphQLError('At least two databases must be specified');
+      // Vérification de la présence d'au moins deux catalogues
+      if (!catalogs || catalogs.length < 2) {
+        throw new GraphQLError('At least two catalogs must be specified');
       }
 
-      // Validation de chaque identifiant de base de données
-      databases.forEach(assertValidDatabase);
+      // Validation de chaque identifiant de catalogue
+      catalogs.forEach(assertValidCatalog);
 
       return withTimeout(
         loaders.crossDatabaseSelectOptions.load({
           fieldName,
-          databases,
+          catalogs,
+          schemas: schemas ?? undefined,
           limit,
         } as CrossDatabaseSelectOptionsParams),
         config.API.TIMEOUTS.FACT_SIMPLE,

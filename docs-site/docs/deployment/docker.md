@@ -14,6 +14,7 @@ docker pull ghcr.io/qbolliet/dashboard-template-api:latest
 ```
 
 Available tags:
+
 - `:latest` — head of `main`
 - `:sha-<short>` — exact commit
 - `:<semver>` (e.g. `:1.2.3`, `:1.2`) — released versions
@@ -27,10 +28,13 @@ docker run --rm -p 4000:4000 \
   --name dta-api \
   -e NODE_ENV=production \
   -e ENVIRONMENT=production \
+  -e DEFAULT_CATALOG_TYPE=file \
   -e DEFAULT_CATALOG_PATH=s3://my-bucket/default.ducklake \
   -e DEFAULT_DATA_PATH=s3://my-bucket/default_data/ \
-  -e DEFAULT_DATABASE=default \
-  -e ALLOWED_DATABASES='["default"]' \
+  -e DEFAULT_READ_ONLY=true \
+  -e DEFAULT_SCHEMAS='["main"]' \
+  -e DEFAULT_CATALOG=default \
+  -e ALLOWED_CATALOGS='["default"]' \
   -e S3_ENABLED=true \
   -e AWS_ACCESS_KEY_ID=... \
   -e AWS_SECRET_ACCESS_KEY=... \
@@ -40,6 +44,17 @@ docker run --rm -p 4000:4000 \
   -e ADMIN_API_KEY=$(openssl rand -hex 32) \
   ghcr.io/qbolliet/dashboard-template-api:latest
 ```
+
+Per-catalog env vars follow the `<NAME_UPPER>_*` convention:
+`<NAME>_CATALOG_TYPE`, `<NAME>_CATALOG_PATH`, `<NAME>_DATA_PATH`,
+`<NAME>_READ_ONLY`, `<NAME>_SCHEMAS` (and `<NAME>_PG_HOST` / `_PG_PORT` /
+`_PG_DATABASE` / `_PG_USER` / `_PG_PASSWORD` for Postgres-backed catalogs).
+Add another catalog by listing its name in `ALLOWED_CATALOGS` and exporting
+its env-var block.
+
+`SCHEMAS` is a JSON-encoded list. Use `'["main", "staging"]'` for a
+multi-schema catalog; omit to let the API discover schemas at startup and
+fall back to `["main"]` when none is found.
 
 Verify it is up:
 
@@ -58,21 +73,23 @@ services:
   api:
     image: ghcr.io/qbolliet/dashboard-template-api:latest
     ports:
-      - "4000:4000"
+      - '4000:4000'
     environment:
       NODE_ENV: production
       ENVIRONMENT: production
+      DEFAULT_CATALOG_TYPE: file
       DEFAULT_CATALOG_PATH: s3://dta/default.ducklake
       DEFAULT_DATA_PATH: s3://dta/default_data/
-      DEFAULT_DATABASE: default
-      ALLOWED_DATABASES: '["default"]'
-      S3_ENABLED: "true"
+      DEFAULT_SCHEMAS: '["main"]'
+      DEFAULT_CATALOG: default
+      ALLOWED_CATALOGS: '["default"]'
+      S3_ENABLED: 'true'
       S3_ENDPOINT: http://minio:9000
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
       REDIS_HOST: redis
-      REDIS_PORT: "6379"
+      REDIS_PORT: '6379'
       ADMIN_API_KEY: dev-key
     depends_on:
       redis:
@@ -83,22 +100,22 @@ services:
   redis:
     image: redis:7-alpine
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
 
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - '9000:9000'
+      - '9001:9001'
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
       - minio-data:/data
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      test: ['CMD', 'curl', '-fsS', 'http://localhost:9000/minio/health/live']
       interval: 10s
 
 volumes:
@@ -120,10 +137,10 @@ docker build -t dta-api:dev .
 
 The build is multi-stage:
 
-| Stage | Purpose |
-|-------|---------|
-| `deps` | Installs all npm deps + native build tools (`python3 make g++`) |
-| `build` | Compiles TypeScript, prunes dev-deps |
+| Stage     | Purpose                                                                       |
+| --------- | ----------------------------------------------------------------------------- |
+| `deps`    | Installs all npm deps + native build tools (`python3 make g++`)               |
+| `build`   | Compiles TypeScript, prunes dev-deps                                          |
 | `runtime` | Final slim image with `dist/`, prod `node_modules`, `config/`, `tini`, `curl` |
 
 ## Production hardening checklist

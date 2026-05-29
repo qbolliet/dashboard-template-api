@@ -19,18 +19,18 @@ This template connects to one or more **DuckLake** databases (DuckDB catalog for
 
 ## Key properties
 
-| Property | Value |
-|---|---|
-| **Authentication** | None — the API is fully public |
-| **Operations** | Read-only (no mutations or subscriptions) |
-| **Protection** | Rate limiting, query complexity limits, depth limits |
-| **Databases** | Multiple DuckLake catalogs, independently routed |
+| Property           | Value                                                |
+| ------------------ | ---------------------------------------------------- |
+| **Authentication** | None — the API is fully public                       |
+| **Operations**     | Read-only (no mutations or subscriptions)            |
+| **Protection**     | Rate limiting, query complexity limits, depth limits |
+| **Databases**      | Multiple DuckLake catalogs, independently routed     |
 
 The API is intentionally unauthenticated. Access is protected at the network level (reverse proxy, firewall) and at the application level through configurable rate limiting. All parameters — window size, maximum requests, burst budget — are set in `config/security.yaml`.
 
 ## Features at a glance
 
-- **Multi-catalog routing** — query different databases via the `database` argument or the `x-database-id` HTTP header
+- **Multi-catalog / multi-schema routing** — query different catalogs (and schemas within them) via the `catalog` / `schema` arguments or the `x-catalog-id` / `x-schema-id` HTTP headers
 - **Flexible querying** — filter, sort, and paginate facts and dimensions with a structured filter API
 - **Aggregations** — SUM, AVG, MAX, MIN, COUNT, MEDIAN, MODE with optional D3-ready metadata (extents, statistics)
 - **Cross-database comparisons** — compare facts across two catalogs with delta and percentage values

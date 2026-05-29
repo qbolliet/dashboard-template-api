@@ -1,7 +1,7 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { buildWhereClause } from '../utils/utils.js';
+import { buildWhereClause, validateIdentifier } from '../utils/utils.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
 import type { StructuredFilter } from '../utils/utils.js';
 
@@ -16,6 +16,8 @@ interface AggregatedQueryParams {
   filters?: string | null;
   structuredFilters?: StructuredFilter[] | null;
   groupBy: string;
+  /** Measure column to aggregate (e.g. value, lower_bound). */
+  measure: string;
   aggregation: AggregationType;
   limit: number;
   offset: number;
@@ -99,15 +101,17 @@ class AggregatedFactsLoader extends FactQueryLoader {
   /**
    * Creates an AggregatedFactsLoader bound to a specific database.
    *
-   * @param databaseId - Catalog alias to query; null uses the default database.
+   * @param catalogId - Catalog alias to query; null uses the default catalog.
+   * @param schema - DuckLake schema within the catalog; null uses the catalog default.
    */
-  constructor(databaseId: string | null = null) {
+  constructor(catalogId: string | null = null, schema: string | null = null) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'aggregated-facts',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
-      databaseId,
+      catalogId,
+      schema,
     });
   }
 
@@ -144,6 +148,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
       filters,
       structuredFilters,
       groupBy,
+      measure,
       aggregation,
       limit,
       offset,
@@ -155,6 +160,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
     // Validation des paramètres de pagination
     this.validatePagination(limit, offset);
+
+    // Validation du nom de la colonne mesure avant interpolation SQL (anti-injection)
+    const measureColumn = validateIdentifier(measure, 'measure');
 
     // Construction de la condition de filtre
     const whereClause = buildWhereClause(filters, structuredFilters);
@@ -174,7 +182,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const query = `
             SELECT
                 ${groupBy} as key,
-                ${aggregationQuery}(value) as aggregatedValue,
+                ${aggregationQuery}(${measureColumn}) as aggregatedValue,
                 COUNT(*) as count
             FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
@@ -364,11 +372,15 @@ class AggregatedFactsLoader extends FactQueryLoader {
 /**
  * Creates a DataLoader for aggregated fact queries.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by AggregatedQueryParams, returning AggregatedResult.
  */
-const createAggregatedFactsLoader = (databaseId: string | null = null) => {
-  const loader = new AggregatedFactsLoader(databaseId);
+const createAggregatedFactsLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new AggregatedFactsLoader(catalogId, schema);
   return loader.createLoader<AggregatedQueryParams, AggregatedResult>((connection, params) =>
     loader.loadAggregatedFacts(connection, params),
   );
@@ -378,11 +390,15 @@ const createAggregatedFactsLoader = (databaseId: string | null = null) => {
 /**
  * Creates a DataLoader for aggregated facts enriched with metadata.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader returning AggregatedWithMetadata results.
  */
-const createAggregatedFactsWithMetadataLoader = (databaseId: string | null = null) => {
-  const loader = new AggregatedFactsLoader(databaseId);
+const createAggregatedFactsWithMetadataLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new AggregatedFactsLoader(catalogId, schema);
   return loader.createLoader<AggregatedQueryParams, AggregatedResult>((connection, params) =>
     loader.loadAggregatedFacts(connection, { ...params, includeMetadata: true }),
   );
@@ -392,11 +408,15 @@ const createAggregatedFactsWithMetadataLoader = (databaseId: string | null = nul
 /**
  * Creates a DataLoader for aggregated facts with total group count.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader returning AggregatedWithCount results.
  */
-const createAggregatedFactsWithCountLoader = (databaseId: string | null = null) => {
-  const loader = new AggregatedFactsLoader(databaseId);
+const createAggregatedFactsWithCountLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new AggregatedFactsLoader(catalogId, schema);
   return loader.createLoader<AggregatedQueryParams, AggregatedResult>((connection, params) =>
     loader.loadAggregatedFacts(connection, { ...params, includeCount: true }),
   );

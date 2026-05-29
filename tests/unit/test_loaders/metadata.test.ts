@@ -76,7 +76,7 @@ let createMetadataLoader: MetadataModule['createMetadataLoader'];
 
 beforeAll(async () => {
   ({ createMetadataLoader } =
-    await import('../../../src/loaders/metadata.js') as unknown as MetadataModule);
+    (await import('../../../src/loaders/metadata.js')) as unknown as MetadataModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -85,7 +85,7 @@ describe('MetadataLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -109,7 +109,12 @@ describe('MetadataLoader', () => {
 
   describe('loadSingle', () => {
     test('retourne les métadonnées pour un nom trouvé', async () => {
-      const row: MetadataRow = { name: 'age', type: 'integer', is_categorical: 0, is_primary_key: 0 };
+      const row: MetadataRow = {
+        name: 'age',
+        type: 'integer',
+        is_categorical: 0,
+        is_primary_key: 0,
+      };
       mockConnection.all.mockResolvedValue([row]);
 
       const loader = createMetadataLoader('main');
@@ -133,12 +138,14 @@ describe('MetadataLoader', () => {
     });
 
     test('convertit is_categorical en booléen', async () => {
-      mockConnection.all.mockResolvedValue([{
-        name: 'country',
-        type: 'string',
-        is_categorical: 1,
-        is_primary_key: 0,
-      }]);
+      mockConnection.all.mockResolvedValue([
+        {
+          name: 'country',
+          type: 'string',
+          is_categorical: 1,
+          is_primary_key: 0,
+        },
+      ]);
 
       const loader = createMetadataLoader('main');
       const result = await loader.load('country');
@@ -148,12 +155,14 @@ describe('MetadataLoader', () => {
     });
 
     test('convertit is_primary_key en booléen', async () => {
-      mockConnection.all.mockResolvedValue([{
-        name: 'id',
-        type: 'integer',
-        is_categorical: 0,
-        is_primary_key: 1,
-      }]);
+      mockConnection.all.mockResolvedValue([
+        {
+          name: 'id',
+          type: 'integer',
+          is_categorical: 0,
+          is_primary_key: 1,
+        },
+      ]);
 
       const loader = createMetadataLoader('main');
       const result = await loader.load('id');
@@ -163,7 +172,9 @@ describe('MetadataLoader', () => {
     });
 
     test('utilise qualifyTable pour la table metadata', async () => {
-      mockConnection.all.mockResolvedValue([{ name: 'field', is_categorical: 0, is_primary_key: 0 }]);
+      mockConnection.all.mockResolvedValue([
+        { name: 'field', is_categorical: 0, is_primary_key: 0 },
+      ]);
 
       const loader = createMetadataLoader('mydb');
       await loader.load('field');

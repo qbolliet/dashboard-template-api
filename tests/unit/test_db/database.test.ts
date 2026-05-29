@@ -18,15 +18,15 @@ interface CatalogConfig {
   PATH: string;
   DATA_PATH: string;
   READ_ONLY: boolean;
-  SCHEMA?: string;
+  SCHEMAS?: string[] | string;
 }
 
 /** Configuration complète du module — reflète la structure de config-loader. */
 interface MockConfig {
-  DATABASE_ROUTING: {
-    DEFAULT_DATABASE: string;
-    ALLOWED_DATABASES: string[];
-    ALLOW_CROSS_DATABASE_QUERIES: boolean;
+  CATALOG_ROUTING: {
+    DEFAULT_CATALOG: string;
+    ALLOWED_CATALOGS: string[];
+    ALLOW_CROSS_CATALOG_QUERIES: boolean;
   };
   CATALOGS: Record<string, CatalogConfig>;
   DATABASE: {
@@ -56,6 +56,8 @@ interface MockPool {
   acquire: jest.Mock;
   release: jest.Mock;
   reload: jest.Mock;
+  reloadOne: jest.Mock;
+  discoverCatalogSchemas: jest.Mock;
 }
 
 /** Configuration passée au constructeur DuckDBPool lors de l'initialisation. */
@@ -68,9 +70,9 @@ interface PoolConstructorConfig {
 
 /** Statistiques agrégées retournées par getStatistics(). */
 interface ManagerStatistics {
-  defaultDatabase: string;
-  allowedDatabases: string[];
-  allowCrossDatabase: boolean;
+  defaultCatalog: string;
+  allowedCatalogs: string[];
+  allowCrossCatalog: boolean;
   sharedPool: SharedPoolStats | null;
 }
 
@@ -90,19 +92,22 @@ interface DatabaseManagerModule {
 
 /** Instance de DatabaseManager avec les membres accessibles dans les tests. */
 interface DatabaseManagerInstance {
-  defaultDatabase: string;
-  allowedDatabases: string[];
-  allowCrossDatabase: boolean;
+  defaultCatalog: string;
+  allowedCatalogs: string[];
+  allowCrossCatalog: boolean;
   sharedPool: MockPool | null;
   getPool: (catalogId?: string | null) => MockPool;
-  isValidDatabase: (id: string | null) => boolean;
-  getAvailableDatabases: () => string[];
-  getDefaultDatabase: () => string;
-  getSchema: (catalogId: string) => string;
-  isCrossDatabaseAllowed: () => boolean;
-  validateDatabaseRouting: (requested?: string | null, context?: string | null) => string;
+  isValidCatalog: (id: string | null) => boolean;
+  getAvailableCatalogs: () => string[];
+  getDefaultCatalog: () => string;
+  getDefaultSchema: (catalogId: string) => string;
+  getSchemas: (catalogId: string) => string[];
+  isValidSchema: (catalogId: string, schema: string) => boolean;
+  isCrossCatalogAllowed: () => boolean;
+  validateCatalogRouting: (requested?: string | null, context?: string | null) => string;
   getStatistics: () => ManagerStatistics;
   reloadCatalogs: () => Promise<void>;
+  reloadCatalog: (catalogId: string) => Promise<void>;
   close: () => Promise<void>;
 }
 
@@ -110,14 +115,22 @@ interface DatabaseManagerInstance {
 
 // Configuration mockée — partagée entre tous les tests via référence mutable
 const mockConfig: MockConfig = {
-  DATABASE_ROUTING: {
-    DEFAULT_DATABASE: 'main',
-    ALLOWED_DATABASES: ['main', 'test', 'analytics'],
-    ALLOW_CROSS_DATABASE_QUERIES: true,
+  CATALOG_ROUTING: {
+    DEFAULT_CATALOG: 'main',
+    ALLOWED_CATALOGS: ['main', 'test', 'analytics'],
+    ALLOW_CROSS_CATALOG_QUERIES: true,
   },
   CATALOGS: {
-    main: { PATH: 'data/main.ducklake', DATA_PATH: 'data/main_data/', READ_ONLY: true },
+    // SCHEMAS explicite (allow-list stricte : intersection avec la découverte)
+    main: {
+      PATH: 'data/main.ducklake',
+      DATA_PATH: 'data/main_data/',
+      READ_ONLY: true,
+      SCHEMAS: ['main', 'staging'],
+    },
+    // Pas de SCHEMAS : politique "adopter la découverte" en réconciliation
     test: { PATH: 'data/test.ducklake', DATA_PATH: 'data/test_data/', READ_ONLY: false },
+    // Pas de SCHEMAS non plus
     analytics: {
       PATH: 'data/analytics.ducklake',
       DATA_PATH: 'data/analytics_data/',
@@ -150,15 +163,25 @@ const fsStat: jest.Mock = jest.fn().mockReturnValue({ size: 1024, mtime: new Dat
  * Returns:
  *     A MockPool with jest mock methods.
  */
-const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig): MockPool => ({
-  pool: [],
-  maxConnections: cfg.maxConnections ?? 5,
-  catalogs: (cfg.catalogs ?? []) as { alias: string }[],
-  close: jest.fn().mockResolvedValue(undefined),
-  acquire: jest.fn().mockResolvedValue({}),
-  release: jest.fn(),
-  reload: jest.fn().mockResolvedValue(undefined),
-});
+const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig): MockPool => {
+  const aliases = (cfg.catalogs ?? []).map((c) => c.alias);
+  // Par défaut, la découverte simule un seul schéma 'main' pour chaque catalogue
+  // attaché — ce qui correspond au cas mono-schéma historique.
+  const defaultDiscovery: Record<string, string[]> = Object.fromEntries(
+    aliases.map((a) => [a, ['main']]),
+  );
+  return {
+    pool: [],
+    maxConnections: cfg.maxConnections ?? 5,
+    catalogs: (cfg.catalogs ?? []) as { alias: string }[],
+    close: jest.fn().mockResolvedValue(undefined),
+    acquire: jest.fn().mockResolvedValue({}),
+    release: jest.fn(),
+    reload: jest.fn().mockResolvedValue(undefined),
+    reloadOne: jest.fn().mockResolvedValue(undefined),
+    discoverCatalogSchemas: jest.fn().mockResolvedValue(defaultDiscovery),
+  };
+};
 
 // Constructeur DuckDBPool mocké — retourne un pool par appel
 const MockDuckDBPool: jest.Mock = jest
@@ -204,15 +227,15 @@ describe('DatabaseManager', () => {
 
   describe('Constructor and initialization', () => {
     test('reads defaultDatabase from config', () => {
-      expect(manager.defaultDatabase).toBe('main');
+      expect(manager.defaultCatalog).toBe('main');
     });
 
     test('reads allowedDatabases from config', () => {
-      expect(manager.allowedDatabases).toEqual(['main', 'test', 'analytics']);
+      expect(manager.allowedCatalogs).toEqual(['main', 'test', 'analytics']);
     });
 
     test('reads allowCrossDatabase from config', () => {
-      expect(manager.allowCrossDatabase).toBe(true);
+      expect(manager.allowCrossCatalog).toBe(true);
     });
 
     test('creates a single shared DuckDBPool containing all catalog aliases', () => {
@@ -256,7 +279,7 @@ describe('DatabaseManager', () => {
       };
       try {
         expect(() => new DatabaseManager()).toThrow(
-          "Default database 'main' not found in CATALOGS config",
+          "Default catalog 'main' not found in CATALOGS config",
         );
       } finally {
         mockConfig.CATALOGS = savedCatalogs;
@@ -295,7 +318,7 @@ describe('DatabaseManager', () => {
 
     test('throws for an unknown catalogId', () => {
       expect(() => manager.getPool('nonexistent')).toThrow(
-        "Database 'nonexistent' is not allowed or not configured",
+        "Catalog 'nonexistent' is not allowed or not configured",
       );
     });
   });
@@ -304,21 +327,21 @@ describe('DatabaseManager', () => {
 
   describe('isValidDatabase', () => {
     test('returns true for each configured catalog', () => {
-      expect(manager.isValidDatabase('main')).toBe(true);
-      expect(manager.isValidDatabase('test')).toBe(true);
-      expect(manager.isValidDatabase('analytics')).toBe(true);
+      expect(manager.isValidCatalog('main')).toBe(true);
+      expect(manager.isValidCatalog('test')).toBe(true);
+      expect(manager.isValidCatalog('analytics')).toBe(true);
     });
 
     test('returns false for unknown catalog', () => {
-      expect(manager.isValidDatabase('unknown')).toBe(false);
+      expect(manager.isValidCatalog('unknown')).toBe(false);
     });
 
     test('returns false for empty string', () => {
-      expect(manager.isValidDatabase('')).toBe(false);
+      expect(manager.isValidCatalog('')).toBe(false);
     });
 
     test('returns false for null', () => {
-      expect(manager.isValidDatabase(null)).toBe(false);
+      expect(manager.isValidCatalog(null)).toBe(false);
     });
   });
 
@@ -326,13 +349,13 @@ describe('DatabaseManager', () => {
 
   describe('getAvailableDatabases', () => {
     test('returns all allowed catalog IDs', () => {
-      expect(manager.getAvailableDatabases()).toEqual(['main', 'test', 'analytics']);
+      expect(manager.getAvailableCatalogs()).toEqual(['main', 'test', 'analytics']);
     });
 
     test('returns a copy — mutations do not affect internal state', () => {
-      const dbs = manager.getAvailableDatabases();
+      const dbs = manager.getAvailableCatalogs();
       dbs.push('extra');
-      expect(manager.getAvailableDatabases()).not.toContain('extra');
+      expect(manager.getAvailableCatalogs()).not.toContain('extra');
     });
   });
 
@@ -340,34 +363,171 @@ describe('DatabaseManager', () => {
 
   describe('getDefaultDatabase', () => {
     test('returns the configured default catalog', () => {
-      expect(manager.getDefaultDatabase()).toBe('main');
+      expect(manager.getDefaultCatalog()).toBe('main');
     });
   });
 
-  // ── Schéma d'un catalogue ─────────────────────────────────────────────────
+  // ── Schémas d'un catalogue (multi-schema) ─────────────────────────────────
 
-  describe('getSchema', () => {
-    test('returns "main" when no SCHEMA is configured for a catalog', () => {
-      expect(manager.getSchema('main')).toBe('main');
+  describe('getDefaultSchema', () => {
+    test('returns the first SCHEMAS entry for a configured catalog', () => {
+      // main est configuré avec ['main', 'staging'] → défaut = 'main'
+      expect(manager.getDefaultSchema('main')).toBe('main');
     });
 
-    test('returns default schema for an unknown catalogId', () => {
-      expect(manager.getSchema('unknown')).toBe('main');
+    test('returns "main" when SCHEMAS is absent', () => {
+      // test n'a pas de SCHEMAS → fallback ['main']
+      expect(manager.getDefaultSchema('test')).toBe('main');
     });
 
-    test('returns configured SCHEMA when present', () => {
-      const savedCatalogs = mockConfig.CATALOGS;
-      mockConfig.CATALOGS = {
-        main: {
-          PATH: 'main.ducklake',
-          DATA_PATH: 'main_data/',
-          READ_ONLY: true,
-          SCHEMA: 'custom_schema',
-        },
-      };
-      const m = new DatabaseManager();
-      expect(m.getSchema('main')).toBe('custom_schema');
-      mockConfig.CATALOGS = savedCatalogs;
+    test('falls back to default catalog list for an unknown catalog', () => {
+      expect(manager.getDefaultSchema('unknown')).toBe('main');
+    });
+  });
+
+  describe('getSchemas', () => {
+    test('returns the configured list when SCHEMAS is provided', () => {
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+    });
+
+    test('returns ["main"] when SCHEMAS is absent', () => {
+      expect(manager.getSchemas('test')).toEqual(['main']);
+    });
+
+    test('returns a copy — mutations do not affect internal state', () => {
+      const schemas = manager.getSchemas('main');
+      schemas.push('extra');
+      expect(manager.getSchemas('main')).not.toContain('extra');
+    });
+  });
+
+  describe('isValidSchema', () => {
+    test('returns true for each schema in the configured list', () => {
+      expect(manager.isValidSchema('main', 'main')).toBe(true);
+      expect(manager.isValidSchema('main', 'staging')).toBe(true);
+    });
+
+    test('returns false for a schema absent from the list', () => {
+      expect(manager.isValidSchema('main', 'ghost')).toBe(false);
+    });
+
+    test('returns false for any schema on an unknown catalog', () => {
+      expect(manager.isValidSchema('unknown', 'main')).toBe(false);
+    });
+  });
+
+  // ── Réconciliation des schémas (config ↔ découverte SQL) ──────────────────
+
+  describe('initSchemas', () => {
+    test('keeps the configured intersection when SCHEMAS is explicit', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging', 'extra'], // 'extra' n'est pas dans la config
+        test: ['main'],
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      // main reste restreint à la config (allow-list stricte) — pas d''extra'
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+    });
+
+    test('adopts the discovered list when SCHEMAS was not configured', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['main', 'sandbox'], // test n'avait pas de SCHEMAS configuré
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      // test adopte tout ce qui est découvert
+      expect(manager.getSchemas('test')).toEqual(['main', 'sandbox']);
+    });
+
+    test('warns when a configured schema is missing from the discovery', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main'], // 'staging' configuré mais absent → warn
+        test: ['main'],
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Configured schemas missing'),
+        expect.objectContaining({ missing: ['staging'] }),
+      );
+      expect(manager.getSchemas('main')).toEqual(['main']);
+    });
+
+    test('falls back to ["main"] when discovery returns nothing for a non-configured catalog', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: [], // découverte vide pour test (non configuré)
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getSchemas('test')).toEqual(['main']);
+    });
+
+    test('keeps the configured list when the intersection would be empty', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['totally_other'], // aucune intersection avec ['main','staging']
+        test: ['main'],
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      // Sécurité : on ne tue jamais l'allow-list, on logge un warn fort
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('No configured schema was discovered'),
+        expect.any(Object),
+      );
+    });
+
+    test('rejects when shared pool is not initialized', async () => {
+      manager.sharedPool = null;
+      await expect(manager.initSchemas()).rejects.toThrow('Shared pool is not initialized');
+    });
+
+    test('reloadCatalogs reconciles schemas after the pool reload', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['main', 'new_schema'],
+        analytics: ['main'],
+      });
+
+      await manager.reloadCatalogs();
+
+      expect(pool.reload).toHaveBeenCalledTimes(1);
+      expect(pool.discoverCatalogSchemas).toHaveBeenCalledTimes(1);
+      expect(manager.getSchemas('test')).toEqual(['main', 'new_schema']);
+    });
+
+    test('reloadCatalog reconciles schemas after a single-catalog reattach', async () => {
+      const pool = manager.sharedPool!;
+      pool.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['main', 'new_schema'],
+        analytics: ['main'],
+      });
+
+      await manager.reloadCatalog('test');
+
+      expect(pool.reloadOne).toHaveBeenCalledWith('test');
+      expect(pool.discoverCatalogSchemas).toHaveBeenCalledTimes(1);
+      expect(manager.getSchemas('test')).toEqual(['main', 'new_schema']);
     });
   });
 
@@ -375,7 +535,7 @@ describe('DatabaseManager', () => {
 
   describe('isCrossDatabaseAllowed', () => {
     test('returns the configured ALLOW_CROSS_DATABASE_QUERIES value', () => {
-      expect(manager.isCrossDatabaseAllowed()).toBe(true);
+      expect(manager.isCrossCatalogAllowed()).toBe(true);
     });
   });
 
@@ -383,30 +543,30 @@ describe('DatabaseManager', () => {
 
   describe('validateDatabaseRouting', () => {
     test('returns requested catalog when valid', () => {
-      expect(manager.validateDatabaseRouting('test')).toBe('test');
+      expect(manager.validateCatalogRouting('test')).toBe('test');
     });
 
     test('falls back to context catalog when no explicit request', () => {
-      expect(manager.validateDatabaseRouting(null, 'analytics')).toBe('analytics');
+      expect(manager.validateCatalogRouting(null, 'analytics')).toBe('analytics');
     });
 
     test('falls back to default when neither is specified', () => {
-      expect(manager.validateDatabaseRouting()).toBe('main');
+      expect(manager.validateCatalogRouting()).toBe('main');
     });
 
     test('explicit request takes priority over context', () => {
-      expect(manager.validateDatabaseRouting('test', 'analytics')).toBe('test');
+      expect(manager.validateCatalogRouting('test', 'analytics')).toBe('test');
     });
 
     test('throws for an invalid catalog', () => {
-      expect(() => manager.validateDatabaseRouting('invalid')).toThrow(
-        "Database 'invalid' is not available",
+      expect(() => manager.validateCatalogRouting('invalid')).toThrow(
+        "Catalog 'invalid' is not available",
       );
     });
 
     test('error message lists available databases', () => {
-      expect(() => manager.validateDatabaseRouting('invalid')).toThrow(
-        'Available databases: main, test, analytics',
+      expect(() => manager.validateCatalogRouting('invalid')).toThrow(
+        'Available catalogs: main, test, analytics',
       );
     });
   });
@@ -416,9 +576,9 @@ describe('DatabaseManager', () => {
   describe('getStatistics', () => {
     test('returns routing configuration fields', () => {
       const stats = manager.getStatistics();
-      expect(stats.defaultDatabase).toBe('main');
-      expect(stats.allowedDatabases).toEqual(['main', 'test', 'analytics']);
-      expect(stats.allowCrossDatabase).toBe(true);
+      expect(stats.defaultCatalog).toBe('main');
+      expect(stats.allowedCatalogs).toEqual(['main', 'test', 'analytics']);
+      expect(stats.allowCrossCatalog).toBe(true);
     });
 
     test('returns pool stats with attachedCatalogs', () => {
@@ -520,7 +680,7 @@ describe('DatabaseManager — concurrent operations', () => {
   test('concurrent validateDatabaseRouting calls all succeed', async () => {
     const results = await Promise.all(
       ['main', 'test', 'analytics'].map((db) =>
-        Promise.resolve(manager.validateDatabaseRouting(db)),
+        Promise.resolve(manager.validateCatalogRouting(db)),
       ),
     );
     expect(results).toEqual(['main', 'test', 'analytics']);
@@ -530,8 +690,8 @@ describe('DatabaseManager — concurrent operations', () => {
     const results = await Promise.all([
       Promise.resolve(manager.getPool('main')),
       Promise.resolve(manager.getStatistics()),
-      Promise.resolve(manager.isValidDatabase('test')),
-      Promise.resolve(manager.validateDatabaseRouting('analytics')),
+      Promise.resolve(manager.isValidCatalog('test')),
+      Promise.resolve(manager.validateCatalogRouting('analytics')),
     ]);
     expect(results).toHaveLength(4);
     results.forEach((r) => expect(r).toBeDefined());
