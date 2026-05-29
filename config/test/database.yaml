@@ -1,23 +1,26 @@
 # Test database configuration
 
-DATABASE_ROUTING:
-  DEFAULT_DATABASE: "main"
-  ALLOWED_DATABASES: ["main", "test", "analytics"]
-  ALLOW_CROSS_DATABASE_QUERIES: true
+CATALOG_ROUTING:
+  DEFAULT_CATALOG: 'main'
+  ALLOWED_CATALOGS: ['main', 'test', 'analytics']
+  ALLOW_CROSS_CATALOG_QUERIES: true
 
 CATALOGS:
   main:
-    PATH: "data/test-main.ducklake"
-    DATA_PATH: "data/test-main_data/"
+    PATH: 'data/test-main.ducklake'
+    DATA_PATH: 'data/test-main_data/'
     READ_ONLY: false
+    SCHEMAS: ['main']
   test:
-    PATH: "data/test-test.ducklake"
-    DATA_PATH: "data/test-test_data/"
+    PATH: 'data/test-test.ducklake'
+    DATA_PATH: 'data/test-test_data/'
     READ_ONLY: false
+    SCHEMAS: ['main']
   analytics:
-    PATH: "data/test-analytics.ducklake"
-    DATA_PATH: "data/test-analytics_data/"
+    PATH: 'data/test-analytics.ducklake'
+    DATA_PATH: 'data/test-analytics_data/'
     READ_ONLY: false
+    SCHEMAS: ['main']
 
 DATABASE:
   POOL:

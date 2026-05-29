@@ -75,7 +75,7 @@ let createDimensionValueLoader: DimensionModule['createDimensionValueLoader'];
 
 beforeAll(async () => {
   ({ createDimensionLoader, createDimensionValueLoader } =
-    await import('../../../src/loaders/dimension.js') as unknown as DimensionModule);
+    (await import('../../../src/loaders/dimension.js')) as unknown as DimensionModule);
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ describe('DimensionLoader', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getSchema.mockReturnValue('main');
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -168,16 +168,14 @@ describe('DimensionLoader', () => {
           { value: '1', label: 'France' },
           { value: '2', label: 'Allemagne' },
         ])
-        .mockResolvedValueOnce([
-          { value: 'A', label: 'Actif' },
-        ]);
+        .mockResolvedValueOnce([{ value: 'A', label: 'Actif' }]);
 
       const loader = createDimensionValueLoader('main');
-      const results = await loader.loadMany([
+      const results = (await loader.loadMany([
         { dimensionName: 'country', value: '1' },
         { dimensionName: 'country', value: '2' },
         { dimensionName: 'status', value: 'A' },
-      ]) as DimensionValueResult[];
+      ])) as DimensionValueResult[];
 
       expect(results[0]).toEqual({ name: 'country', value: '1', label: 'France' });
       expect(results[1]).toEqual({ name: 'country', value: '2', label: 'Allemagne' });
@@ -188,9 +186,9 @@ describe('DimensionLoader', () => {
       mockConnection.all.mockResolvedValue([]);
 
       const loader = createDimensionValueLoader('main');
-      const results = await loader.loadMany([
+      const results = (await loader.loadMany([
         { dimensionName: 'country', value: 'unknown' },
-      ]) as DimensionValueResult[];
+      ])) as DimensionValueResult[];
 
       expect(results[0]).toEqual({ name: 'country', value: 'unknown', label: 'unknown' });
     });
@@ -199,9 +197,9 @@ describe('DimensionLoader', () => {
       mockConnection.all.mockRejectedValue(new Error('Table not found'));
 
       const loader = createDimensionValueLoader('main');
-      const results = await loader.loadMany([
+      const results = (await loader.loadMany([
         { dimensionName: 'broken', value: 'x' },
-      ]) as DimensionValueResult[];
+      ])) as DimensionValueResult[];
 
       expect(results[0]).toEqual({ name: 'broken', value: 'x', label: 'x' });
     });

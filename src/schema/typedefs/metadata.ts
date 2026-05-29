@@ -22,7 +22,7 @@ const metadataTypeDefs: DocumentNode = gql`
   }
 
   extend type Query {
-    getMetaData(name: String!, database: String): Metadata
+    getMetaData(name: String!, catalog: String, schema: String): Metadata
   }
 `;
 

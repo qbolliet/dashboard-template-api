@@ -20,39 +20,44 @@ Because the catalog is attached once and held in memory, invalidating Redis alon
 
 ## Architecture
 
-After refreshing the DuckLake files, the external updater drives the two refresh steps through two authenticated endpoints, **in order**: first `POST /api/catalog/reload`, then `POST /api/cache/invalidate-all`.
+After refreshing the DuckLake files, the external updater drives the two refresh steps through authenticated endpoints, **in order**: first a reload (full `/api/catalog/reload` or per-catalog `/api/catalog/reload/:catalog`), then a cache invalidation at the matching granularity — all catalogs, one catalog, or one (catalog, schema) pair.
 
 ```
-┌──────────────────────┐            ┌────────────────────────────────┐
-│ External updater     │            │  API (Kubernetes / Docker)     │
-│ (Python script,      │            │                                │
-│  cron, CI job…)      │  ① ──────▶ │  POST /api/catalog/reload      │
-│                      │  x-admin-key   ┌──────────────────────────┐ │
-│  1. Refresh DuckLake │            │   │ Rebuild in-memory DuckDB │ │
-│  2. Reload catalog   │            │   │ instance + re-attach     │ │
-│  3. Invalidate cache │            │   │ catalogs (latest state)  │ │
-│                      │            │   └──────────────────────────┘ │
-│                      │  ② ──────▶ │  POST /api/cache/              │
-│                      │  x-admin-key        invalidate-all          │
-│                      │            │   ┌──────────────────────────┐ │
-│                      │            │   │ Redis SCAN + DEL         │ │
-│                      │            │   │ per database namespace   │ │
-│                      │            │   └──────────────────────────┘ │
-└──────────────────────┘            └────────────────────────────────┘
+┌─────────────────────┐        ┌────────────────────────────────────────────────┐
+│ External updater    │        │  API (Kubernetes / Docker)                     │
+│ (Python script,     │        │                                                │
+│  cron, CI job…)     │  ①──▶  │  POST /api/catalog/reload                      │
+│                     │        │  POST /api/catalog/reload/:catalog              │
+│  1. Refresh         │        │  ┌────────────────────────────────────────┐    │
+│     DuckLake        │        │  │ Full rebuild (all catalogs)            │    │
+│  2. Reload catalog  │        │  │ or DETACH+ATTACH one catalog           │    │
+│  3. Invalidate      │        │  └────────────────────────────────────────┘    │
+│     cache           │        │                                                │
+│                     │  ②──▶  │  POST /api/cache/invalidate-all                │
+│                     │        │  POST /api/cache/invalidate/:catalog           │
+│                     │        │  POST /api/cache/invalidate/:catalog/:schema   │
+│                     │        │  ┌────────────────────────────────────────┐    │
+│                     │        │  │ Redis SCAN + DEL                       │    │
+│                     │        │  │ all catalogs · one catalog ·           │    │
+│                     │        │  │ one (catalog, schema) pair             │    │
+│                     │        │  └────────────────────────────────────────┘    │
+└─────────────────────┘        └────────────────────────────────────────────────┘
 ```
 
-Step ① rebuilds the shared in-memory DuckDB instance so the new catalog is served (the swap is zero-interruption — see [Endpoints](#endpoints)). Step ② then flushes Redis so cache misses recompute against the freshly attached catalog.
+Step ① rebuilds the shared in-memory DuckDB instance — either all catalogs at once (`/reload`) or a single catalog (`/reload/:catalog`) — so the updated catalog is served (the swap is zero-interruption — see [Endpoints](#endpoints)). Step ② then flushes Redis at the appropriate granularity — all catalogs, one catalog, or one (catalog, schema) pair — so cache misses recompute against the freshly attached catalog.
 
-Cache isolation is per-database: each catalog has its own Redis key namespace, so invalidating one catalog never affects another. Invalidation is a non-blocking `SCAN` + `DEL` pass over the per-database key patterns:
+Cache isolation is per (catalog, schema): each (catalog, schema) pair has its own Redis key namespace, so invalidating one never affects another. Invalidation is a non-blocking `SCAN` + `DEL` pass over the per-(catalog, schema) key patterns:
 
 ```
-metadata:<db>:*
-dimension:<db>:*
-dimension-value:<db>:*
-facts:<db>:*
-aggregated-facts:<db>:*
-select-options:<db>:*
+metadata:<catalog>:<schema>:*
+dimension:<catalog>:<schema>:*
+dimension-value:<catalog>:<schema>:*
+facts:<catalog>:<schema>:*
+aggregated-facts:<catalog>:<schema>:*
+select-options:<catalog>:<schema>:*
 ```
+
+Invalidating a whole catalog uses the same patterns with `<schema>` replaced by `*` (e.g. `metadata:<catalog>:*:*`), so every schema is swept in one pass.
 
 The implementation lives in [`src/cache/cache-invalidation.ts`](https://github.com/qbolliet/dashboard-template-api/blob/main/src/cache/cache-invalidation.ts).
 
@@ -60,14 +65,31 @@ The implementation lives in [`src/cache/cache-invalidation.ts`](https://github.c
 
 All admin endpoints require the `x-admin-key` header set to `ADMIN_API_KEY`. Without a valid key every endpoint returns `401`. If `ADMIN_API_KEY` is unset on the server, every endpoint returns `503` (fail-safe — invalidation cannot run on an unauthenticated deployment).
 
-| Method | Path                              | Purpose                                                                                                                          |
-| ------ | --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/catalog/reload`             | Rebuild the in-memory DuckDB instance and re-attach all catalogs at their latest state. Resolves once the new catalog is serving |
-| `POST` | `/api/cache/invalidate-all`       | Invalidate every database namespace                                                                                              |
-| `POST` | `/api/cache/invalidate/:database` | Invalidate one database (e.g. `default`, `macroeconomics`)                                                                       |
-| `GET`  | `/api/cache/stats`                | Per-database / per-type cache key counts                                                                                         |
+| Method | Path                                     | Purpose                                                                                                                          |
+| ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/catalog/reload`                    | Rebuild the in-memory DuckDB instance and re-attach all catalogs at their latest state. Resolves once the new catalog is serving |
+| `POST` | `/api/catalog/reload/:catalog`           | Reattach a **single** catalog (scoped `DETACH` + `ATTACH`) without rebuilding the whole instance                                 |
+| `POST` | `/api/cache/invalidate-all`              | Invalidate every catalog namespace                                                                                               |
+| `POST` | `/api/cache/invalidate/:catalog`         | Invalidate one catalog, **every** of its schemas                                                                                 |
+| `POST` | `/api/cache/invalidate/:catalog/:schema` | Invalidate one schema of one catalog — leaves the catalog's other schemas untouched                                              |
+| `GET`  | `/api/cache/stats`                       | Nested `catalog → schema → type` cache key counts                                                                                |
 
 `/api/catalog/reload` rebuilds the shared instance with zero interruption: the new instance is built first (if it fails — S3 unreachable, corrupt catalog — the old one keeps serving and the call returns `500`), then swapped in atomically, then the old instance is drained in the background so in-flight requests finish cleanly.
+
+### Reloading a single catalog
+
+When only one catalog has been refreshed, `POST /api/catalog/reload/:catalog` reattaches just that catalog on the **live** shared instance — a scoped `DETACH "<catalog>"` followed by its `ATTACH` (the Postgres credential secret is recreated automatically for Postgres-backed catalogs). The other catalogs are untouched, so this is cheaper than a full reload. Calls are serialized per catalog. An unknown catalog returns `404`.
+
+Because all catalogs share one in-memory DuckDB instance, a query already running against **that** catalog during the brief `DETACH`/`ATTACH` window may error; queries on other catalogs are unaffected. This is an admin-triggered, low-frequency operation, so the tradeoff is accepted — sequence a per-catalog cache invalidation afterwards:
+
+```bash
+curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+  https://api.mydomain.org/api/catalog/reload/macroeconomics
+curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
+  https://api.mydomain.org/api/cache/invalidate/macroeconomics
+```
+
+A multi-schema catalog (a `.ducklake` holding several schemas) is reattached as a whole — reload is always catalog-level because schemas live inside the catalog file. Cache invalidation, on the other hand, is **finer-grained**: `POST /api/cache/invalidate/:catalog/:schema` flushes only the targeted schema without disturbing the catalog's other schemas, which is useful when an external process refreshes a single schema and a full per-catalog flush would over-invalidate.
 
 ## Refresh sequence
 
@@ -107,15 +129,26 @@ r.raise_for_status()
 print(r.json())   # {"success": true, ...}
 ```
 
-Per-database invalidation:
+Per-catalog invalidation (flushes every schema of the catalog):
 
 ```python
-for db in ("default", "macroeconomics"):
+for catalog in ("default", "macroeconomics"):
     requests.post(
-        f"{API_URL}/api/cache/invalidate/{db}",
+        f"{API_URL}/api/cache/invalidate/{catalog}",
         headers={"x-admin-key": ADMIN_KEY},
         timeout=30,
     ).raise_for_status()
+```
+
+Per-schema invalidation (single catalog × schema, other schemas untouched):
+
+```python
+# Only the macroeconomics catalog's "annual" schema is flushed.
+requests.post(
+    f"{API_URL}/api/cache/invalidate/macroeconomics/annual",
+    headers={"x-admin-key": ADMIN_KEY},
+    timeout=30,
+).raise_for_status()
 ```
 
 ### bash / cron
@@ -266,7 +299,7 @@ curl -fsS -H "x-admin-key: $ADMIN_API_KEY" \
   https://api.mydomain.org/api/cache/stats | jq
 ```
 
-Returns per-database, per-type cache key counts — useful for monitoring cache-warming after invalidation, or for confirming that an invalidation reduced the key count as expected.
+Returns nested `catalog → schema → type` cache key counts — useful for monitoring cache-warming after invalidation, or for confirming that an invalidation (catalog-wide or per-schema) reduced the key count as expected.
 
 ## Monitoring
 

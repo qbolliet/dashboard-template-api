@@ -8,9 +8,10 @@ import type { FactQueryParams } from '../../loaders/fact.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
-/** Common arguments for fact table queries, including database routing. */
+/** Common arguments for fact table queries, including catalog/schema routing. */
 export interface FactTableArgs extends FactQueryParams {
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 // ─── Interfaces des résultats enrichis ───────────────────────────────────────
@@ -52,7 +53,7 @@ const factResolvers = {
     getFactTable: async (
       _: unknown,
       args: FactTableArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
       const { limit, offset } = args;
 
@@ -66,8 +67,8 @@ const factResolvers = {
         throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
       }
 
-      // Sélection des loaders adaptés à la base de données cible
-      const targetLoaders = getLoadersForDatabase(args.database);
+      // Sélection des loaders adaptés au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
       const factLoader = targetLoaders ? targetLoaders.factWithCount : loaders.factWithCount;
       const enrichmentLoaders = targetLoaders ?? loaders;
 
@@ -106,10 +107,10 @@ const factResolvers = {
     getFactTableWithMetadata: async (
       _: unknown,
       args: FactTableArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
-      // Sélection des loaders adaptés à la base de données cible
-      const targetLoaders = getLoadersForDatabase(args.database);
+      // Sélection des loaders adaptés au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
       const activeLoaders = targetLoaders ?? loaders;
 
       const result = (await withTimeout(

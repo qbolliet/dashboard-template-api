@@ -14,10 +14,10 @@ import { jest } from '@jest/globals';
 /** Configuration minimale valide — satisfait toutes les validations requises. */
 interface ValidConfig {
   ENVIRONMENT: string;
-  API:  { PORT: number; TIMEOUTS: { CACHE_DEFAULT: number } };
-  DATABASE_ROUTING: {
-    DEFAULT_DATABASE:  string;
-    ALLOWED_DATABASES: string[];
+  API: { PORT: number; TIMEOUTS: { CACHE_DEFAULT: number } };
+  CATALOG_ROUTING: {
+    DEFAULT_CATALOG: string;
+    ALLOWED_CATALOGS: string[];
   };
   DATABASE: { POOL: { MAX_CONNECTIONS: number } };
   SECURITY: { RATE_LIMIT: { MAX_REQUESTS: number } };
@@ -27,24 +27,27 @@ interface ValidConfig {
 /** Interface publique de l'instance ConfigLoader exposée par le module. */
 interface ConfigLoaderInstance {
   config: Record<string, unknown> | null;
-  loadConfig:                () => Record<string, unknown>;
-  mergeDeep:                 (target: Record<string, unknown>, source: Record<string, unknown>) => Record<string, unknown>;
-  resolveEnvVariables:       (value: unknown) => unknown;
-  applyEnvironmentSpecific:  (cfg: Record<string, unknown>) => Record<string, unknown>;
-  convertNumericValues:      (value: unknown) => unknown;
-  validateEnvironment:       (cfg: Record<string, unknown>) => void;
-  validateRequiredFields:    (cfg: Record<string, unknown>) => void;
-  get:                       (path: string, defaultValue?: unknown) => unknown;
+  loadConfig: () => Record<string, unknown>;
+  mergeDeep: (
+    target: Record<string, unknown>,
+    source: Record<string, unknown>,
+  ) => Record<string, unknown>;
+  resolveEnvVariables: (value: unknown) => unknown;
+  applyEnvironmentSpecific: (cfg: Record<string, unknown>) => Record<string, unknown>;
+  convertNumericValues: (value: unknown) => unknown;
+  validateEnvironment: (cfg: Record<string, unknown>) => void;
+  validateRequiredFields: (cfg: Record<string, unknown>) => void;
+  get: (path: string, defaultValue?: unknown) => unknown;
 }
 
 // ─── Configuration valide minimale ────────────────────────────────────────────
 
 const validConfig: ValidConfig = {
   ENVIRONMENT: 'development',
-  API:  { PORT: 4000, TIMEOUTS: { CACHE_DEFAULT: 300 } },
-  DATABASE_ROUTING: {
-    DEFAULT_DATABASE:  'main',
-    ALLOWED_DATABASES: ['main', 'analytics'],
+  API: { PORT: 4000, TIMEOUTS: { CACHE_DEFAULT: 300 } },
+  CATALOG_ROUTING: {
+    DEFAULT_CATALOG: 'main',
+    ALLOWED_CATALOGS: ['main', 'analytics'],
   },
   DATABASE: { POOL: { MAX_CONNECTIONS: 5 } },
   SECURITY: { RATE_LIMIT: { MAX_REQUESTS: 100 } },
@@ -53,21 +56,21 @@ const validConfig: ValidConfig = {
 
 // ─── Fonctions mock mutables ──────────────────────────────────────────────────
 
-const mockFsExistsSync  = jest.fn().mockReturnValue(true);
-const mockFsReadFile    = jest.fn().mockReturnValue('mocked: yaml');
-const mockYamlParse     = jest.fn().mockReturnValue(validConfig);
+const mockFsExistsSync = jest.fn().mockReturnValue(true);
+const mockFsReadFile = jest.fn().mockReturnValue('mocked: yaml');
+const mockYamlParse = jest.fn().mockReturnValue(validConfig);
 
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('fs', () => ({
-  default:      { existsSync: mockFsExistsSync, readFileSync: mockFsReadFile },
-  existsSync:   mockFsExistsSync,
+  default: { existsSync: mockFsExistsSync, readFileSync: mockFsReadFile },
+  existsSync: mockFsExistsSync,
   readFileSync: mockFsReadFile,
 }));
 
 jest.unstable_mockModule('yaml', () => ({
   default: { parse: mockYamlParse },
-  parse:   mockYamlParse,
+  parse: mockYamlParse,
 }));
 
 // ─── Import dynamique ─────────────────────────────────────────────────────────
@@ -77,7 +80,7 @@ let configLoader!: ConfigLoaderInstance;
 let config!: ValidConfig;
 
 beforeAll(async () => {
-  ({ configLoader, config } = await import('../../../src/utils/config-loader.js') as {
+  ({ configLoader, config } = (await import('../../../src/utils/config-loader.js')) as {
     configLoader: ConfigLoaderInstance;
     config: ValidConfig;
   });
@@ -97,15 +100,15 @@ describe('ConfigLoader – module load', () => {
     expect(typeof configLoader.loadConfig).toBe('function');
   });
 
-  test('config has DATABASE_ROUTING with required keys', () => {
-    expect(config.DATABASE_ROUTING).toBeDefined();
-    expect(config.DATABASE_ROUTING.DEFAULT_DATABASE).toBeDefined();
-    expect(Array.isArray(config.DATABASE_ROUTING.ALLOWED_DATABASES)).toBe(true);
+  test('config has CATALOG_ROUTING with required keys', () => {
+    expect(config.CATALOG_ROUTING).toBeDefined();
+    expect(config.CATALOG_ROUTING.DEFAULT_CATALOG).toBeDefined();
+    expect(Array.isArray(config.CATALOG_ROUTING.ALLOWED_CATALOGS)).toBe(true);
   });
 
   test('loadConfig returns the same object on repeated calls (cached)', () => {
     // Mise en cache interne — deux appels successifs retournent la même référence.
-    const first  = configLoader.loadConfig();
+    const first = configLoader.loadConfig();
     const second = configLoader.loadConfig();
     expect(first).toBe(second);
   });
@@ -218,7 +221,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       ENVIRONMENT: 'development',
       feature: {
         development: { debug: true },
-        production:  { debug: false },
+        production: { debug: false },
       },
     };
     const result = configLoader.applyEnvironmentSpecific(cfg);
@@ -230,7 +233,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       ENVIRONMENT: 'production',
       feature: {
         development: { debug: true },
-        production:  { debug: false },
+        production: { debug: false },
       },
     };
     const result = configLoader.applyEnvironmentSpecific(cfg);
@@ -243,7 +246,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       ENVIRONMENT: 'staging',
       feature: {
         development: { value: 'dev_value' },
-        production:  { value: 'prod_value' },
+        production: { value: 'prod_value' },
       },
     };
     const result = configLoader.applyEnvironmentSpecific(cfg);
@@ -255,8 +258,8 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
     const cfg = {
       ENVIRONMENT: 'production',
       patterns: {
-        common:      { list: ['a', 'b'] },
-        production:  { list: ['c'] },
+        common: { list: ['a', 'b'] },
+        production: { list: ['c'] },
         development: { list: ['d'] },
       },
     };
@@ -270,7 +273,7 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
       top: {
         nested: {
           development: { flag: 'yes' },
-          production:  { flag: 'no' },
+          production: { flag: 'no' },
         },
       },
     };
@@ -295,7 +298,10 @@ describe('ConfigLoader – applyEnvironmentSpecific', () => {
 
 describe('ConfigLoader – convertNumericValues', () => {
   test('converts integer strings to numbers', () => {
-    const result = configLoader.convertNumericValues({ port: '3000', timeout: '5000' }) as Record<string, unknown>;
+    const result = configLoader.convertNumericValues({ port: '3000', timeout: '5000' }) as Record<
+      string,
+      unknown
+    >;
     expect(result.port).toBe(3000);
     expect(result.timeout).toBe(5000);
   });
@@ -305,13 +311,19 @@ describe('ConfigLoader – convertNumericValues', () => {
   });
 
   test('converts float strings to numbers', () => {
-    const result = configLoader.convertNumericValues({ ratio: '3.14', pct: '99.9' }) as Record<string, unknown>;
+    const result = configLoader.convertNumericValues({ ratio: '3.14', pct: '99.9' }) as Record<
+      string,
+      unknown
+    >;
     expect(result.ratio).toBe(3.14);
     expect(result.pct).toBe(99.9);
   });
 
   test('converts "true" and "false" strings to booleans', () => {
-    const result = configLoader.convertNumericValues({ on: 'true', off: 'false' }) as Record<string, unknown>;
+    const result = configLoader.convertNumericValues({ on: 'true', off: 'false' }) as Record<
+      string,
+      unknown
+    >;
     expect(result.on).toBe(true);
     expect(result.off).toBe(false);
   });
@@ -319,8 +331,8 @@ describe('ConfigLoader – convertNumericValues', () => {
   test('preserves non-numeric strings', () => {
     // Conservation des chaînes non numériques — pas de conversion parasite.
     const result = configLoader.convertNumericValues({
-      name:  'service',
-      ip:    '192.168.1.1',
+      name: 'service',
+      ip: '192.168.1.1',
       mixed: '123abc',
     }) as Record<string, unknown>;
     expect(result.name).toBe('service');
@@ -337,13 +349,18 @@ describe('ConfigLoader – convertNumericValues', () => {
   });
 
   test('handles arrays', () => {
-    const result = configLoader.convertNumericValues({ ids: ['1', '2', 'abc'] }) as { ids: unknown[] };
+    const result = configLoader.convertNumericValues({ ids: ['1', '2', 'abc'] }) as {
+      ids: unknown[];
+    };
     expect(result.ids).toEqual([1, 2, 'abc']);
   });
 
   test('preserves actual numbers and booleans unchanged', () => {
     // Valeurs déjà typées — pas de double conversion.
-    const result = configLoader.convertNumericValues({ port: 4000, flag: true }) as Record<string, unknown>;
+    const result = configLoader.convertNumericValues({ port: 4000, flag: true }) as Record<
+      string,
+      unknown
+    >;
     expect(result.port).toBe(4000);
     expect(result.flag).toBe(true);
   });
@@ -353,21 +370,17 @@ describe('ConfigLoader – convertNumericValues', () => {
 
 describe('ConfigLoader – validateEnvironment', () => {
   test('accepts "development"', () => {
-    expect(() =>
-      configLoader.validateEnvironment({ ENVIRONMENT: 'development' })
-    ).not.toThrow();
+    expect(() => configLoader.validateEnvironment({ ENVIRONMENT: 'development' })).not.toThrow();
   });
 
   test('accepts "production"', () => {
-    expect(() =>
-      configLoader.validateEnvironment({ ENVIRONMENT: 'production' })
-    ).not.toThrow();
+    expect(() => configLoader.validateEnvironment({ ENVIRONMENT: 'production' })).not.toThrow();
   });
 
   test('rejects an unknown environment string', () => {
-    expect(() =>
-      configLoader.validateEnvironment({ ENVIRONMENT: 'staging' })
-    ).toThrow('Invalid environment');
+    expect(() => configLoader.validateEnvironment({ ENVIRONMENT: 'staging' })).toThrow(
+      'Invalid environment',
+    );
   });
 
   test('rejects missing ENVIRONMENT key', () => {
@@ -381,7 +394,7 @@ describe('ConfigLoader – validateRequiredFields', () => {
   // Configuration de base complète — sert de référence pour les tests de champs manquants.
   const base: Record<string, unknown> = {
     API: { PORT: 4000 },
-    DATABASE_ROUTING: { DEFAULT_DATABASE: 'main', ALLOWED_DATABASES: ['main'] },
+    CATALOG_ROUTING: { DEFAULT_CATALOG: 'main', ALLOWED_CATALOGS: ['main'] },
     DATABASE: { POOL: { MAX_CONNECTIONS: 5 } },
     SECURITY: { RATE_LIMIT: { MAX_REQUESTS: 100 } },
     CATALOGS: { main: {} },
@@ -392,39 +405,39 @@ describe('ConfigLoader – validateRequiredFields', () => {
   });
 
   test('throws when API.PORT is missing', () => {
-    expect(() =>
-      configLoader.validateRequiredFields({ ...base, API: {} })
-    ).toThrow('Missing required configuration');
+    expect(() => configLoader.validateRequiredFields({ ...base, API: {} })).toThrow(
+      'Missing required configuration',
+    );
   });
 
-  test('throws when DATABASE_ROUTING.DEFAULT_DATABASE is missing', () => {
+  test('throws when CATALOG_ROUTING.DEFAULT_CATALOG is missing', () => {
     expect(() =>
       configLoader.validateRequiredFields({
         ...base,
-        DATABASE_ROUTING: { ALLOWED_DATABASES: ['main'] },
-      })
+        CATALOG_ROUTING: { ALLOWED_CATALOGS: ['main'] },
+      }),
     ).toThrow('Missing required configuration');
   });
 
-  test('throws when DATABASE_ROUTING.ALLOWED_DATABASES is missing', () => {
+  test('throws when CATALOG_ROUTING.ALLOWED_CATALOGS is missing', () => {
     expect(() =>
       configLoader.validateRequiredFields({
         ...base,
-        DATABASE_ROUTING: { DEFAULT_DATABASE: 'main' },
-      })
+        CATALOG_ROUTING: { DEFAULT_CATALOG: 'main' },
+      }),
     ).toThrow('Missing required configuration');
   });
 
   test('throws when SECURITY.RATE_LIMIT.MAX_REQUESTS is missing', () => {
-    expect(() =>
-      configLoader.validateRequiredFields({ ...base, SECURITY: {} })
-    ).toThrow('Missing required configuration');
+    expect(() => configLoader.validateRequiredFields({ ...base, SECURITY: {} })).toThrow(
+      'Missing required configuration',
+    );
   });
 
   test('throws when CATALOGS is an empty object', () => {
-    expect(() =>
-      configLoader.validateRequiredFields({ ...base, CATALOGS: {} })
-    ).toThrow('No catalogs configured');
+    expect(() => configLoader.validateRequiredFields({ ...base, CATALOGS: {} })).toThrow(
+      'No catalogs configured',
+    );
   });
 
   test('throws when CATALOGS is missing', () => {
@@ -502,12 +515,12 @@ describe('ConfigLoader – loadConfig cache reset', () => {
     configLoader.config = null;
     const reloaded = configLoader.loadConfig();
     expect(reloaded).toBeDefined();
-    expect((reloaded as ValidConfig).DATABASE_ROUTING).toBeDefined();
+    expect((reloaded as ValidConfig).CATALOG_ROUTING).toBeDefined();
   });
 
   test('result of re-load is then cached again', () => {
     configLoader.config = null;
-    const first  = configLoader.loadConfig();
+    const first = configLoader.loadConfig();
     const second = configLoader.loadConfig();
     expect(first).toBe(second);
   });

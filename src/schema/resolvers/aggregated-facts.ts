@@ -31,11 +31,13 @@ export interface AggregatedFactsArgs {
   filters?: string | null;
   structuredFilters?: StructuredFilter[] | null;
   groupBy: string;
+  measure: string;
   aggregation?: AggregationType;
   limit?: number;
   offset?: number;
   sort?: AggregatedSortItem[];
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
@@ -69,6 +71,7 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
  *
  * @param aggregation - Aggregation type to validate.
  * @param groupBy - Group-by field (must be non-empty).
+ * @param measure - Measure column to aggregate (must be non-empty).
  * @param offset - Pagination offset to validate.
  * @param limit - Pagination limit to validate.
  * @param sort - Sort items to validate (field and order).
@@ -78,6 +81,7 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
 function validateAggregatedArgs(
   aggregation: AggregationType,
   groupBy: string | undefined,
+  measure: string | undefined,
   offset: number,
   limit: number,
   sort: AggregatedSortItem[],
@@ -92,6 +96,11 @@ function validateAggregatedArgs(
   // Groupby est un élément obligatoire
   if (!groupBy) {
     throw new GraphQLError('groupBy field is required');
+  }
+
+  // La mesure à agréger est obligatoire
+  if (!measure) {
+    throw new GraphQLError('measure field is required');
   }
 
   // Validation de l'offset de pagination
@@ -144,19 +153,21 @@ const aggregatedFactsResolvers = {
         filters,
         structuredFilters,
         groupBy,
+        measure,
         aggregation = 'SUM',
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
-        database,
+        catalog,
+        schema,
       }: AggregatedFactsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(aggregation, groupBy, offset, limit, sort);
+      validateAggregatedArgs(aggregation, groupBy, measure, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForDatabase(database);
+        const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
 
         const results = (await withTimeout(
@@ -165,6 +176,7 @@ const aggregatedFactsResolvers = {
             filters,
             structuredFilters,
             groupBy,
+            measure,
             aggregation,
             limit,
             offset,
@@ -209,19 +221,21 @@ const aggregatedFactsResolvers = {
         filters,
         structuredFilters,
         groupBy,
+        measure,
         aggregation = 'SUM',
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
-        database,
+        catalog,
+        schema,
       }: AggregatedFactsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(aggregation, groupBy, offset, limit, sort);
+      validateAggregatedArgs(aggregation, groupBy, measure, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForDatabase(database);
+        const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
 
         const result = (await withTimeout(
@@ -230,6 +244,7 @@ const aggregatedFactsResolvers = {
             filters,
             structuredFilters,
             groupBy,
+            measure,
             aggregation,
             limit,
             offset,

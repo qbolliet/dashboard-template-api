@@ -10,7 +10,14 @@ export interface DimensionDetail {
 /** Field metadata returned by the metadata loader. */
 export interface FieldMetadata {
   is_categorical?: boolean;
+  is_primary_key?: boolean;
   [key: string]: unknown;
+}
+
+/** A single measure of a fact row (name + value with its original type preserved). */
+export interface MeasureEntry {
+  name: string;
+  value: unknown;
 }
 
 /** Load request for a single dimension value. */
@@ -43,79 +50,90 @@ export interface AggregatedFact {
 
 // ─── Fonctions d'enrichissement ──────────────────────────────────────────────
 
+/** Result of enrichment: a fact carrying its measures and dimension details. */
+type EnrichedFact = Fact & {
+  dimensionDetails: (DimensionDetail | Fact)[];
+  measures: MeasureEntry[];
+};
+
 /**
- * Enriches an array of facts with their categorical dimension details.
+ * Enriches an array of facts by splitting their columns into measures and
+ * categorical dimension details.
  *
- * Pre-loads all unique dimension values in bulk to avoid N+1 loader calls,
- * then attaches a `dimensionDetails` array to each fact.
+ * Each column is classified via its metadata: a column with
+ * `is_primary_key === false` is a measure (its raw, type-preserved value is
+ * pushed to `measures`); every other column (primary-key / coordinate, or one
+ * without a metadata row) is treated as a dimension detail. Categorical
+ * dimension values are resolved to labels in bulk to avoid N+1 loader calls.
  *
  * Note: An alternative would be to JOIN dimensions in the SQL query itself,
  * which would be more efficient but would reduce GraphQL flexibility.
  *
  * @param facts - Array of raw fact objects to enrich.
  * @param loaders - GraphQL DataLoader collection.
- * @returns Facts enriched with a `dimensionDetails` array on each item.
+ * @returns Facts enriched with `measures` and `dimensionDetails` arrays.
  */
-// Enrichissement en masse des faits avec les détails de leurs dimensions catégorielles
+// Enrichissement en masse : partition des colonnes en mesures / dimensions
 export async function enrichFactsWithDimensions(
   facts: Fact[],
   loaders: Loaders,
-): Promise<(Fact & { dimensionDetails: (DimensionDetail | Fact)[] })[]> {
+): Promise<EnrichedFact[]> {
   if (!facts || facts.length === 0) {
-    return facts as (Fact & { dimensionDetails: (DimensionDetail | Fact)[] })[];
+    return facts as EnrichedFact[];
   }
 
-  // Champs exclus de l'enrichissement dimensionnel
-  const excludedFields = ['value', '_groupByField'];
+  // Champs internes ajoutés par l'API, jamais des colonnes de la base
+  const internalFields = ['_groupByField', 'dimensionDetails', 'measures'];
 
-  // Collecte des champs de dimension uniques et de leurs valeurs
-  const dimensionFieldsSet = new Set<string>();
-  const dimensionValuesMap = new Map<string, Set<unknown>>();
-
+  // Collecte de toutes les colonnes présentes (pour charger leur metadata)
+  const columnSet = new Set<string>();
   facts.forEach((fact) => {
     if (!fact || typeof fact !== 'object') return;
-
     Object.keys(fact).forEach((key) => {
-      if (!excludedFields.includes(key) && fact[key] !== null) {
-        dimensionFieldsSet.add(key);
-
-        if (!dimensionValuesMap.has(key)) {
-          dimensionValuesMap.set(key, new Set());
-        }
-        dimensionValuesMap.get(key)!.add(fact[key]);
-      }
+      if (!internalFields.includes(key)) columnSet.add(key);
     });
   });
 
-  if (dimensionFieldsSet.size === 0) {
-    return facts.map((fact) => ({ ...fact, dimensionDetails: [] }));
+  if (columnSet.size === 0) {
+    return facts.map((fact) => ({ ...fact, dimensionDetails: [], measures: [] }));
   }
 
-  const dimensionFields = Array.from(dimensionFieldsSet);
+  const columns = Array.from(columnSet);
 
-  // Chargement des métadonnées pour identifier les champs catégoriels
-  const metadataResults = await Promise.all(
-    dimensionFields.map((fieldName) => loaders.metadata.load(fieldName)),
-  );
+  // Chargement des métadonnées de chaque colonne pour la classification
+  const metadataResults = await Promise.all(columns.map((name) => loaders.metadata.load(name)));
 
-  // Indexation des métadonnées par nom de champ pour un accès en O(1)
+  // Indexation des métadonnées par nom de colonne pour un accès en O(1)
   const metadataMap = new Map<string, FieldMetadata | null>();
-  dimensionFields.forEach((fieldName, index) => {
-    metadataMap.set(fieldName, metadataResults[index]);
+  columns.forEach((name, index) => {
+    metadataMap.set(name, metadataResults[index]);
   });
 
-  // Construction de la liste des requêtes de chargement pour les dimensions catégorielles
+  // Une colonne est une mesure ssi sa metadata existe et is_primary_key === false.
+  // Toute autre colonne (clé/coordonnée, ou metadata absente) → dimensionDetails.
+  const isMeasure = (name: string): boolean => {
+    const meta = metadataMap.get(name);
+    return !!meta && meta.is_primary_key === false;
+  };
+
+  // Construction des requêtes de labels pour les colonnes-clés catégorielles (valeurs non nulles)
   const dimensionLoadRequests: DimensionLoadRequest[] = [];
+  const requestedKeys = new Set<string>();
 
-  dimensionFields.forEach((fieldName) => {
-    const metadata = metadataMap.get(fieldName);
-    const values = dimensionValuesMap.get(fieldName);
-
-    if (metadata && metadata.is_categorical && values && values.size > 0) {
-      values.forEach((value) => {
-        dimensionLoadRequests.push({ dimensionName: fieldName, value });
-      });
-    }
+  facts.forEach((fact) => {
+    if (!fact || typeof fact !== 'object') return;
+    Object.keys(fact).forEach((name) => {
+      if (internalFields.includes(name) || isMeasure(name)) return;
+      const metadata = metadataMap.get(name);
+      const value = fact[name];
+      if (metadata && metadata.is_categorical && value !== null && value !== undefined) {
+        const key = `${name}:${value}`;
+        if (!requestedKeys.has(key)) {
+          requestedKeys.add(key);
+          dimensionLoadRequests.push({ dimensionName: name, value });
+        }
+      }
+    });
   });
 
   // Chargement en masse de tous les détails de dimension
@@ -133,39 +151,43 @@ export async function enrichFactsWithDimensions(
     });
   }
 
-  // Enrichissement de chaque fait avec ses détails dimensionnels
+  // Enrichissement de chaque fait : séparation mesures / dimensions
   return facts.map((fact) => {
     if (!fact || typeof fact !== 'object') {
       // Branche défensive — invariant garanti par le type Fact[]
-      return { dimensionDetails: [] } as Fact & { dimensionDetails: (DimensionDetail | Fact)[] };
+      return { dimensionDetails: [], measures: [] } as EnrichedFact;
     }
 
-    const factDimensionFields = Object.keys(fact).filter(
-      (key) => !excludedFields.includes(key) && fact[key] !== null,
-    );
+    const dimensionDetails: (DimensionDetail | Fact)[] = [];
+    const measures: MeasureEntry[] = [];
 
-    if (factDimensionFields.length === 0) {
-      return { ...fact, dimensionDetails: [] };
-    }
+    Object.keys(fact).forEach((name) => {
+      if (internalFields.includes(name)) return;
 
-    const dimensionDetails = factDimensionFields.map((fieldName) => {
-      const value = fact[fieldName];
-      const metadata = metadataMap.get(fieldName);
+      // Colonne mesure → valeur brute (type préservé), incluse même si null
+      if (isMeasure(name)) {
+        measures.push({ name, value: fact[name] });
+        return;
+      }
 
+      // Colonne-clé / dimension — les valeurs nulles sont ignorées
+      const value = fact[name];
+      if (value === null || value === undefined) return;
+
+      const metadata = metadataMap.get(name);
       if (metadata && metadata.is_categorical) {
-        const key = `${fieldName}:${value}`;
-        const dimensionDetail = dimensionDetailsMap.get(key);
-
+        const dimensionDetail = dimensionDetailsMap.get(`${name}:${value}`);
         if (dimensionDetail) {
-          return dimensionDetail;
+          dimensionDetails.push(dimensionDetail);
+          return;
         }
       }
 
       // Valeur brute pour les champs non catégoriels ou introuvables
-      return { name: fieldName, value, label: value };
+      dimensionDetails.push({ name, value, label: value });
     });
 
-    return { ...fact, dimensionDetails };
+    return { ...fact, dimensionDetails, measures };
   });
 }
 

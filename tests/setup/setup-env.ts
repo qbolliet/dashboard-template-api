@@ -21,8 +21,8 @@ process.env.MACROECONOMICS_CATALOG_PATH = 'data/test-macroeconomics.ducklake';
 process.env.MACROECONOMICS_DATA_PATH = 'data/test-macroeconomics_data/';
 process.env.PUBLIC_FINANCE_CATALOG_PATH = 'data/test-public-finance.ducklake';
 process.env.PUBLIC_FINANCE_DATA_PATH = 'data/test-public-finance_data/';
-process.env.ALLOWED_DATABASES = '["default", "macroeconomics", "public_finance"]';
-process.env.ALLOW_CROSS_DATABASE_QUERIES = 'true';
+process.env.ALLOWED_CATALOGS = '["default", "macroeconomics", "public_finance"]';
+process.env.ALLOW_CROSS_CATALOG_QUERIES = 'true';
 
 // Configuration Redis pour les tests
 process.env.REDIS_HOST = 'localhost';
@@ -52,10 +52,10 @@ if (!process.env.DEBUG) {
   const originalConsole: Console = global.console;
   global.console = {
     ...originalConsole,
-    log: (): void => {},   // Suppression des logs
-    info: (): void => {},  // Suppression des infos
+    log: (): void => {}, // Suppression des logs
+    info: (): void => {}, // Suppression des infos
     debug: (): void => {}, // Suppression du debug
-    warn: originalConsole.warn,   // Conservation des avertissements
-    error: originalConsole.error  // Conservation des erreurs
+    warn: originalConsole.warn, // Conservation des avertissements
+    error: originalConsole.error, // Conservation des erreurs
   } as Console;
 }

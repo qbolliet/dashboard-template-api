@@ -25,8 +25,9 @@ const resolvers = {
     ...catalogResolvers.Query,
     ...crossDatabaseResolvers.Query,
   },
-  // Ajout des field resolvers pour la résolution des labels
+  // Field resolvers : labels sur Fact/AggregatedFact + cascade lazy sur CatalogSchemaInfo
   ...fieldResolvers,
+  CatalogSchemaInfo: catalogResolvers.CatalogSchemaInfo,
 };
 
 // Ré-exportation de la combinaison

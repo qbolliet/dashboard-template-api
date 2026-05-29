@@ -76,7 +76,9 @@ const mockDatabaseManager = makeDatabaseManager();
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({ config: mockConfig }));
-jest.unstable_mockModule('../../../src/db/index.js', () => ({ databaseManager: mockDatabaseManager }));
+jest.unstable_mockModule('../../../src/db/index.js', () => ({
+  databaseManager: mockDatabaseManager,
+}));
 jest.unstable_mockModule('../../../src/utils/cache.js', () => ({ withCache: jest.fn() }));
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() },
@@ -142,19 +144,20 @@ let createCrossDatabaseSelectOptions: jest.Mock;
 
 beforeAll(async () => {
   ({ createLoaders, createLoadersForRequest } =
-    await import('../../../src/loaders/index.js') as unknown as LoadersIndexModule);
+    (await import('../../../src/loaders/index.js')) as unknown as LoadersIndexModule);
 
-  ({ createMetadataLoader } =
-    await import('../../../src/loaders/metadata.js') as { createMetadataLoader: jest.Mock });
+  ({ createMetadataLoader } = (await import('../../../src/loaders/metadata.js')) as {
+    createMetadataLoader: jest.Mock;
+  });
 
   ({ createDimensionLoader, createDimensionValueLoader } =
-    await import('../../../src/loaders/dimension.js') as {
+    (await import('../../../src/loaders/dimension.js')) as {
       createDimensionLoader: jest.Mock;
       createDimensionValueLoader: jest.Mock;
     });
 
   ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } =
-    await import('../../../src/loaders/fact.js') as {
+    (await import('../../../src/loaders/fact.js')) as {
       createFactLoader: jest.Mock;
       createFactWithCountLoader: jest.Mock;
       createFactWithMetadataLoader: jest.Mock;
@@ -164,23 +167,24 @@ beforeAll(async () => {
     createAggregatedFactsLoader,
     createAggregatedFactsWithMetadataLoader,
     createAggregatedFactsWithCountLoader,
-  } = await import('../../../src/loaders/aggregated-facts.js') as {
+  } = (await import('../../../src/loaders/aggregated-facts.js')) as {
     createAggregatedFactsLoader: jest.Mock;
     createAggregatedFactsWithMetadataLoader: jest.Mock;
     createAggregatedFactsWithCountLoader: jest.Mock;
   });
 
-  ({ createSelectOptionsLoader } =
-    await import('../../../src/loaders/select-options.js') as { createSelectOptionsLoader: jest.Mock });
+  ({ createSelectOptionsLoader } = (await import('../../../src/loaders/select-options.js')) as {
+    createSelectOptionsLoader: jest.Mock;
+  });
 
   ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } =
-    await import('../../../src/loaders/catalog.js') as {
+    (await import('../../../src/loaders/catalog.js')) as {
       createCatalogMetadataLoader: jest.Mock;
       createCatalogDimensionNamesLoader: jest.Mock;
     });
 
   ({ createCompareFacts, createCompareAggregatedFacts, createCrossDatabaseSelectOptions } =
-    await import('../../../src/loaders/cross-database.js') as {
+    (await import('../../../src/loaders/cross-database.js')) as {
       createCompareFacts: jest.Mock;
       createCompareAggregatedFacts: jest.Mock;
       createCrossDatabaseSelectOptions: jest.Mock;
@@ -189,12 +193,21 @@ beforeAll(async () => {
 
 // Clés de tous les loaders dans l'objet retourné par createLoaders
 const ALL_LOADER_KEYS: Array<keyof Omit<LoadersObject, 'clearAll' | 'prime'>> = [
-  'metadata', 'dimension', 'dimensionValue',
-  'fact', 'factWithCount', 'factWithMetadata',
-  'aggregatedFacts', 'aggregatedFactsWithMetadata', 'aggregatedFactsWithCount',
+  'metadata',
+  'dimension',
+  'dimensionValue',
+  'fact',
+  'factWithCount',
+  'factWithMetadata',
+  'aggregatedFacts',
+  'aggregatedFactsWithMetadata',
+  'aggregatedFactsWithCount',
   'selectOptions',
-  'catalogMetadata', 'catalogDimensionNames',
-  'compareFacts', 'compareAggregatedFacts', 'crossDatabaseSelectOptions',
+  'catalogMetadata',
+  'catalogDimensionNames',
+  'compareFacts',
+  'compareAggregatedFacts',
+  'crossDatabaseSelectOptions',
 ];
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -244,16 +257,16 @@ describe('createLoaders', () => {
       const databaseId = 'analytics';
       createLoaders(databaseId);
 
-      expect(createMetadataLoader).toHaveBeenCalledWith(databaseId);
-      expect(createDimensionLoader).toHaveBeenCalledWith(databaseId);
-      expect(createDimensionValueLoader).toHaveBeenCalledWith(databaseId);
-      expect(createFactLoader).toHaveBeenCalledWith(databaseId);
-      expect(createFactWithCountLoader).toHaveBeenCalledWith(databaseId);
-      expect(createFactWithMetadataLoader).toHaveBeenCalledWith(databaseId);
-      expect(createAggregatedFactsLoader).toHaveBeenCalledWith(databaseId);
-      expect(createAggregatedFactsWithMetadataLoader).toHaveBeenCalledWith(databaseId);
-      expect(createAggregatedFactsWithCountLoader).toHaveBeenCalledWith(databaseId);
-      expect(createSelectOptionsLoader).toHaveBeenCalledWith(databaseId);
+      expect(createMetadataLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createDimensionLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createDimensionValueLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createFactLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createFactWithCountLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createFactWithMetadataLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createAggregatedFactsLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createAggregatedFactsWithMetadataLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createAggregatedFactsWithCountLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createSelectOptionsLoader).toHaveBeenCalledWith(databaseId, null);
     });
 
     test('les loaders catalog et cross-database sont créés sans argument', () => {
@@ -267,7 +280,7 @@ describe('createLoaders', () => {
 
     test('utilise null par défaut si aucun databaseId fourni', () => {
       createLoaders();
-      expect(createMetadataLoader).toHaveBeenCalledWith(null);
+      expect(createMetadataLoader).toHaveBeenCalledWith(null, null);
     });
   });
 
@@ -279,7 +292,7 @@ describe('createLoaders', () => {
 
       loaders.clearAll();
 
-      ALL_LOADER_KEYS.forEach(key => {
+      ALL_LOADER_KEYS.forEach((key) => {
         expect((loaders[key] as MockLoader).clearAll).toHaveBeenCalledTimes(1);
       });
     });
@@ -291,7 +304,7 @@ describe('createLoaders', () => {
       loaders1.clearAll();
 
       // Loaders2 ne doit pas avoir été affecté
-      ALL_LOADER_KEYS.forEach(key => {
+      ALL_LOADER_KEYS.forEach((key) => {
         expect((loaders2[key] as MockLoader).clearAll).not.toHaveBeenCalled();
       });
     });
@@ -317,7 +330,9 @@ describe('createLoaders', () => {
         dimensions: [{ key: 'country', value: [{ value: '1', label: 'France' }] }],
       });
 
-      expect(loaders.dimension.prime).toHaveBeenCalledWith('country', [{ value: '1', label: 'France' }]);
+      expect(loaders.dimension.prime).toHaveBeenCalledWith('country', [
+        { value: '1', label: 'France' },
+      ]);
     });
 
     test('amorce le loader fact', async () => {
@@ -337,7 +352,9 @@ describe('createLoaders', () => {
         selectOptions: [{ key: 'country', value: [{ value: '1', label: 'FR' }] }],
       });
 
-      expect(loaders.selectOptions.prime).toHaveBeenCalledWith('country', [{ value: '1', label: 'FR' }]);
+      expect(loaders.selectOptions.prime).toHaveBeenCalledWith('country', [
+        { value: '1', label: 'FR' },
+      ]);
     });
 
     test('gère un appel sans argument gracieusement', async () => {
@@ -358,9 +375,7 @@ describe('createLoaders', () => {
           { key: 'field1', value: { type: 'string' } },
           { key: 'field2', value: { type: 'integer' } },
         ],
-        selectOptions: [
-          { key: 'country', value: [{ value: '1', label: 'FR' }] },
-        ],
+        selectOptions: [{ key: 'country', value: [{ value: '1', label: 'FR' }] }],
       });
 
       // Chaque loader a ses propres mocks — compteurs indépendants
@@ -391,7 +406,7 @@ describe('createLoadersForRequest', () => {
 
   test('transmet le databaseId correctement', () => {
     createLoadersForRequest('test-db');
-    expect(createMetadataLoader).toHaveBeenCalledWith('test-db');
+    expect(createMetadataLoader).toHaveBeenCalledWith('test-db', null);
   });
 
   test('fonctionne sans databaseId', () => {

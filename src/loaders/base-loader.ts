@@ -1,5 +1,6 @@
 // Importation des modules
 import DataLoader from 'dataloader';
+import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
@@ -51,7 +52,9 @@ interface BaseLoaderConfig {
   cachePrefix?: string;
   cache?: boolean;
   cacheTimeout?: number;
-  databaseId?: string | null;
+  catalogId?: string | null;
+  /** DuckLake schema within the catalog. Null = catalog's configured default. */
+  schema?: string | null;
 }
 
 /** Sort criterion for SQL ORDER BY clauses. */
@@ -74,7 +77,8 @@ class BaseQueryLoader {
   cachePrefix: string;
   cacheEnabled: boolean;
   cacheTimeout: number;
-  databaseId: string | null;
+  catalogId: string | null;
+  schema: string | null;
 
   // Initialisation des propriétés du loader
   /**
@@ -87,7 +91,8 @@ class BaseQueryLoader {
     this.cachePrefix = config.cachePrefix || 'default';
     this.cacheEnabled = config.cache !== false;
     this.cacheTimeout = config.cacheTimeout || globalConfig.API.LOADERS.DEFAULT_CACHE_TIMEOUT;
-    this.databaseId = config.databaseId ?? null;
+    this.catalogId = config.catalogId ?? null;
+    this.schema = config.schema ?? null;
   }
 
   // Méthode exécutant une fonction à partir d'une connexion à la base de données
@@ -107,9 +112,9 @@ class BaseQueryLoader {
     let connection: DuckDBConnection | undefined;
     let pool: DuckDBPool | undefined;
     try {
-      // Récupération du pool associé à l'identifiant de base de données
+      // Récupération du pool associé à l'identifiant de catalogue
       pool = (databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }).getPool(
-        this.databaseId,
+        this.catalogId,
       );
       // Acquisition de la connexion
       connection = await pool.acquire();
@@ -117,7 +122,7 @@ class BaseQueryLoader {
       return await queryFn(connection);
     } catch (error) {
       logger.error(
-        `Error in ${this.cachePrefix} loader (database: ${this.databaseId || 'default'}):`,
+        `Error in ${this.cachePrefix} loader (catalog: ${this.catalogId || 'default'}, schema: ${this.schema || 'default'}):`,
         error,
       );
       throw error;
@@ -131,21 +136,19 @@ class BaseQueryLoader {
 
   // Méthode de qualification d'un nom de table avec le catalogue DuckLake courant
   /**
-   * Returns a fully qualified table name for the current catalog.
+   * Returns a fully qualified table name for the current catalog and schema.
    *
-   * With the DuckLake multi-catalog setup, all table names must be prefixed
-   * as "{catalogId}".{schema}.{tableName}.
+   * With the DuckLake multi-catalog / multi-schema setup, all table names must
+   * be prefixed as "{catalogId}".{schema}.{tableName}. The schema is the one
+   * bound to this loader (per-request), falling back to the catalog's configured
+   * default schema when none was provided.
    *
    * @param tableName - Bare table name (e.g. 'fact_table', 'dim_country').
    * @returns Fully qualified table name string.
    */
   qualifyTable(tableName: string): string {
-    const dm = databaseManager as unknown as {
-      defaultDatabase: string;
-      getSchema: (id: string) => string;
-    };
-    const catalog = this.databaseId || dm.defaultDatabase;
-    const schema = dm.getSchema(catalog);
+    const catalog = this.catalogId || databaseManager.getDefaultCatalog();
+    const schema = this.schema || databaseManager.getDefaultSchema(catalog);
     return `"${catalog}".${schema}.${tableName}`;
   }
 
@@ -165,7 +168,9 @@ class BaseQueryLoader {
       return await loader();
     }
     try {
-      const cacheKey = `${this.cachePrefix}:${this.databaseId || 'default'}:${JSON.stringify(key)}`;
+      // Le schéma fait partie de la clé : deux schémas d'un même catalogue ne
+      // doivent jamais partager une entrée de cache (modalités/IDs différents).
+      const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${JSON.stringify(key)}`;
       return await withCache<T>(cacheKey, loader, this.cacheTimeout);
     } catch (error) {
       logger.error(`Cache error in ${this.cachePrefix} loader:`, error);
@@ -202,6 +207,10 @@ class BaseQueryLoader {
                 }
                 return await this.loadWithCache(key, async () => await loadFn(connection, key));
               } catch (error) {
+                // Les erreurs GraphQL (validation métier explicite) doivent
+                // remonter au client ; sinon le filet ci-dessous masque le
+                // vrai message en renvoyant null pour un champ non-nullable.
+                if (error instanceof GraphQLError) throw error;
                 logger.error(`Error loading ${this.cachePrefix} for key:`, key, error);
                 // Retourne null ou tableau vide selon le contexte
                 return (Array.isArray(key) ? [] : null) as unknown as V;
@@ -243,6 +252,8 @@ class BaseQueryLoader {
             // Alignement du résultat sur l'ordre des clés d'entrée
             return keys.map((_, index) => results[index] ?? (null as unknown as V));
           } catch (error) {
+            // Mêmes règles que createLoader : les GraphQLError remontent.
+            if (error instanceof GraphQLError) throw error;
             logger.error(`Batch error in ${this.cachePrefix} loader:`, error);
             // Valeurs par défaut pour chaque clé en cas d'erreur
             return keys.map(() => null as unknown as V);

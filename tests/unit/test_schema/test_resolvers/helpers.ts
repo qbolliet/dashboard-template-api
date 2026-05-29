@@ -23,14 +23,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Résultat d'une opération GraphQL normalisé. */
 export interface GraphQLResult {
-    data: Record<string, unknown> | null;
-    errors?: ReadonlyArray<{ message: string; extensions?: Record<string, unknown> }>;
+  data: Record<string, unknown> | null;
+  errors?: ReadonlyArray<{ message: string; extensions?: Record<string, unknown> }>;
 }
 
 /** Paramètre d'opération transmis à executeOperation d'Apollo Server. */
 export interface GraphQLOperation {
-    query: string;
-    variables?: Record<string, unknown>;
+  query: string;
+  variables?: Record<string, unknown>;
 }
 
 // ─── État du serveur partagé ──────────────────────────────────────────────────
@@ -48,14 +48,14 @@ let _server: ApolloServer | null = null;
  *     Error: If the test catalog file is not found at the expected path.
  */
 export const ensureSetup = async (): Promise<void> => {
-    // Vérification de l'existence du catalogue de test
-    const catalogPath = path.resolve(__dirname, '../../../../data/test-default.ducklake');
-    if (!fs.existsSync(catalogPath)) {
-        throw new Error(
-            `Test catalog not found: ${catalogPath}\n` +
-            `Run "npm run test:setup" before running the resolver tests.`
-        );
-    }
+  // Vérification de l'existence du catalogue de test
+  const catalogPath = path.resolve(__dirname, '../../../../data/test-default.ducklake');
+  if (!fs.existsSync(catalogPath)) {
+    throw new Error(
+      `Test catalog not found: ${catalogPath}\n` +
+        `Run "npm run test:setup" before running the resolver tests.`,
+    );
+  }
 };
 
 /**
@@ -68,12 +68,12 @@ export const ensureSetup = async (): Promise<void> => {
  *     Started ApolloServer instance.
  */
 export const getServer = async (): Promise<ApolloServer> => {
-    // Initialisation du serveur au premier appel
-    if (!_server) {
-        _server = new ApolloServer({ schema });
-        await _server.start();
-    }
-    return _server;
+  // Initialisation du serveur au premier appel
+  if (!_server) {
+    _server = new ApolloServer({ schema });
+    await _server.start();
+  }
+  return _server;
 };
 
 /**
@@ -90,26 +90,28 @@ export const getServer = async (): Promise<ApolloServer> => {
  *     Normalized { data, errors } result object.
  */
 export const execute = async (
-    server: ApolloServer,
-    operation: GraphQLOperation
+  server: ApolloServer,
+  operation: GraphQLOperation,
 ): Promise<GraphQLResult> => {
-    // Construction du contexte de requête — identique à src/server.ts
-    const defaultDb = databaseManager.getDefaultDatabase();
-    const { body } = await server.executeOperation(operation, {
-        contextValue: {
-            requestId: uuidv4(),
-            loaders: createLoaders(defaultDb),
-            databaseManager,
-            requestDatabase: defaultDb,
-            // Résolution des loaders pour une base de données cible
-            getLoadersForDatabase: (databaseId: string) => {
-                const targetDb = databaseManager.validateDatabaseRouting(databaseId, defaultDb);
-                return targetDb === defaultDb ? null : createLoaders(targetDb);
-            }
-        }
-    });
+  // Construction du contexte de requête — identique à src/server.ts
+  const defaultCatalog = databaseManager.getDefaultCatalog();
+  const { body } = await server.executeOperation(operation, {
+    contextValue: {
+      requestId: uuidv4(),
+      loaders: createLoaders(defaultCatalog),
+      databaseManager,
+      requestCatalog: defaultCatalog,
+      requestSchema: null,
+      // Résolution des loaders pour un catalogue/schéma cible
+      getLoadersForCatalog: (catalog: string | null, schema: string | null = null) => {
+        const targetCatalog = databaseManager.validateCatalogRouting(catalog, defaultCatalog);
+        if (targetCatalog === defaultCatalog && schema === null) return null;
+        return createLoaders(targetCatalog, schema);
+      },
+    },
+  });
 
-    // Normalisation du format de réponse Apollo Server v5
-    if (body.kind === 'single') return body.singleResult as GraphQLResult;
-    return { data: null, errors: [{ message: 'Unexpected incremental response' }] };
+  // Normalisation du format de réponse Apollo Server v5
+  if (body.kind === 'single') return body.singleResult as GraphQLResult;
+  return { data: null, errors: [{ message: 'Unexpected incremental response' }] };
 };

@@ -13,6 +13,13 @@ interface CatalogMetadataRow {
   [key: string]: unknown;
 }
 
+/** Catalog + schema pair used as the DataLoader key for catalog-level queries. */
+interface CatalogSchemaKey {
+  catalog: string;
+  /** DuckLake schema; null/undefined uses the catalog's configured default. */
+  schema?: string | null;
+}
+
 // Classe de chargement des méta-données d'un catalogue
 /**
  * Loader for catalog-level metadata queries.
@@ -33,25 +40,24 @@ class CatalogMetadataLoader extends BaseQueryLoader {
       cachePrefix: 'catalog-metadata',
       cache: true,
       cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
-      databaseId: null,
+      catalogId: null,
     });
   }
 
   // Méthode de chargement de toutes les méta-données d'un catalogue
   /**
-   * Loads all metadata rows for a given catalog.
+   * Loads all metadata rows for a given catalog/schema.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param catalogId - Catalog alias to query (e.g. 'project_a').
+   * @param key - Catalog alias and optional schema to query.
    * @returns Array of CatalogMetadataRow with boolean is_categorical values.
    */
   async loadAllMetadata(
     connection: DuckDBConnection,
-    catalogId: string,
+    { catalog, schema }: CatalogSchemaKey,
   ): Promise<CatalogMetadataRow[]> {
-    const dm = databaseManager as { getSchema: (id: string) => string };
-    const schema = dm.getSchema(catalogId);
-    const query = `SELECT * FROM "${catalogId}".${schema}.metadata`;
+    const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
+    const query = `SELECT * FROM "${catalog}".${resolvedSchema}.metadata`;
     const rows = await connection.all(query);
     // Conversion du flag catégoriel stocké en entier vers boolean
     return rows.map((row) => ({
@@ -81,22 +87,24 @@ class CatalogDimensionNamesLoader extends BaseQueryLoader {
       cachePrefix: 'catalog-dimension-names',
       cache: true,
       cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
-      databaseId: null,
+      catalogId: null,
     });
   }
 
   // Méthode de chargement des noms de dimensions d'un catalogue
   /**
-   * Loads the names of all categorical fields for a given catalog.
+   * Loads the names of all categorical fields for a given catalog/schema.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param catalogId - Catalog alias to query.
+   * @param key - Catalog alias and optional schema to query.
    * @returns Array of field names where is_categorical is true.
    */
-  async loadDimensionNames(connection: DuckDBConnection, catalogId: string): Promise<string[]> {
-    const dm = databaseManager as { getSchema: (id: string) => string };
-    const schema = dm.getSchema(catalogId);
-    const query = `SELECT name FROM "${catalogId}".${schema}.metadata WHERE is_categorical = true`;
+  async loadDimensionNames(
+    connection: DuckDBConnection,
+    { catalog, schema }: CatalogSchemaKey,
+  ): Promise<string[]> {
+    const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
+    const query = `SELECT name FROM "${catalog}".${resolvedSchema}.metadata WHERE is_categorical = true`;
     const results = await connection.all(query);
     return results.map((r) => r.name as string);
   }
@@ -106,12 +114,12 @@ class CatalogDimensionNamesLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for catalog metadata queries.
  *
- * @returns DataLoader keyed by catalog alias, returning CatalogMetadataRow arrays.
+ * @returns DataLoader keyed by {catalog, schema}, returning CatalogMetadataRow arrays.
  */
 const createCatalogMetadataLoader = () => {
   const loader = new CatalogMetadataLoader();
-  return loader.createLoader<string, CatalogMetadataRow[]>((connection, catalogId) =>
-    loader.loadAllMetadata(connection, catalogId),
+  return loader.createLoader<CatalogSchemaKey, CatalogMetadataRow[]>((connection, key) =>
+    loader.loadAllMetadata(connection, key),
   );
 };
 
@@ -119,12 +127,12 @@ const createCatalogMetadataLoader = () => {
 /**
  * Creates a DataLoader for catalog dimension name queries.
  *
- * @returns DataLoader keyed by catalog alias, returning string arrays of dimension names.
+ * @returns DataLoader keyed by {catalog, schema}, returning string arrays of dimension names.
  */
 const createCatalogDimensionNamesLoader = () => {
   const loader = new CatalogDimensionNamesLoader();
-  return loader.createLoader<string, string[]>((connection, catalogId) =>
-    loader.loadDimensionNames(connection, catalogId),
+  return loader.createLoader<CatalogSchemaKey, string[]>((connection, key) =>
+    loader.loadDimensionNames(connection, key),
   );
 };
 
@@ -134,4 +142,4 @@ export {
   CatalogMetadataLoader,
   CatalogDimensionNamesLoader,
 };
-export type { CatalogMetadataRow };
+export type { CatalogMetadataRow, CatalogSchemaKey };

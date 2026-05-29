@@ -1,5 +1,6 @@
 // Importation des modules
 import type { GraphQLContext } from './types.js';
+import type { MeasureEntry } from '../../utils/dimension-enrichment.js';
 
 // ─── Interfaces des objets parent ─────────────────────────────────────────────
 
@@ -10,9 +11,10 @@ interface DimensionDetail {
   label: unknown;
 }
 
-/** Fact object that serves as the parent for the dimensionDetails field resolver. */
+/** Fact object that serves as the parent for the Fact field resolvers. */
 export interface FactParent extends Record<string, unknown> {
   dimensionDetails?: DimensionDetail[];
+  measures?: MeasureEntry[];
 }
 
 /** Aggregated fact object that serves as the parent for AggregatedFact field resolvers. */
@@ -37,6 +39,21 @@ interface AggregatedFactWithGroupBy extends AggregatedFactParent {
  */
 const fieldResolvers = {
   Fact: {
+    /**
+     * Resolves the measures of a fact record.
+     *
+     * Returns the pre-loaded `measures` array attached by bulk enrichment.
+     * Falls back to an empty array when enrichment did not run (it always
+     * does on the standard fact query paths).
+     *
+     * @param parent - The fact record, potentially already enriched.
+     * @returns Array of measures with name and type-preserved value.
+     */
+    // Résolution des mesures d'une ligne de fait
+    measures: (parent: FactParent): MeasureEntry[] => {
+      return parent && Array.isArray(parent.measures) ? parent.measures : [];
+    },
+
     /**
      * Resolves dimension details including labels for a fact record.
      *
@@ -66,7 +83,7 @@ const fieldResolvers = {
       }
 
       // Extraction de tous les champs qui pourraient être des dimensions
-      const excludedFields = ['value', '_groupByField', 'dimensionDetails'];
+      const excludedFields = ['_groupByField', 'dimensionDetails', 'measures'];
       const dimensionFields = Object.keys(parent).filter(
         (key) => !excludedFields.includes(key) && parent[key] !== null,
       );

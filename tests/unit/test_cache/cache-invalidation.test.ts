@@ -1,9 +1,10 @@
 /**
  * Unit tests for cache-invalidation.js (src/cache/cache-invalidation.js).
  *
- * Verifies CacheInvalidationManager key patterns, scan/delete operations,
- * multi-database invalidation, cache stats collection, and Express route
- * registration via createCacheInvalidationRoutes.
+ * Verifies CacheInvalidationManager key patterns (catalog × schema),
+ * scan/delete operations, multi-catalog invalidation, nested cache stats
+ * collection, and Express route registration via createCacheInvalidationRoutes
+ * — including the new per-schema invalidation endpoint.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -52,36 +53,34 @@ interface CacheConfig {
   REDIS: RedisConfig;
 }
 
-/** Configuration du routage de bases de données. */
-interface DatabaseRoutingConfig {
-  ALLOWED_DATABASES: string[] | null;
-}
-
 /** Configuration globale mockée — reflète la structure YAML de config/. */
 interface MockConfig {
   CACHE: CacheConfig;
-  DATABASE_ROUTING: DatabaseRoutingConfig;
 }
 
 /** Fonctions de génération de patterns de clés Redis par type de cache. */
 interface KeyPatterns {
-  metadata: (db?: string | null) => string;
-  dimension: (db?: string | null) => string;
-  dimensionValue: (db?: string | null) => string;
-  facts: (db?: string | null) => string;
-  aggregatedFacts: (db?: string | null) => string;
-  selectOptions: (db?: string | null) => string;
-  allDatabase: (db?: string | null) => string;
+  metadata: (catalog?: string | null, schema?: string | null) => string;
+  dimension: (catalog?: string | null, schema?: string | null) => string;
+  dimensionValue: (catalog?: string | null, schema?: string | null) => string;
+  facts: (catalog?: string | null, schema?: string | null) => string;
+  aggregatedFacts: (catalog?: string | null, schema?: string | null) => string;
+  selectOptions: (catalog?: string | null, schema?: string | null) => string;
+  allCatalog: (catalog?: string | null, schema?: string | null) => string;
 }
 
 /** Instance du gestionnaire d'invalidation du cache. */
 interface CacheInvalidationManagerInstance {
   keyPatterns: KeyPatterns;
   scanKeys: (pattern: string) => Promise<string[]>;
-  invalidateDatabase: (db?: string | null) => Promise<void>;
-  invalidateCacheType: (type: string, db?: string) => Promise<void>;
-  invalidateAllDatabases: () => Promise<void>;
-  getCacheStats: () => Promise<Record<string, Record<string, number>>>;
+  invalidateCatalog: (catalog?: string | null, schema?: string | null) => Promise<void>;
+  invalidateCacheType: (
+    type: string,
+    catalog?: string | null,
+    schema?: string | null,
+  ) => Promise<void>;
+  invalidateAllCatalogs: () => Promise<void>;
+  getCacheStats: () => Promise<Record<string, Record<string, Record<string, number>>>>;
 }
 
 /** Constructeur du gestionnaire d'invalidation du cache. */
@@ -114,6 +113,14 @@ interface MockRequest {
   params: Record<string, string>;
 }
 
+/** Subset de databaseManager utilisé par cache-invalidation. */
+interface MockDatabaseManager {
+  getAvailableCatalogs: jest.Mock;
+  isValidCatalog: jest.Mock;
+  isValidSchema: jest.Mock;
+  getSchemas: jest.Mock;
+}
+
 // ─── État des mocks ───────────────────────────────────────────────────────────
 
 // Objet Redis partagé — référence stable réutilisée par tous les tests
@@ -139,9 +146,39 @@ const mockConfig: MockConfig = {
       CLUSTER: { ENABLED: false, NODES: [] },
     },
   },
-  DATABASE_ROUTING: {
-    ALLOWED_DATABASES: ['main', 'test', 'analytics'],
-  },
+};
+
+// Catalogues et schémas par défaut utilisés par les tests :
+// main → [main, analytics] (multi-schémas), test → [main], analytics → [main]
+const defaultCatalogs = ['main', 'test', 'analytics'];
+const defaultSchemasByCatalog: Record<string, string[]> = {
+  main: ['main', 'analytics'],
+  test: ['main'],
+  analytics: ['main'],
+};
+
+// Gestionnaire de base de données mocké — référence stable réutilisée par les tests
+const mockDatabaseManager: MockDatabaseManager = {
+  getAvailableCatalogs: jest.fn(() => [...defaultCatalogs]),
+  isValidCatalog: jest.fn((catalog: string) => defaultCatalogs.includes(catalog)),
+  isValidSchema: jest.fn((catalog: string, schema: string) =>
+    (defaultSchemasByCatalog[catalog] ?? []).includes(schema),
+  ),
+  getSchemas: jest.fn((catalog: string) => [...(defaultSchemasByCatalog[catalog] ?? [])]),
+};
+
+// Réinitialise les implémentations par défaut après un jest.resetAllMocks()
+const restoreDatabaseManagerMocks = (): void => {
+  mockDatabaseManager.getAvailableCatalogs.mockImplementation(() => [...defaultCatalogs]);
+  mockDatabaseManager.isValidCatalog.mockImplementation((catalog: string) =>
+    defaultCatalogs.includes(catalog),
+  );
+  mockDatabaseManager.isValidSchema.mockImplementation((catalog: string, schema: string) =>
+    (defaultSchemasByCatalog[catalog] ?? []).includes(schema),
+  );
+  mockDatabaseManager.getSchemas.mockImplementation((catalog: string) => [
+    ...(defaultSchemasByCatalog[catalog] ?? []),
+  ]);
 };
 
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
@@ -155,6 +192,17 @@ jest.unstable_mockModule('../../../src/cache/index.js', () => ({
 // Substitution du chargeur de configuration
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
+}));
+
+// Substitution du gestionnaire de base de données — source des catalogues/schémas
+jest.unstable_mockModule('../../../src/db/index.js', () => ({
+  databaseManager: mockDatabaseManager,
+}));
+
+// Le middleware admin n'est pas exercé ici (les tests appellent les handlers
+// directement), mais l'import doit résoudre pour que les routes s'enregistrent.
+jest.unstable_mockModule('../../../src/security/admin-auth.js', () => ({
+  requireAdminKey: jest.fn((_req: MockRequest, _res: MockResponse, next: jest.Mock) => next()),
 }));
 
 // Substitution du logger — silence des sorties console pendant les tests
@@ -186,6 +234,7 @@ describe('CacheInvalidationManager', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    restoreDatabaseManagerMocks();
     manager = new CacheInvalidationManager();
   });
 
@@ -200,28 +249,36 @@ describe('CacheInvalidationManager', () => {
         'facts',
         'aggregatedFacts',
         'selectOptions',
-        'allDatabase',
+        'allCatalog',
       ];
       for (const type of expected) {
         expect(manager.keyPatterns[type]).toBeInstanceOf(Function);
       }
     });
 
-    test('generates correct patterns with a database ID', () => {
-      expect(manager.keyPatterns.metadata('main')).toBe('metadata:main:*');
-      expect(manager.keyPatterns.dimension('test')).toBe('dimension:test:*');
-      expect(manager.keyPatterns.dimensionValue('main')).toBe('dimension-value:main:*');
-      expect(manager.keyPatterns.facts('analytics')).toBe('facts:analytics:*');
-      expect(manager.keyPatterns.aggregatedFacts('main')).toBe('aggregated-facts:main:*');
-      expect(manager.keyPatterns.selectOptions('main')).toBe('select-options:main:*');
-      expect(manager.keyPatterns.allDatabase('main')).toBe('*:main:*');
+    test('generates correct (catalog, schema) patterns when both are provided', () => {
+      expect(manager.keyPatterns.metadata('main', 'main')).toBe('metadata:main:main:*');
+      expect(manager.keyPatterns.dimension('test', 'analytics')).toBe('dimension:test:analytics:*');
+      expect(manager.keyPatterns.dimensionValue('main', 'foo')).toBe('dimension-value:main:foo:*');
+      expect(manager.keyPatterns.facts('analytics', 'main')).toBe('facts:analytics:main:*');
+      expect(manager.keyPatterns.aggregatedFacts('main', 'main')).toBe(
+        'aggregated-facts:main:main:*',
+      );
+      expect(manager.keyPatterns.selectOptions('main', 'main')).toBe('select-options:main:main:*');
+      expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main:*');
     });
 
-    test('falls back to "default" when database ID is falsy', () => {
-      expect(manager.keyPatterns.facts()).toBe('facts:default:*');
-      expect(manager.keyPatterns.metadata(null)).toBe('metadata:default:*');
-      expect(manager.keyPatterns.metadata(undefined)).toBe('metadata:default:*');
-      expect(manager.keyPatterns.metadata('')).toBe('metadata:default:*');
+    test('omits schema → wildcard, matching every schema of the catalog', () => {
+      expect(manager.keyPatterns.metadata('main')).toBe('metadata:main:*:*');
+      expect(manager.keyPatterns.allCatalog('test')).toBe('*:test:*:*');
+      expect(manager.keyPatterns.facts('analytics', null)).toBe('facts:analytics:*:*');
+    });
+
+    test('falls back to "default" catalog when catalog is falsy', () => {
+      expect(manager.keyPatterns.facts()).toBe('facts:default:*:*');
+      expect(manager.keyPatterns.metadata(null)).toBe('metadata:default:*:*');
+      expect(manager.keyPatterns.metadata(undefined)).toBe('metadata:default:*:*');
+      expect(manager.keyPatterns.metadata('')).toBe('metadata:default:*:*');
     });
   });
 
@@ -231,9 +288,15 @@ describe('CacheInvalidationManager', () => {
     test('returns keys from a single-page scan', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', ['key1', 'key2', 'key3']]);
 
-      const keys = await manager.scanKeys('metadata:main:*');
+      const keys = await manager.scanKeys('metadata:main:main:*');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'metadata:main:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith(
+        '0',
+        'MATCH',
+        'metadata:main:main:*',
+        'COUNT',
+        100,
+      );
       expect(keys).toEqual(['key1', 'key2', 'key3']);
     });
 
@@ -242,7 +305,7 @@ describe('CacheInvalidationManager', () => {
         .mockResolvedValueOnce(['42', ['key1', 'key2']])
         .mockResolvedValueOnce(['0', ['key3', 'key4']]);
 
-      const keys = await manager.scanKeys('*:main:*');
+      const keys = await manager.scanKeys('*:main:*:*');
 
       expect(mockRedis.scan).toHaveBeenCalledTimes(2);
       expect(keys).toEqual(['key1', 'key2', 'key3', 'key4']);
@@ -257,24 +320,39 @@ describe('CacheInvalidationManager', () => {
     });
   });
 
-  // ── Invalidation par base de données ─────────────────────────────────────
+  // ── Invalidation par catalogue (et/ou schéma) ─────────────────────────────
 
-  describe('invalidateDatabase', () => {
-    test('deletes all keys matching the database pattern', async () => {
-      const keysToDelete = ['key1:main:a', 'key2:main:b'];
+  describe('invalidateCatalog', () => {
+    test('without schema → wildcard matching every schema of the catalog', async () => {
+      const keysToDelete = [
+        'metadata:main:main:k1',
+        'facts:main:main:k2',
+        'facts:main:analytics:k3',
+      ];
+      mockRedis.scan.mockResolvedValueOnce(['0', keysToDelete]);
+      mockRedis.del.mockResolvedValueOnce(3);
+
+      await manager.invalidateCatalog('main');
+
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:*:*', 'COUNT', 100);
+      expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
+    });
+
+    test('with schema → narrows the pattern to that single (catalog, schema)', async () => {
+      const keysToDelete = ['metadata:main:analytics:k1', 'facts:main:analytics:k2'];
       mockRedis.scan.mockResolvedValueOnce(['0', keysToDelete]);
       mockRedis.del.mockResolvedValueOnce(2);
 
-      await manager.invalidateDatabase('main');
+      await manager.invalidateCatalog('main', 'analytics');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
       expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
     });
 
     test('skips del when no keys are found', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await manager.invalidateDatabase('empty');
+      await manager.invalidateCatalog('empty');
 
       expect(mockRedis.del).not.toHaveBeenCalled();
     });
@@ -282,38 +360,52 @@ describe('CacheInvalidationManager', () => {
     test('uses "default" when called without argument', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await manager.invalidateDatabase();
+      await manager.invalidateCatalog();
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*:*', 'COUNT', 100);
     });
 
     test('uses "default" when null is passed', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await manager.invalidateDatabase(null);
+      await manager.invalidateCatalog(null);
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:default:*:*', 'COUNT', 100);
     });
 
     test('propagates Redis scan errors', async () => {
       mockRedis.scan.mockRejectedValueOnce(new Error('Redis connection failed'));
 
-      await expect(manager.invalidateDatabase('main')).rejects.toThrow('Redis connection failed');
+      await expect(manager.invalidateCatalog('main')).rejects.toThrow('Redis connection failed');
     });
   });
 
   // ── Invalidation par type de cache ────────────────────────────────────────
 
   describe('invalidateCacheType', () => {
-    test('deletes keys for the specified cache type and database', async () => {
-      const keys = ['metadata:main:field1', 'metadata:main:field2'];
+    test('deletes keys for the specified type, catalog and schema', async () => {
+      const keys = ['metadata:main:main:field1', 'metadata:main:main:field2'];
       mockRedis.scan.mockResolvedValueOnce(['0', keys]);
       mockRedis.del.mockResolvedValueOnce(2);
 
-      await manager.invalidateCacheType('metadata', 'main');
+      await manager.invalidateCacheType('metadata', 'main', 'main');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'metadata:main:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith(
+        '0',
+        'MATCH',
+        'metadata:main:main:*',
+        'COUNT',
+        100,
+      );
       expect(mockRedis.del).toHaveBeenCalledWith(...keys);
+    });
+
+    test('omits schema → wildcard, matching every schema for that type', async () => {
+      mockRedis.scan.mockResolvedValueOnce(['0', []]);
+
+      await manager.invalidateCacheType('facts', 'main');
+
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'facts:main:*:*', 'COUNT', 100);
     });
 
     test('throws for an unknown cache type', async () => {
@@ -322,18 +414,18 @@ describe('CacheInvalidationManager', () => {
       );
     });
 
-    test('uses "default" when database is not specified', async () => {
+    test('uses "default" when catalog is not specified', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
       await manager.invalidateCacheType('facts');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'facts:default:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', 'facts:default:*:*', 'COUNT', 100);
     });
 
     test('skips del when no matching keys exist', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await manager.invalidateCacheType('dimension', 'test');
+      await manager.invalidateCacheType('dimension', 'test', 'main');
 
       expect(mockRedis.del).not.toHaveBeenCalled();
     });
@@ -349,7 +441,7 @@ describe('CacheInvalidationManager', () => {
       ];
       for (const type of types) {
         mockRedis.scan.mockResolvedValueOnce(['0', []]);
-        await expect(manager.invalidateCacheType(type, 'main')).resolves.not.toThrow();
+        await expect(manager.invalidateCacheType(type, 'main', 'main')).resolves.not.toThrow();
       }
     });
 
@@ -362,11 +454,11 @@ describe('CacheInvalidationManager', () => {
 
   // ── Invalidation globale ──────────────────────────────────────────────────
 
-  describe('invalidateAllDatabases', () => {
-    test('calls invalidateDatabase for every configured database', async () => {
-      const spy = jest.spyOn(manager, 'invalidateDatabase').mockResolvedValue();
+  describe('invalidateAllCatalogs', () => {
+    test('calls invalidateCatalog for every configured catalog', async () => {
+      const spy = jest.spyOn(manager, 'invalidateCatalog').mockResolvedValue();
 
-      await manager.invalidateAllDatabases();
+      await manager.invalidateAllCatalogs();
 
       expect(spy).toHaveBeenCalledTimes(3);
       expect(spy).toHaveBeenCalledWith('main');
@@ -374,50 +466,56 @@ describe('CacheInvalidationManager', () => {
       expect(spy).toHaveBeenCalledWith('analytics');
     });
 
-    test('does not throw when individual databases fail', async () => {
+    test('does not throw when individual catalogs fail', async () => {
       jest
-        .spyOn(manager, 'invalidateDatabase')
+        .spyOn(manager, 'invalidateCatalog')
         .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('test db error'))
+        .mockRejectedValueOnce(new Error('test catalog error'))
         .mockResolvedValueOnce(undefined);
 
-      await expect(manager.invalidateAllDatabases()).resolves.not.toThrow();
+      await expect(manager.invalidateAllCatalogs()).resolves.not.toThrow();
     });
 
-    test('propagates error when ALLOWED_DATABASES is not iterable', async () => {
-      const original = mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES;
-      mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES = null;
+    test('propagates error when databaseManager.getAvailableCatalogs throws', async () => {
+      mockDatabaseManager.getAvailableCatalogs.mockImplementationOnce(() => {
+        throw new Error('config unavailable');
+      });
 
-      try {
-        await expect(manager.invalidateAllDatabases()).rejects.toThrow();
-      } finally {
-        mockConfig.DATABASE_ROUTING.ALLOWED_DATABASES = original;
-      }
+      await expect(manager.invalidateAllCatalogs()).rejects.toThrow('config unavailable');
     });
   });
 
   // ── Statistiques du cache ─────────────────────────────────────────────────
 
   describe('getCacheStats', () => {
-    test('returns key counts per type per database', async () => {
-      // 3 bases × 6 types (hors allDatabase) = 18 appels scan
-      // Ordre : metadata, dimension, dimensionValue, facts, aggregatedFacts, selectOptions
+    test('returns nested catalog → schema → type counts', async () => {
+      // 3 catalogues : main a 2 schémas (main, analytics), les autres 1 (main)
+      // Donc 4 (schema, catalog) combinaisons × 6 types = 24 appels scan
+      // Ordre des schémas dans main : main puis analytics (cf. defaultSchemasByCatalog)
+      // Ordre des types : metadata, dimension, dimensionValue, facts, aggregatedFacts, selectOptions
       const scanResults: [string, string[]][] = [
-        // main : 2, 1, 0, 3, 0, 1
+        // main / main : 2, 1, 0, 3, 0, 1
         ['0', ['m1', 'm2']],
         ['0', ['d1']],
         ['0', []],
         ['0', ['f1', 'f2', 'f3']],
         ['0', []],
         ['0', ['s1']],
-        // test : 1, 0, 0, 1, 0, 0
+        // main / analytics : 0, 0, 0, 4, 0, 0
+        ['0', []],
+        ['0', []],
+        ['0', []],
+        ['0', ['f10', 'f11', 'f12', 'f13']],
+        ['0', []],
+        ['0', []],
+        // test / main : 1, 0, 0, 1, 0, 0
         ['0', ['m3']],
         ['0', []],
         ['0', []],
         ['0', ['f4']],
         ['0', []],
         ['0', []],
-        // analytics : tout à 0
+        // analytics / main : tout à 0
         ['0', []],
         ['0', []],
         ['0', []],
@@ -433,30 +531,56 @@ describe('CacheInvalidationManager', () => {
 
       expect(stats).toEqual({
         main: {
-          metadata: 2,
-          dimension: 1,
-          dimensionValue: 0,
-          facts: 3,
-          aggregatedFacts: 0,
-          selectOptions: 1,
+          main: {
+            metadata: 2,
+            dimension: 1,
+            dimensionValue: 0,
+            facts: 3,
+            aggregatedFacts: 0,
+            selectOptions: 1,
+          },
+          analytics: {
+            metadata: 0,
+            dimension: 0,
+            dimensionValue: 0,
+            facts: 4,
+            aggregatedFacts: 0,
+            selectOptions: 0,
+          },
         },
         test: {
-          metadata: 1,
-          dimension: 0,
-          dimensionValue: 0,
-          facts: 1,
-          aggregatedFacts: 0,
-          selectOptions: 0,
+          main: {
+            metadata: 1,
+            dimension: 0,
+            dimensionValue: 0,
+            facts: 1,
+            aggregatedFacts: 0,
+            selectOptions: 0,
+          },
         },
         analytics: {
-          metadata: 0,
-          dimension: 0,
-          dimensionValue: 0,
-          facts: 0,
-          aggregatedFacts: 0,
-          selectOptions: 0,
+          main: {
+            metadata: 0,
+            dimension: 0,
+            dimensionValue: 0,
+            facts: 0,
+            aggregatedFacts: 0,
+            selectOptions: 0,
+          },
         },
       });
+      // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 6 types)
+      expect(mockRedis.scan).toHaveBeenCalledTimes(24);
+    });
+
+    test('uses databaseManager.getSchemas to enumerate per-catalog schemas', async () => {
+      mockRedis.scan.mockResolvedValue(['0', []]);
+
+      await manager.getCacheStats();
+
+      expect(mockDatabaseManager.getSchemas).toHaveBeenCalledWith('main');
+      expect(mockDatabaseManager.getSchemas).toHaveBeenCalledWith('test');
+      expect(mockDatabaseManager.getSchemas).toHaveBeenCalledWith('analytics');
     });
 
     test('propagates Redis errors during stats collection', async () => {
@@ -486,6 +610,7 @@ describe('createCacheInvalidationRoutes', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    restoreDatabaseManagerMocks();
     mockApp = { post: jest.fn(), get: jest.fn() };
     createCacheInvalidationRoutes(mockApp);
   });
@@ -493,9 +618,14 @@ describe('createCacheInvalidationRoutes', () => {
   // ── Enregistrement des routes ─────────────────────────────────────────────
 
   describe('route registration', () => {
-    test('registers POST /api/cache/invalidate/:database', () => {
+    test('registers POST /api/cache/invalidate/:catalog', () => {
       const paths: string[] = mockApp.post.mock.calls.map((c: unknown[]) => c[0] as string);
-      expect(paths).toContain('/api/cache/invalidate/:database');
+      expect(paths).toContain('/api/cache/invalidate/:catalog');
+    });
+
+    test('registers POST /api/cache/invalidate/:catalog/:schema', () => {
+      const paths: string[] = mockApp.post.mock.calls.map((c: unknown[]) => c[0] as string);
+      expect(paths).toContain('/api/cache/invalidate/:catalog/:schema');
     });
 
     test('registers POST /api/cache/invalidate-all', () => {
@@ -509,40 +639,124 @@ describe('createCacheInvalidationRoutes', () => {
     });
   });
 
-  // ── POST /api/cache/invalidate/:database ──────────────────────────────────
+  // ── POST /api/cache/invalidate/:catalog ──────────────────────────────────
 
-  describe('POST /api/cache/invalidate/:database handler', () => {
+  describe('POST /api/cache/invalidate/:catalog handler', () => {
     let handler: (req: MockRequest, res: MockResponse) => Promise<void>;
 
     beforeEach(() => {
       const call = mockApp.post.mock.calls.find(
-        (c: unknown[]) => c[0] === '/api/cache/invalidate/:database',
+        (c: unknown[]) => c[0] === '/api/cache/invalidate/:catalog',
       );
       handler = call![2] as typeof handler;
     });
 
-    test('returns success with database name and timestamp', async () => {
-      jest.spyOn(cacheInvalidationManager, 'invalidateDatabase').mockResolvedValueOnce(undefined);
+    test('invalidates a known catalog (all schemas) and returns its name', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateCatalog').mockResolvedValueOnce(undefined);
       const res = makeRes();
 
-      await handler(makeReq({ params: { database: 'main' } }), res);
+      await handler(makeReq({ params: { catalog: 'main' } }), res);
 
-      expect(cacheInvalidationManager.invalidateDatabase).toHaveBeenCalledWith('main');
+      expect(cacheInvalidationManager.invalidateCatalog).toHaveBeenCalledWith('main');
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, database: 'main', timestamp: expect.any(String) }),
+        expect.objectContaining({ success: true, catalog: 'main', timestamp: expect.any(String) }),
       );
+    });
+
+    test('returns 404 for an unknown catalog without invalidating', async () => {
+      const spy = jest
+        .spyOn(cacheInvalidationManager, 'invalidateCatalog')
+        .mockResolvedValueOnce(undefined);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'nope' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(spy).not.toHaveBeenCalled();
     });
 
     test('returns 500 on invalidation error', async () => {
       jest
-        .spyOn(cacheInvalidationManager, 'invalidateDatabase')
+        .spyOn(cacheInvalidationManager, 'invalidateCatalog')
         .mockRejectedValueOnce(new Error('boom'));
       const res = makeRes();
 
-      await handler(makeReq({ params: { database: 'main' } }), res);
+      await handler(makeReq({ params: { catalog: 'main' } }), res);
 
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'boom' }));
+    });
+  });
+
+  // ── POST /api/cache/invalidate/:catalog/:schema ──────────────────────────
+
+  describe('POST /api/cache/invalidate/:catalog/:schema handler', () => {
+    let handler: (req: MockRequest, res: MockResponse) => Promise<void>;
+
+    beforeEach(() => {
+      const call = mockApp.post.mock.calls.find(
+        (c: unknown[]) => c[0] === '/api/cache/invalidate/:catalog/:schema',
+      );
+      handler = call![2] as typeof handler;
+    });
+
+    test('invalidates a known (catalog, schema) and returns both', async () => {
+      jest.spyOn(cacheInvalidationManager, 'invalidateCatalog').mockResolvedValueOnce(undefined);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'main', schema: 'analytics' } }), res);
+
+      expect(cacheInvalidationManager.invalidateCatalog).toHaveBeenCalledWith('main', 'analytics');
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          catalog: 'main',
+          schema: 'analytics',
+          timestamp: expect.any(String),
+        }),
+      );
+    });
+
+    test('returns 404 for an unknown catalog without invalidating', async () => {
+      const spy = jest
+        .spyOn(cacheInvalidationManager, 'invalidateCatalog')
+        .mockResolvedValueOnce(undefined);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'nope', schema: 'main' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('returns 404 for an unknown schema within a known catalog', async () => {
+      const spy = jest
+        .spyOn(cacheInvalidationManager, 'invalidateCatalog')
+        .mockResolvedValueOnce(undefined);
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'test', schema: 'nope' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          error: expect.stringContaining("Schema 'nope'"),
+          availableSchemas: ['main'],
+        }),
+      );
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    test('returns 500 on invalidation error', async () => {
+      jest
+        .spyOn(cacheInvalidationManager, 'invalidateCatalog')
+        .mockRejectedValueOnce(new Error('redis down'));
+      const res = makeRes();
+
+      await handler(makeReq({ params: { catalog: 'main', schema: 'main' } }), res);
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ error: 'redis down' }));
     });
   });
 
@@ -560,13 +774,13 @@ describe('createCacheInvalidationRoutes', () => {
 
     test('returns success with timestamp', async () => {
       jest
-        .spyOn(cacheInvalidationManager, 'invalidateAllDatabases')
+        .spyOn(cacheInvalidationManager, 'invalidateAllCatalogs')
         .mockResolvedValueOnce(undefined);
       const res = makeRes();
 
       await handler(makeReq(), res);
 
-      expect(cacheInvalidationManager.invalidateAllDatabases).toHaveBeenCalled();
+      expect(cacheInvalidationManager.invalidateAllCatalogs).toHaveBeenCalled();
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({ success: true, timestamp: expect.any(String) }),
       );
@@ -574,7 +788,7 @@ describe('createCacheInvalidationRoutes', () => {
 
     test('returns 500 on global invalidation error', async () => {
       jest
-        .spyOn(cacheInvalidationManager, 'invalidateAllDatabases')
+        .spyOn(cacheInvalidationManager, 'invalidateAllCatalogs')
         .mockRejectedValueOnce(new Error('fail'));
       const res = makeRes();
 
@@ -594,15 +808,25 @@ describe('createCacheInvalidationRoutes', () => {
       handler = call![2] as typeof handler;
     });
 
-    test('returns stats with timestamp', async () => {
-      const mockStats: Record<string, Record<string, number>> = {
+    test('returns nested catalog → schema → type stats with timestamp', async () => {
+      const mockStats: Record<string, Record<string, Record<string, number>>> = {
         main: {
-          metadata: 2,
-          dimension: 0,
-          dimensionValue: 0,
-          facts: 5,
-          aggregatedFacts: 1,
-          selectOptions: 0,
+          main: {
+            metadata: 2,
+            dimension: 0,
+            dimensionValue: 0,
+            facts: 5,
+            aggregatedFacts: 1,
+            selectOptions: 0,
+          },
+          analytics: {
+            metadata: 0,
+            dimension: 0,
+            dimensionValue: 0,
+            facts: 3,
+            aggregatedFacts: 0,
+            selectOptions: 0,
+          },
         },
       };
       jest.spyOn(cacheInvalidationManager, 'getCacheStats').mockResolvedValueOnce(mockStats);
@@ -635,6 +859,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
 
   beforeEach(() => {
     jest.resetAllMocks();
+    restoreDatabaseManagerMocks();
     manager = new CacheInvalidationManager();
   });
 
@@ -643,21 +868,37 @@ describe('CacheInvalidationManager — additional scenarios', () => {
     mockRedis.del.mockResolvedValue(2);
 
     const ops = [
-      manager.invalidateCacheType('metadata', 'main'),
-      manager.invalidateCacheType('dimension', 'test'),
-      manager.invalidateCacheType('facts', 'analytics'),
+      manager.invalidateCacheType('metadata', 'main', 'main'),
+      manager.invalidateCacheType('dimension', 'test', 'main'),
+      manager.invalidateCacheType('facts', 'analytics', 'main'),
     ];
 
     await expect(Promise.all(ops)).resolves.not.toThrow();
   });
 
+  test('per-schema invalidation does not leak into other schemas of the same catalog', async () => {
+    // Seules les clés du schéma "analytics" du catalogue "main" sont retournées
+    const keysToDelete = ['metadata:main:analytics:k1', 'facts:main:analytics:k2'];
+    mockRedis.scan.mockResolvedValueOnce(['0', keysToDelete]);
+    mockRedis.del.mockResolvedValueOnce(2);
+
+    await manager.invalidateCatalog('main', 'analytics');
+
+    // Le motif cible un seul schéma — le SCAN ne ramène pas le schéma "main"
+    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
+    expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
+  });
+
   test('issues a single batch del for a large key set', async () => {
     // Génération d'un jeu de 10 000 clés — vérification de l'appel batch unique
-    const largeKeyList: string[] = Array.from({ length: 10_000 }, (_, i) => `key${i}:main:data`);
+    const largeKeyList: string[] = Array.from(
+      { length: 10_000 },
+      (_, i) => `key${i}:main:main:data`,
+    );
     mockRedis.scan.mockResolvedValueOnce(['0', largeKeyList]);
     mockRedis.del.mockResolvedValueOnce(10_000);
 
-    await manager.invalidateDatabase('main');
+    await manager.invalidateCatalog('main');
 
     expect(mockRedis.del).toHaveBeenCalledTimes(1);
     expect(mockRedis.del).toHaveBeenCalledWith(...largeKeyList);
@@ -668,7 +909,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
       .mockRejectedValueOnce(new Error('Temporary failure'))
       .mockResolvedValueOnce(['0', []]);
 
-    await expect(manager.invalidateDatabase('main')).rejects.toThrow('Temporary failure');
-    await expect(manager.invalidateDatabase('main')).resolves.not.toThrow();
+    await expect(manager.invalidateCatalog('main')).rejects.toThrow('Temporary failure');
+    await expect(manager.invalidateCatalog('main')).resolves.not.toThrow();
   });
 });

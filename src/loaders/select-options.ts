@@ -31,16 +31,18 @@ class SelectOptionsLoader extends BaseQueryLoader {
   /**
    * Creates a SelectOptionsLoader bound to a specific database.
    *
-   * @param databaseId - Catalog alias to query; null uses the default database.
+   * @param catalogId - Catalog alias to query; null uses the default catalog.
+   * @param schema - DuckLake schema within the catalog; null uses the catalog default.
    */
-  constructor(databaseId: string | null = null) {
+  constructor(catalogId: string | null = null, schema: string | null = null) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'select-options',
       cache: true,
       // Durée de mise en cache plus longue car les options changent peu
       cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT,
-      databaseId,
+      catalogId,
+      schema,
     });
   }
 
@@ -164,11 +166,15 @@ class SelectOptionsLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for select option queries.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by SelectOptionsParams, returning SelectOption arrays.
  */
-const createSelectOptionsLoader = (databaseId: string | null = null) => {
-  const loader = new SelectOptionsLoader(databaseId);
+const createSelectOptionsLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new SelectOptionsLoader(catalogId, schema);
   return loader.createLoader<SelectOptionsParams, SelectOption[]>((connection, params) =>
     loader.loadSelectOptions(connection, params),
   );

@@ -11,7 +11,8 @@ export interface SelectOptionsArgs {
   fieldName: string;
   limit?: number;
   searchTerm?: string;
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 /** Arguments for the getGroupedSelectOptions query. */
@@ -19,7 +20,8 @@ export interface GroupedSelectOptionsArgs {
   groupField: string;
   optionsField: string;
   limit?: number;
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 /** Grouped result of select options (group + options arrays). */
@@ -50,12 +52,13 @@ const selectOptionsResolvers = {
         fieldName,
         limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
         searchTerm = '',
-        database,
+        catalog,
+        schema,
       }: SelectOptionsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
-      // Sélection du loader adapté à la base de données cible
-      const targetLoaders = getLoadersForDatabase(database);
+      // Sélection du loader adapté au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
       const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
 
       return withTimeout(
@@ -79,12 +82,13 @@ const selectOptionsResolvers = {
         groupField,
         optionsField,
         limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
-        database,
+        catalog,
+        schema,
       }: GroupedSelectOptionsArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ): Promise<GroupedSelectOptions> => {
-      // Sélection du loader adapté à la base de données cible
-      const targetLoaders = getLoadersForDatabase(database);
+      // Sélection du loader adapté au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
       const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
 
       // Chargement en parallèle des deux ensembles d'options

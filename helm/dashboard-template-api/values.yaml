@@ -103,33 +103,17 @@ securityContext:
       - ALL
 
 # -- Non-secret env vars rendered as ConfigMap
-# Anything you put here ends up as `envFrom: configMapRef`
+# Anything you put here ends up as `envFrom: configMapRef`. Per-catalog
+# variables are NOT listed here — declare each catalog under `catalogs:` below
+# and the chart will derive `<NAME_UPPER>_*` env vars automatically.
 config:
   NODE_ENV: production
   ENVIRONMENT: production
 
   # DuckLake catalog routing
-  DEFAULT_DATABASE: default
-  ALLOWED_DATABASES: '["default"]'
-  ALLOW_CROSS_DATABASE_QUERIES: 'false'
-
-  # Catalog source: "file" (.ducklake file, default) or "postgres" (live catalog
-  # written by an external process). With "postgres", set DEFAULT_PG_* below
-  # (host/port/db here, user/password in secrets) and DEFAULT_DATA_PATH to the
-  # Parquet store (S3). DEFAULT_CATALOG_PATH is ignored in postgres mode.
-  DEFAULT_CATALOG_TYPE: file
-
-  # Catalog locations (S3 URIs in production)
-  DEFAULT_CATALOG_PATH: s3://my-bucket/default.ducklake
-  DEFAULT_DATA_PATH: s3://my-bucket/default_data/
-  DEFAULT_READ_ONLY: 'true'
-  DEFAULT_SCHEMA: main
-
-  # Postgres catalog (used only when DEFAULT_CATALOG_TYPE=postgres).
-  # Non-secret connection details; credentials go in secrets.data below.
-  DEFAULT_PG_HOST: ''
-  DEFAULT_PG_PORT: '5432'
-  DEFAULT_PG_DATABASE: ''
+  DEFAULT_CATALOG: default
+  ALLOWED_CATALOGS: '["default"]'
+  ALLOW_CROSS_CATALOG_QUERIES: 'false'
 
   # S3 backend
   S3_ENABLED: 'true'
@@ -145,12 +129,38 @@ config:
   # Logging — stdout only (compatible with readOnlyRootFilesystem)
   LOG_TO_FILE: 'false'
 
+# -- DuckLake catalogs
+# Each entry produces a block of env vars in the ConfigMap, named with the
+# catalog key in upper-case:
+#   <NAME>_CATALOG_TYPE, <NAME>_CATALOG_PATH, <NAME>_DATA_PATH,
+#   <NAME>_READ_ONLY, <NAME>_SCHEMAS (JSON-encoded list).
+# When `type: postgres`, the block also renders <NAME>_PG_HOST / _PG_PORT /
+# _PG_DATABASE; credentials must go in `secrets.postgresCatalogs.<name>` below.
+catalogs:
+  default:
+    # "file" (.ducklake file, default) or "postgres" (live catalog written by
+    # an external process). With "postgres", `path` is ignored — only the
+    # `postgres` block and `dataPath` (Parquet store, often S3) are used.
+    type: file
+    path: s3://my-bucket/default.ducklake
+    dataPath: s3://my-bucket/default_data/
+    readOnly: true
+    # JSON-encoded list of schemas hosted by the catalog. The first element is
+    # the default schema when a request omits the `schema` argument.
+    schemas: '["main"]'
+    # Postgres connection details (used only when type=postgres).
+    # Credentials go in secrets.postgresCatalogs.<name> below.
+    # postgres:
+    #   host: ''
+    #   port: 5432
+    #   database: ''
+
 # -- Application secrets
 # Either inline `data` (for dev/test) or point at an existing Secret managed
 # externally (ExternalSecrets / SealedSecrets / sops). Production should
 # always set `existingSecret` and leave `data` empty.
-# For a Postgres-backed catalog, the existing Secret must also carry
-# DEFAULT_PG_USER / DEFAULT_PG_PASSWORD.
+# For Postgres-backed catalogs, the existing Secret must also carry
+# <NAME>_PG_USER / <NAME>_PG_PASSWORD for each Postgres catalog.
 secrets:
   existingSecret: ''
   data:
@@ -158,9 +168,12 @@ secrets:
     AWS_SECRET_ACCESS_KEY: ''
     S3_ENDPOINT: ''
     ADMIN_API_KEY: ''
-    # Postgres catalog credentials (used only when DEFAULT_CATALOG_TYPE=postgres)
-    DEFAULT_PG_USER: ''
-    DEFAULT_PG_PASSWORD: ''
+  # Postgres credentials per catalog (used only when catalogs.<name>.type=postgres).
+  # Each entry renders <NAME>_PG_USER and <NAME>_PG_PASSWORD into the chart Secret.
+  postgresCatalogs: {}
+  #   default:
+  #     user: ''
+  #     password: ''
 
 # -- Redis sub-chart (Bitnami)
 # When enabled, an in-cluster Redis is provisioned. The Bitnami chart auto-

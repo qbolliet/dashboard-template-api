@@ -51,8 +51,10 @@ interface MockPool {
 /** Interface minimale d'un DatabaseManager mocké utilisé dans les tests. */
 interface MockDatabaseManager {
   getPool: jest.Mock;
-  defaultDatabase: string;
-  getSchema: jest.Mock;
+  getDefaultCatalog: jest.Mock;
+  getDefaultSchema: jest.Mock;
+  getSchemas: jest.Mock;
+  isValidSchema: jest.Mock;
 }
 
 // ─── Fabriques ─────────────────────────────────────────────────────────────────
@@ -121,10 +123,13 @@ export const makeExtendedConnection = (): MockExtendedConnection => ({
  *     pool: Optional MockPool to pre-wire as the return value of getPool.
  *
  * Returns:
- *     A MockDatabaseManager with jest.fn() for getPool and getSchema.
+ *     A MockDatabaseManager with jest.fn() for the methods used by loaders
+ *     and resolvers (pool access, default catalog/schema, schema allow-list).
  */
 export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseManager => ({
   getPool: pool ? jest.fn().mockReturnValue(pool) : jest.fn(),
-  defaultDatabase: 'main',
-  getSchema: jest.fn().mockReturnValue('main'),
+  getDefaultCatalog: jest.fn().mockReturnValue('main'),
+  getDefaultSchema: jest.fn().mockReturnValue('main'),
+  getSchemas: jest.fn().mockReturnValue(['main']),
+  isValidSchema: jest.fn().mockReturnValue(true),
 });

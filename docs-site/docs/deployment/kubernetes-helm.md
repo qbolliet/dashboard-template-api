@@ -31,7 +31,7 @@ Create a `values.prod.yaml` with your overrides (everything not specified falls 
 ```yaml
 # values.prod.yaml
 image:
-  tag: "1.0.0"   # pin to a released version; avoid :latest in production
+  tag: '1.0.0' # pin to a released version; avoid :latest in production
 
 ingress:
   enabled: true
@@ -49,20 +49,29 @@ ingress:
         - api.mydomain.org
 
 config:
-  DEFAULT_CATALOG_PATH: s3://prod-bucket/default.ducklake
-  DEFAULT_DATA_PATH: s3://prod-bucket/default_data/
-  DEFAULT_DATABASE: default
-  ALLOWED_DATABASES: '["default"]'
+  DEFAULT_CATALOG: default
+  ALLOWED_CATALOGS: '["default"]'
   AWS_REGION: eu-west-1
   TRUSTED_PROXIES: '["10.0.0.0/8"]'
 
+# Declare each DuckLake catalog under `catalogs.<name>`. The chart renders one
+# block of <NAME>_CATALOG_TYPE / _CATALOG_PATH / _DATA_PATH / _READ_ONLY /
+# _SCHEMAS env vars per entry into the ConfigMap. See "Multiple catalogs" below.
+catalogs:
+  default:
+    type: file
+    path: s3://prod-bucket/default.ducklake
+    dataPath: s3://prod-bucket/default_data/
+    readOnly: true
+    schemas: '["main"]'
+
 # Application secrets — production should reference an externally-managed Secret
 secrets:
-  existingSecret: api-secrets    # populated by ExternalSecrets / SealedSecrets / sops
+  existingSecret: api-secrets # populated by ExternalSecrets / SealedSecrets / sops
 
 resources:
   requests: { cpu: 250m, memory: 512Mi }
-  limits:   { cpu: 1000m, memory: 1Gi }
+  limits: { cpu: 1000m, memory: 1Gi }
 
 autoscaling:
   enabled: true
@@ -73,12 +82,12 @@ autoscaling:
 
 The external Secret (named `api-secrets` above) must contain at minimum:
 
-| Key | Value |
-|-----|-------|
-| `AWS_ACCESS_KEY_ID` | S3 access key |
-| `AWS_SECRET_ACCESS_KEY` | S3 secret key |
-| `S3_ENDPOINT` | S3 endpoint URL (empty for AWS) |
-| `ADMIN_API_KEY` | Long random string for admin endpoints |
+| Key                     | Value                                  |
+| ----------------------- | -------------------------------------- |
+| `AWS_ACCESS_KEY_ID`     | S3 access key                          |
+| `AWS_SECRET_ACCESS_KEY` | S3 secret key                          |
+| `S3_ENDPOINT`           | S3 endpoint URL (empty for AWS)        |
+| `ADMIN_API_KEY`         | Long random string for admin endpoints |
 
 Install:
 
@@ -114,6 +123,59 @@ helm rollback api <revision> -n dta
 
 A `checksum/config` and `checksum/secret` annotation on the pod template ensures pods restart whenever the ConfigMap or chart-managed Secret changes — no manual restart needed.
 
+## Multiple catalogs
+
+Each entry under `catalogs:` produces a block of env vars in the rendered
+ConfigMap, prefixed by the catalog name in **upper-case**:
+
+```yaml
+catalogs:
+  default:
+    type: file
+    path: s3://prod-bucket/default.ducklake
+    dataPath: s3://prod-bucket/default_data/
+    readOnly: true
+    schemas: '["main", "staging"]'
+  macroeconomics:
+    type: file
+    path: s3://prod-bucket/macroeconomics.ducklake
+    dataPath: s3://prod-bucket/macroeconomics_data/
+    readOnly: true
+    schemas: '["main"]'
+  internal:
+    type: postgres
+    dataPath: s3://prod-bucket/internal_data/
+    readOnly: true
+    schemas: '["main"]'
+    postgres:
+      host: pg.internal
+      port: 5432
+      database: catalog_db
+
+config:
+  DEFAULT_CATALOG: default
+  ALLOWED_CATALOGS: '["default", "macroeconomics", "internal"]'
+
+# Postgres credentials are kept out of the ConfigMap and rendered into the Secret.
+secrets:
+  existingSecret: api-secrets
+  # Or, inline (dev only):
+  # postgresCatalogs:
+  #   internal:
+  #     user: catalog_ro
+  #     password: ...
+```
+
+The chart renders the following env vars per catalog:
+`<NAME_UPPER>_CATALOG_TYPE`, `<NAME>_CATALOG_PATH`, `<NAME>_DATA_PATH`,
+`<NAME>_READ_ONLY`, `<NAME>_SCHEMAS`. Postgres catalogs additionally render
+`<NAME>_PG_HOST`, `<NAME>_PG_PORT`, `<NAME>_PG_DATABASE` (in the ConfigMap)
+and `<NAME>_PG_USER`, `<NAME>_PG_PASSWORD` (in the Secret).
+
+`SCHEMAS` is a JSON-encoded list of DuckLake schemas hosted by the catalog;
+the first element is the default when a request omits the `schema` argument.
+Leave it as `'["main"]'` for single-schema catalogs.
+
 ## Redis: in-chart vs external
 
 By default `redis.enabled: true` provisions a Redis master via the Bitnami sub-chart. The password is auto-generated and stored in `<release>-redis` (key `redis-password`); the API reads it via `valueFrom`. Persistence is enabled on an 8 GiB PVC.
@@ -126,12 +188,12 @@ redis:
 
 config:
   REDIS_HOST: my-redis.example.com
-  REDIS_PORT: "6379"
+  REDIS_PORT: '6379'
 
 secrets:
   data:
     # ...other secrets...
-    REDIS_PASSWORD: "..."
+    REDIS_PASSWORD: '...'
 ```
 
 ## TLS via cert-manager
@@ -160,7 +222,7 @@ autoscaling:
   minReplicas: 3
   maxReplicas: 12
   targetCPUUtilizationPercentage: 60
-  targetMemoryUtilizationPercentage: 75   # optional
+  targetMemoryUtilizationPercentage: 75 # optional
 ```
 
 Each replica opens its own DuckDB connection pool, so memory grows roughly linearly with replicas. Adjust resource requests/limits accordingly.
@@ -172,7 +234,7 @@ The image is public on GHCR — no `imagePullSecrets` needed. To pull from a pri
 ```yaml
 image:
   repository: registry.mycompany.com/dta-api
-  tag: "1.0.0"
+  tag: '1.0.0'
 
 imagePullSecrets:
   - name: registry-mycompany

@@ -8,7 +8,8 @@ import type { GraphQLContext } from './types.js';
 /** Arguments for the getDimensionTable query. */
 export interface DimensionTableArgs {
   name: string;
-  database?: string | null;
+  catalog?: string | null;
+  schema?: string | null;
 }
 
 // Construction d'un resolver pour les dimensions
@@ -16,7 +17,7 @@ export interface DimensionTableArgs {
  * Resolvers for dimension table queries.
  *
  * Uses the dimension loader for consistency with the architecture.
- * Supports optional database routing via the getLoadersForDatabase helper.
+ * Supports optional catalog/schema routing via the getLoadersForCatalog helper.
  */
 const dimensionResolvers = {
   Query: {
@@ -29,11 +30,11 @@ const dimensionResolvers = {
      */
     getDimensionTable: async (
       _: unknown,
-      { name, database }: DimensionTableArgs,
-      { loaders, getLoadersForDatabase }: GraphQLContext,
+      { name, catalog, schema }: DimensionTableArgs,
+      { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
-      // Sélection du loader adapté à la base de données cible
-      const targetLoaders = getLoadersForDatabase(database);
+      // Sélection du loader adapté au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
       const loader = targetLoaders ? targetLoaders.dimension : loaders.dimension;
 
       // Utilisation du loader au lieu d'un accès direct à la base

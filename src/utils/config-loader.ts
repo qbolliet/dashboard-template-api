@@ -245,7 +245,15 @@ export interface CatalogConfig {
   PATH?: string;
   DATA_PATH: string;
   READ_ONLY: boolean;
-  SCHEMA?: string;
+  /**
+   * Full list of schemas hosted by the catalog. The first element is the
+   * default schema used when a request omits the schema argument. Used to
+   * enumerate per-schema cache namespaces (invalidation, stats) and to
+   * validate the schema argument against an allow-list. May be a JSON-encoded
+   * string when provided through an environment variable, or a YAML list
+   * inline. Defaults to ['main'] when absent.
+   */
+  SCHEMAS?: string[] | string;
   /** Postgres connection settings. Required only when TYPE is 'postgres'. */
   POSTGRES?: PostgresCatalogConfig;
 }
@@ -290,10 +298,10 @@ interface AppConfig {
       POOL_RETRY_DELAY: number;
     };
   };
-  DATABASE_ROUTING: {
-    DEFAULT_DATABASE: string;
-    ALLOWED_DATABASES: string[] | string;
-    ALLOW_CROSS_DATABASE_QUERIES: boolean;
+  CATALOG_ROUTING: {
+    DEFAULT_CATALOG: string;
+    ALLOWED_CATALOGS: string[] | string;
+    ALLOW_CROSS_CATALOG_QUERIES: boolean;
   };
   S3?: S3Config;
   CACHE: CacheConfig;
@@ -587,8 +595,8 @@ export class ConfigLoader {
   private validateRequiredFields(config: ConfigRecord): void {
     const required: { path: string; label: string }[] = [
       { path: 'API.PORT', label: 'PORT' },
-      { path: 'DATABASE_ROUTING.DEFAULT_DATABASE', label: 'DEFAULT_DATABASE' },
-      { path: 'DATABASE_ROUTING.ALLOWED_DATABASES', label: 'ALLOWED_DATABASES' },
+      { path: 'CATALOG_ROUTING.DEFAULT_CATALOG', label: 'DEFAULT_CATALOG' },
+      { path: 'CATALOG_ROUTING.ALLOWED_CATALOGS', label: 'ALLOWED_CATALOGS' },
       { path: 'DATABASE.POOL.MAX_CONNECTIONS', label: 'DB_MAX_CONNECTIONS' },
       { path: 'SECURITY.RATE_LIMIT.MAX_REQUESTS', label: 'RATE_LIMIT_MAX_REQUESTS' },
     ];

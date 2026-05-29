@@ -44,8 +44,12 @@ interface ServerContext {
   loaders: LoadersCollection;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   databaseManager: any;
-  requestDatabase: string | null;
-  getLoadersForDatabase: (databaseId: string | null) => LoadersCollection | null;
+  requestCatalog: string | null;
+  requestSchema: string | null;
+  getLoadersForCatalog: (
+    catalogId: string | null,
+    schema?: string | null,
+  ) => LoadersCollection | null;
   req: Request;
   res: Response;
   [key: string]: unknown;
@@ -395,6 +399,17 @@ async function startServer(): Promise<void> {
     plugins: [requestLifecyclePlugin],
   });
 
+  // Réconciliation de la liste de schémas par catalogue avec ce que DuckLake
+  // expose réellement (warn si un schéma configuré est absent à l'ATTACH).
+  // Doit précéder le démarrage Apollo pour que les premiers requêtes voient
+  // une allow-list correcte côté isValidSchema / introspection.
+  try {
+    await databaseManager.initSchemas();
+  } catch (error) {
+    logger.error('Failed to reconcile catalog schemas at startup', error);
+    throw error;
+  }
+
   // Démarrage du serveur Apollo
   await server.start();
 
@@ -403,36 +418,47 @@ async function startServer(): Promise<void> {
     '/graphql',
     expressMiddleware(server, {
       context: async ({ req, res }: { req: Request; res: Response }): Promise<ServerContext> => {
-        // Extraction de l'identifiant de base de données depuis les en-têtes
-        const headerDatabase = req.headers['x-database-id'] as string | undefined;
+        // Extraction du catalogue et du schéma depuis les en-têtes
+        const headerCatalog = req.headers['x-catalog-id'] as string | undefined;
+        const headerSchema = (req.headers['x-schema-id'] as string | undefined) ?? null;
 
-        // Validation du routage vers la base de données spécifiée
-        let validatedDatabase: string | null = null;
-        if (headerDatabase) {
+        // Validation du routage vers le catalogue spécifié
+        let validatedCatalog: string | null = null;
+        if (headerCatalog) {
           try {
-            validatedDatabase = databaseManager.validateDatabaseRouting(null, headerDatabase) as
+            validatedCatalog = databaseManager.validateCatalogRouting(null, headerCatalog) as
               | string
               | null;
           } catch (error) {
-            logger.warn('Invalid database specified in header', {
-              requestedDatabase: headerDatabase,
+            logger.warn('Invalid catalog specified in header', {
+              requestedCatalog: headerCatalog,
               error: (error as Error).message,
             });
-            // Poursuite avec la base de données par défaut plutôt qu'un échec
+            // Poursuite avec le catalogue par défaut plutôt qu'un échec
           }
         }
 
         return {
           requestId: uuidv4(),
-          loaders: createLoaders(validatedDatabase),
+          loaders: createLoaders(validatedCatalog, headerSchema),
           databaseManager,
-          requestDatabase: validatedDatabase,
-          getLoadersForDatabase: (databaseId: string | null): LoadersCollection | null => {
-            const targetDb = databaseManager.validateDatabaseRouting(
-              databaseId,
-              validatedDatabase,
+          requestCatalog: validatedCatalog,
+          requestSchema: headerSchema,
+          getLoadersForCatalog: (
+            catalogId: string | null,
+            schema: string | null = null,
+          ): LoadersCollection | null => {
+            const targetCatalog = databaseManager.validateCatalogRouting(
+              catalogId,
+              validatedCatalog,
             ) as string | null;
-            return targetDb === validatedDatabase ? null : createLoaders(targetDb);
+            // Résolution du schéma : argument explicite, sinon schéma du contexte (en-tête)
+            const targetSchema = schema ?? headerSchema;
+            // Réutilisation des loaders du contexte si catalogue ET schéma identiques
+            if (targetCatalog === validatedCatalog && targetSchema === headerSchema) {
+              return null;
+            }
+            return createLoaders(targetCatalog, targetSchema);
           },
           req,
           res,

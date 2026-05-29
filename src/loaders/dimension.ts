@@ -37,16 +37,18 @@ class DimensionLoader extends BaseQueryLoader {
   /**
    * Creates a DimensionLoader bound to a specific database.
    *
-   * @param databaseId - Catalog alias to query; null uses the default database.
+   * @param catalogId - Catalog alias to query; null uses the default catalog.
+   * @param schema - DuckLake schema within the catalog; null uses the catalog default.
    */
-  constructor(databaseId: string | null = null) {
+  constructor(catalogId: string | null = null, schema: string | null = null) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'dimension',
       cache: true,
       // Durée de mise en cache plus longue car les dimensions changent rarement
       cacheTimeout: config.API.LOADERS.DIMENSION_CACHE_TIMEOUT,
-      databaseId,
+      catalogId,
+      schema,
     });
   }
 
@@ -170,11 +172,12 @@ class DimensionLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for loading complete dimension tables.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by dimension name, returning arrays of DimensionRecord.
  */
-const createDimensionLoader = (databaseId: string | null = null) => {
-  const loader = new DimensionLoader(databaseId);
+const createDimensionLoader = (catalogId: string | null = null, schema: string | null = null) => {
+  const loader = new DimensionLoader(catalogId, schema);
   return loader.createLoader<string, DimensionRecord[]>((connection, name) =>
     loader.loadSingle(connection, name),
   );
@@ -188,11 +191,15 @@ const createDimensionLoader = (databaseId: string | null = null) => {
  * IN-query per group, significantly reducing database round-trips when
  * enriching multiple fact rows.
  *
- * @param databaseId - Catalog alias to query; null uses the default database.
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
  * @returns DataLoader keyed by DimensionValueParams, returning DimensionValue.
  */
-const createDimensionValueLoader = (databaseId: string | null = null) => {
-  const loader = new DimensionLoader(databaseId);
+const createDimensionValueLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new DimensionLoader(catalogId, schema);
   return loader.createBatchLoader<DimensionValueParams, DimensionValue>(
     (connection, params) => loader.loadBatchValues(connection, params),
     {

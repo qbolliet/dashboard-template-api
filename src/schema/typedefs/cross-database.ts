@@ -39,36 +39,46 @@ const crossDatabaseTypeDefs: DocumentNode = gql`
   }
 
   extend type Query {
-    "Compare les faits de deux catalogues sur des champs de jointure communs"
+    "Compare les faits de deux datasets (catalogue + schéma) sur des champs de jointure communs. Les champs catégoriels sont résolus en labels via les tables dim_* avant la jointure (jamais sur l'ID brut)."
     compareFacts(
       "Premier catalogue (référence)"
-      databaseA: String!
+      catalogA: String!
       "Second catalogue (comparaison)"
-      databaseB: String!
-      "Champs utilisés pour la jointure (doivent exister dans les deux catalogues)"
+      catalogB: String!
+      "Schéma dans catalogA (défaut : schéma configuré du catalogue)"
+      schemaA: String
+      "Schéma dans catalogB (défaut : schéma configuré du catalogue)"
+      schemaB: String
+      "Champs utilisés pour la jointure (doivent exister dans les deux datasets)"
       joinFields: [String!]!
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
     ): PaginatedComparedFacts!
 
-    "Compare les faits agrégés de deux catalogues sur un groupBy commun"
+    "Compare les faits agrégés de deux datasets (catalogue + schéma) sur un groupBy commun. Un groupBy catégoriel est agrégé par label (jamais par ID brut)."
     compareAggregatedFacts(
-      databaseA: String!
-      databaseB: String!
-      "Champ de regroupement commun aux deux catalogues"
+      catalogA: String!
+      catalogB: String!
+      "Schéma dans catalogA (défaut : schéma configuré du catalogue)"
+      schemaA: String
+      "Schéma dans catalogB (défaut : schéma configuré du catalogue)"
+      schemaB: String
+      "Champ de regroupement commun aux deux datasets"
       groupBy: String!
       aggregation: Aggregation! = SUM
       limit: Int! = 100
       offset: Int! = 0
     ): PaginatedComparedFacts!
 
-    "Retourne les options de sélection communes à plusieurs catalogues"
+    "Retourne les options de sélection communes à plusieurs datasets (intersection sur les labels pour les champs catégoriels)"
     crossDatabaseSelectOptions(
       "Nom du champ à intersecter"
       fieldName: String!
       "Liste des catalogues à croiser (minimum 2)"
-      databases: [String!]!
+      catalogs: [String!]!
+      "Schémas alignés par index sur 'catalogs' (défaut : schéma configuré de chaque catalogue)"
+      schemas: [String!]
       limit: Int! = 50
     ): [SelectOption!]!
   }
