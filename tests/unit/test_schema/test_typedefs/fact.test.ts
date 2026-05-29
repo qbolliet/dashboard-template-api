@@ -56,16 +56,36 @@ describe('Object types — fact', () => {
   });
 
   /**
-   * Verification that Fact exposes value and dimensionDetails.
+   * Verification that Fact exposes measures (non-null list) and dimensionDetails.
    */
-  test('Fact has value and dimensionDetails', () => {
+  test('Fact has measures and dimensionDetails (no scalar value)', () => {
     // Extraction des champs du type Fact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('Fact'),
     ).getFields();
 
-    expect(fields).toHaveProperty('value');
+    expect(fields).toHaveProperty('measures');
     expect(fields).toHaveProperty('dimensionDetails');
+    // Le champ scalaire mono-mesure a été retiré au profit de measures
+    expect(fields).not.toHaveProperty('value');
+    // measures est une liste non-nullable
+    expect(isNonNullType(fields.measures.type)).toBe(true);
+  });
+
+  /**
+   * Verification that Measure exposes name (non-null) and value (JSON).
+   */
+  test('Measure has non-null name and a value field', () => {
+    // Extraction des champs du type Measure
+    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
+      schema.getType('Measure'),
+    ).getFields();
+
+    expect(fields).toHaveProperty('name');
+    expect(isNonNullType(fields.name.type)).toBe(true);
+    expect(fields).toHaveProperty('value');
+    // Pas de label dupliqué par mesure
+    expect(fields).not.toHaveProperty('label');
   });
 
   /**
@@ -209,9 +229,9 @@ describe('Query fields — fact', () => {
   });
 
   /**
-   * Verification that getAggregatedFacts requires groupBy and accepts aggregation.
+   * Verification that getAggregatedFacts requires groupBy and measure, and accepts aggregation.
    */
-  test('getAggregatedFacts exists with groupBy (NonNull) and aggregation args', () => {
+  test('getAggregatedFacts exists with groupBy + measure (NonNull) and aggregation args', () => {
     expect(queryFields).toHaveProperty('getAggregatedFacts');
 
     // Recherche de l'argument de regroupement obligatoire
@@ -220,6 +240,12 @@ describe('Query fields — fact', () => {
 
     // Caractère obligatoire de l'argument groupBy
     expect(isNonNullType(groupByArg!.type)).toBe(true);
+
+    // Argument mesure obligatoire (colonne à agréger)
+    const measureArg = queryFields.getAggregatedFacts.args.find((a) => a.name === 'measure');
+    expect(measureArg).toBeDefined();
+    expect(isNonNullType(measureArg!.type)).toBe(true);
+
     expect(queryFields.getAggregatedFacts.args.find((a) => a.name === 'aggregation')).toBeDefined();
   });
 

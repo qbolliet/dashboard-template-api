@@ -157,7 +157,10 @@ query TestMultipleDimensionsCrossDB {
 query TestFactTableSimple {
   getFactTable(limit: 10, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
     hasNextPage
@@ -170,7 +173,10 @@ query TestFactTableSimple {
 query TestFactTableMacroeconomics {
   getFactTable(limit: 10, offset: 0, catalog: "macroeconomics") {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
     hasNextPage
@@ -183,7 +189,10 @@ query TestFactTableMacroeconomics {
 query TestFactTablePublicFinance {
   getFactTable(limit: 10, offset: 0, catalog: "public_finance") {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
     hasNextPage
@@ -200,7 +209,10 @@ query TestFactTableWithFilters {
     offset: 0
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -218,7 +230,10 @@ query TestFactTableStructuredFilters {
     offset: 0
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -236,7 +251,10 @@ query TestFactTableStructuredFiltersMacro {
     catalog: "macroeconomics"
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -253,7 +271,10 @@ query TestFactTableWithSort {
     offset: 0
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -267,7 +288,10 @@ query TestFactTableSelectFields {
     offset: 0
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -278,7 +302,10 @@ query TestFactTableSelectFields {
 query TestFactTableWithDimensionDetails {
   getFactTable(limit: 5, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
       dimensionDetails {
         name
         value
@@ -335,6 +362,7 @@ query TestFactTableMetadataFiltered {
 # Test 5.1: Agrégation simple (catalogue default)
 query TestAggregatedFactsSimple {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "country"
     aggregation: SUM
     limit: 10
@@ -348,19 +376,19 @@ query TestAggregatedFactsSimple {
 
 # Test 5.2: Différentes fonctions d'agrégation (catalogue default)
 query TestAggregationFunctions {
-  sumByCountry: getAggregatedFacts(groupBy: "country", aggregation: SUM) {
+  sumByCountry: getAggregatedFacts(groupBy: "country", measure: "value", aggregation: SUM) {
     key
     aggregatedValue
   }
-  avgByIndicator: getAggregatedFacts(groupBy: "indicator", aggregation: AVG) {
+  avgByIndicator: getAggregatedFacts(groupBy: "indicator", measure: "value", aggregation: AVG) {
     key
     aggregatedValue
   }
-  maxByKind: getAggregatedFacts(groupBy: "kind", aggregation: MAX) {
+  maxByKind: getAggregatedFacts(groupBy: "kind", measure: "value", aggregation: MAX) {
     key
     aggregatedValue
   }
-  countByModel: getAggregatedFacts(groupBy: "model", aggregation: COUNT) {
+  countByModel: getAggregatedFacts(groupBy: "model", measure: "value", aggregation: COUNT) {
     key
     aggregatedValue
   }
@@ -369,6 +397,7 @@ query TestAggregationFunctions {
 # Test 5.2b: Agrégations sur les catalogues macroeconomics et public_finance
 query TestAggregationFunctionsCrossDB {
   macroByScenario: getAggregatedFacts(
+    measure: "value"
     groupBy: "scenario"
     aggregation: AVG
     catalog: "macroeconomics"
@@ -377,6 +406,7 @@ query TestAggregationFunctionsCrossDB {
     aggregatedValue
   }
   financeBySector: getAggregatedFacts(
+    measure: "value"
     groupBy: "sector"
     aggregation: SUM
     catalog: "public_finance"
@@ -389,6 +419,7 @@ query TestAggregationFunctionsCrossDB {
 # Test 5.3: Agrégation avec filtres (catalogue default)
 query TestAggregatedFactsFiltered {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "indicator"
     aggregation: AVG
     filters: "country IN (1, 2) AND kind = 1"
@@ -404,6 +435,7 @@ query TestAggregatedFactsFiltered {
 # Test 5.4: Agrégation avec tri
 query TestAggregatedFactsSorted {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "country"
     aggregation: SUM
     sort: [{ field: "aggregatedValue", order: DESC }]
@@ -419,6 +451,7 @@ query TestAggregatedFactsSorted {
 # Test 5.5: Agrégation avec labels de clés
 query TestAggregatedFactsWithKeyLabels {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "country"
     aggregation: SUM
     limit: 5
@@ -438,6 +471,7 @@ query TestAggregatedFactsWithKeyLabels {
 # Test 6.1: Agrégation avec métadonnées complètes (catalogue default)
 query TestAggregatedFactsWithMetadata {
   getAggregatedFactsWithMetadata(
+    measure: "value"
     groupBy: "indicator"
     aggregation: AVG
     limit: 10
@@ -471,6 +505,7 @@ query TestAggregatedFactsWithMetadata {
 # Test 6.2: Agrégation avec métadonnées depuis macroeconomics
 query TestAggregatedFactsWithMetadataMacro {
   getAggregatedFactsWithMetadata(
+    measure: "value"
     groupBy: "source"
     aggregation: AVG
     limit: 10
@@ -563,7 +598,10 @@ query TestGroupedSelectOptions {
 query TestPaginationFacts {
   page1: getFactTable(limit: 10, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
     currentPage
@@ -571,7 +609,10 @@ query TestPaginationFacts {
   }
   page2: getFactTable(limit: 10, offset: 10) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     currentPage
     hasNextPage
@@ -581,6 +622,7 @@ query TestPaginationFacts {
 # Test 8.2: Pagination sur les agrégations
 query TestPaginationAggregated {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "country"
     aggregation: SUM
     limit: 2
@@ -599,7 +641,10 @@ query TestPaginationAggregated {
 query TestMaxLimit {
   getFactTable(limit: 1001, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
   }
 }
@@ -608,7 +653,10 @@ query TestMaxLimit {
 query TestMaxOffset {
   getFactTable(limit: 10, offset: 10001) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
   }
 }
@@ -650,7 +698,10 @@ query TestComplexQuery {
     offset: 0
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
       dimensionDetails {
         name
         value
@@ -662,6 +713,7 @@ query TestComplexQuery {
 
   # Agrégations
   aggregated: getAggregatedFacts(
+    measure: "value"
     groupBy: "indicator"
     aggregation: AVG
     filters: "country = 1"
@@ -686,7 +738,10 @@ query TestComplexQuery {
 query TestLargeDataset {
   getFactTable(limit: 1000, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -695,6 +750,7 @@ query TestLargeDataset {
 # Test 11.2: Agrégation sur grande période
 query TestLargeAggregation {
   getAggregatedFacts(
+    measure: "value"
     groupBy: "date"
     aggregation: AVG
     limit: 1000
@@ -724,7 +780,10 @@ query TestWithVariables(
     offset: $offset
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -795,7 +854,10 @@ query TestComplexMultiDB {
     catalog: "public_finance"
   ) {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -1427,7 +1489,10 @@ query TestMetadataNamedSchema {
 query TestFactTableNamedSchema {
   getFactTable(limit: 10, offset: 0, catalog: "default", schema: "main") {
     data {
-      value
+      measures {
+        name
+        value
+      }
     }
     total
   }
@@ -1559,7 +1624,10 @@ query TestGetCatalogSchemaWithSchema {
 query TestFactTableWithSchema {
   getFactTable(catalog: "default", schema: "main", limit: 5, offset: 0) {
     data {
-      value
+      measures {
+        name
+        value
+      }
       dimensionDetails {
         name
         value

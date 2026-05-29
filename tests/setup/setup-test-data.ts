@@ -76,17 +76,27 @@ const dimensionData: DimensionData = {
   ],
 };
 
-// Lignes de métadonnées décrivant le schéma de la table de faits
+// Lignes de métadonnées décrivant le schéma de la table de faits.
+// Convention multi-mesure : une colonne est une MESURE ssi is_primary_key = false.
+// Toutes les coordonnées (dimensions catégorielles + axes date/week/horizon) sont
+// donc is_primary_key = true ; seules les mesures co-localisées sont is_primary_key = false.
 const metadataRows: MetadataRow[] = [
+  // Coordonnées catégorielles (jointes aux tables dim_*)
   ['indicator', 'Economic Indicator', 'int', 'BIGINT', true, true],
   ['country', 'Country', 'int', 'BIGINT', true, true],
-  ['date', 'Date', 'datetime', 'TIMESTAMP_NS', false, false],
+  ['kind', 'Data Kind', 'int', 'BIGINT', true, true],
+  ['model', 'Model Type', 'float', 'DOUBLE', true, true],
+  ['training', 'Training Set', 'float', 'DOUBLE', true, true],
+  // Coordonnées d'axe non catégorielles
+  ['date', 'Date', 'datetime', 'TIMESTAMP_NS', false, true],
+  ['horizon', 'Forecast Horizon', 'float', 'DOUBLE', false, true],
+  ['week', 'Week Number', 'float', 'DOUBLE', false, true],
+  // Mesures co-localisées (types hétérogènes, dont une mesure textuelle)
   ['value', 'Measurement Value', 'float', 'DOUBLE', false, false],
-  ['kind', 'Data Kind', 'int', 'BIGINT', true, false],
-  ['horizon', 'Forecast Horizon', 'float', 'DOUBLE', false, false],
-  ['week', 'Week Number', 'float', 'DOUBLE', false, false],
-  ['model', 'Model Type', 'float', 'DOUBLE', true, false],
-  ['training', 'Training Set', 'float', 'DOUBLE', true, false],
+  ['lower_bound', 'Lower Confidence Bound', 'float', 'DOUBLE', false, false],
+  ['upper_bound', 'Upper Confidence Bound', 'float', 'DOUBLE', false, false],
+  ['quality_score', 'Quality Score', 'float', 'DOUBLE', false, false],
+  ['notes', 'Notes', 'str', 'VARCHAR', false, false],
 ];
 
 // ─── Fonctions utilitaires ─────────────────────────────────────────────────────
@@ -201,18 +211,22 @@ async function createCatalog(
     `);
   }
 
-  // Création de la table de faits
+  // Création de la table de faits (multi-mesure : value + bornes + score + notes)
   await conn.run(`
     CREATE TABLE "${alias}".main.fact_table (
-      indicator BIGINT,
-      country   BIGINT,
-      date      TIMESTAMP_NS,
-      value     DOUBLE,
-      kind      BIGINT,
-      horizon   DOUBLE,
-      week      DOUBLE,
-      model     DOUBLE,
-      training  DOUBLE
+      indicator     BIGINT,
+      country       BIGINT,
+      date          TIMESTAMP_NS,
+      value         DOUBLE,
+      kind          BIGINT,
+      horizon       DOUBLE,
+      week          DOUBLE,
+      model         DOUBLE,
+      training      DOUBLE,
+      lower_bound   DOUBLE,
+      upper_bound   DOUBLE,
+      quality_score DOUBLE,
+      notes         VARCHAR
     )
   `);
 
@@ -255,11 +269,17 @@ async function createCatalog(
             dimensionData.model[Math.floor(Math.random() * dimensionData.model.length)].value;
           const training =
             dimensionData.training[Math.floor(Math.random() * dimensionData.training.length)].value;
+          // Mesures co-localisées : intervalle de confiance, score, note textuelle
+          const lowerBound = value * 0.9;
+          const upperBound = value * 1.1;
+          const qualityScore = Math.random();
+          const notes = kind.value === 2 ? 'forecast' : 'actual';
 
           await conn.run(
             `INSERT INTO "${alias}".main.fact_table
-               (indicator, country, date, value, kind, horizon, week, model, training)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               (indicator, country, date, value, kind, horizon, week, model, training,
+                lower_bound, upper_bound, quality_score, notes)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               indicator.value,
               country.value,
@@ -270,6 +290,10 @@ async function createCatalog(
               week,
               model,
               training,
+              lowerBound,
+              upperBound,
+              qualityScore,
+              notes,
             ],
           );
 
@@ -358,7 +382,8 @@ async function createPredictionsSchema(
   await conn.run(`
     CREATE TABLE "${alias}".${schema}.fact_table (
       indicator BIGINT, country BIGINT, date TIMESTAMP_NS, value DOUBLE,
-      kind BIGINT, horizon DOUBLE, week DOUBLE, model DOUBLE, training DOUBLE
+      kind BIGINT, horizon DOUBLE, week DOUBLE, model DOUBLE, training DOUBLE,
+      lower_bound DOUBLE, upper_bound DOUBLE, quality_score DOUBLE, notes VARCHAR
     )
   `);
   const refDate = new Date('2024-01-01');
@@ -367,9 +392,24 @@ async function createPredictionsSchema(
       const value = generateValue(indicator, country, refDate, dimensionData.kind[0], 1.0);
       await conn.run(
         `INSERT INTO "${alias}".${schema}.fact_table
-           (indicator, country, date, value, kind, horizon, week, model, training)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [indicator.value, country.value, refDate.toISOString(), value, 1, 0, 1, 1, 1],
+           (indicator, country, date, value, kind, horizon, week, model, training,
+            lower_bound, upper_bound, quality_score, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          indicator.value,
+          country.value,
+          refDate.toISOString(),
+          value,
+          1,
+          0,
+          1,
+          1,
+          1,
+          value * 0.9,
+          value * 1.1,
+          Math.random(),
+          'actual',
+        ],
       );
     }
   }

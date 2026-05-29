@@ -27,7 +27,7 @@ describe('getFactTable', () => {
     const query = `
       query {
         getFactTable(limit: 10, offset: 0) {
-          data { value }
+          data { measures { name value } }
           total
           hasNextPage
           currentPage
@@ -57,7 +57,7 @@ describe('getFactTable', () => {
     const query = `
       query {
         getFactTable(filters: "country = 1 AND indicator = 1", limit: 20, offset: 0) {
-          data { value }
+          data { measures { name value } }
           total
         }
       }
@@ -79,7 +79,7 @@ describe('getFactTable', () => {
           limit: 10
           offset: 0
         ) {
-          data { value }
+          data { measures { name value } }
           total
         }
       }
@@ -98,7 +98,7 @@ describe('getFactTable', () => {
           limit: 15
           offset: 0
         ) {
-          data { value }
+          data { measures { name value } }
           total
         }
       }
@@ -107,10 +107,12 @@ describe('getFactTable', () => {
 
     expect(result.errors).toBeUndefined();
 
-    // Vérification de l'ordre décroissant des valeurs
-    const values = (result.data!.getFactTable as { data: Array<{ value: number }> }).data.map(
-      (d) => d.value,
-    );
+    // Vérification de l'ordre décroissant des valeurs (mesure "value")
+    const values = (
+      result.data!.getFactTable as {
+        data: Array<{ measures: Array<{ name: string; value: number }> }>;
+      }
+    ).data.map((d) => d.measures.find((m) => m.name === 'value')!.value);
     for (let i = 1; i < values.length; i++) {
       expect(values[i]).toBeLessThanOrEqual(values[i - 1]);
     }
@@ -120,7 +122,7 @@ describe('getFactTable', () => {
     const query = `
       query {
         getFactTable(fields: ["country", "indicator", "value", "date"], limit: 5, offset: 0) {
-          data { value }
+          data { measures { name value } }
           total
         }
       }
@@ -136,7 +138,7 @@ describe('getFactTable', () => {
       query {
         getFactTable(limit: 5, offset: 0) {
           data {
-            value
+            measures { name value }
             dimensionDetails { name value label }
           }
           total
@@ -164,8 +166,8 @@ describe('getFactTable', () => {
   test('handles multiple pages — currentPage increments correctly', async () => {
     const query = `
       query {
-        page1: getFactTable(limit: 10, offset: 0) { data { value } total currentPage hasNextPage }
-        page2: getFactTable(limit: 10, offset: 10) { data { value } currentPage hasNextPage }
+        page1: getFactTable(limit: 10, offset: 0) { data { measures { name value } } total currentPage hasNextPage }
+        page2: getFactTable(limit: 10, offset: 10) { data { measures { name value } } currentPage hasNextPage }
       }
     `;
     const result = await execute(server, { query });
@@ -187,7 +189,7 @@ describe('getFactTable', () => {
           structuredFilters: [{ key: "country", operator: "IN", values: ["1", "2", "3"] }]
           limit: 10
           offset: 0
-        ) { data { value } total }
+        ) { data { measures { name value } } total }
       }
     `;
     const result = await execute(server, { query });
@@ -203,7 +205,7 @@ describe('getFactTable', () => {
           structuredFilters: [{ key: "country", operator: "NOT IN", values: ["1", "2"] }]
           limit: 10
           offset: 0
-        ) { data { value } total }
+        ) { data { measures { name value } } total }
       }
     `;
     const result = await execute(server, { query });
@@ -223,7 +225,7 @@ describe('getFactTable', () => {
           ]
           limit: 10
           offset: 0
-        ) { data { value } total }
+        ) { data { measures { name value } } total }
       }
     `;
     const result = await execute(server, { query });
@@ -233,7 +235,7 @@ describe('getFactTable', () => {
   });
 
   test('rejects limit > 1000', async () => {
-    const query = `query { getFactTable(limit: 1001, offset: 0) { data { value } } }`;
+    const query = `query { getFactTable(limit: 1001, offset: 0) { data { measures { name value } } } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
@@ -241,7 +243,7 @@ describe('getFactTable', () => {
   });
 
   test('rejects offset > 10000', async () => {
-    const query = `query { getFactTable(limit: 10, offset: 10001) { data { value } } }`;
+    const query = `query { getFactTable(limit: 10, offset: 10001) { data { measures { name value } } } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
@@ -249,8 +251,8 @@ describe('getFactTable', () => {
   });
 
   test('accepts explicit empty database parameter (falls back to default)', async () => {
-    const noParam = `query { getFactTable(limit: 5, offset: 0) { data { value } total } }`;
-    const withEmpty = `query { getFactTable(limit: 5, offset: 0, catalog: "") { data { value } total } }`;
+    const noParam = `query { getFactTable(limit: 5, offset: 0) { data { measures { name value } } total } }`;
+    const withEmpty = `query { getFactTable(limit: 5, offset: 0, catalog: "") { data { measures { name value } } total } }`;
 
     const r1 = await execute(server, { query: noParam });
     const r2 = await execute(server, { query: withEmpty });
@@ -263,7 +265,7 @@ describe('getFactTable', () => {
   });
 
   test('rejects an invalid database', async () => {
-    const query = `query { getFactTable(limit: 5, offset: 0, catalog: "nonexistent_db_xyz") { data { value } } }`;
+    const query = `query { getFactTable(limit: 5, offset: 0, catalog: "nonexistent_db_xyz") { data { measures { name value } } } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
@@ -276,7 +278,7 @@ describe('getFactTable', () => {
           structuredFilters: [{ key: "country", operator: "=", value: $country }]
           limit: $limit
           offset: $offset
-        ) { data { value } total }
+        ) { data { measures { name value } } total }
       }
     `;
     const result = await execute(server, {
@@ -289,7 +291,7 @@ describe('getFactTable', () => {
   });
 
   test('handles large datasets (1000 records) in under 10s', async () => {
-    const query = `query { getFactTable(limit: 1000, offset: 0) { data { value } total } }`;
+    const query = `query { getFactTable(limit: 1000, offset: 0) { data { measures { name value } } total } }`;
     // Mesure du temps d'exécution pour la vérification de performance
     const t = Date.now();
     const result = await execute(server, { query });
@@ -301,7 +303,7 @@ describe('getFactTable', () => {
     const query = `
       query {
         getFactTable(filters: "country = '1; DROP TABLE facts; --'", limit: 10, offset: 0) {
-          data { value }
+          data { measures { name value } }
         }
       }
     `;
@@ -317,7 +319,7 @@ describe('getFactTable', () => {
           structuredFilters: [{ key: "'; DROP TABLE facts; --", operator: "=", value: "1" }]
           limit: 10
           offset: 0
-        ) { data { value } }
+        ) { data { measures { name value } } }
       }
     `;
     const result = await execute(server, { query });
@@ -461,7 +463,7 @@ describe('error handling', () => {
     const query = `
       query {
         getFactTable(sort: [{ field: "value", order: INVALID }], limit: 10, offset: 0) {
-          data { value }
+          data { measures { name value } }
         }
       }
     `;
@@ -478,7 +480,7 @@ describe('error handling', () => {
           structuredFilters: [{ key: "country", operator: "INVALID_OP", value: "1" }]
           limit: 10
           offset: 0
-        ) { data { value } }
+        ) { data { measures { name value } } }
       }
     `;
     const result = await execute(server, { query });
@@ -500,8 +502,9 @@ describe('complex combined query', () => {
           sort: [{ field: "value", order: DESC }]
           limit: 5
           offset: 0
-        ) { data { value dimensionDetails { name value label } } total }
+        ) { data { measures { name value } dimensionDetails { name value label } } total }
         aggregated: getAggregatedFacts(
+          measure: "value"
           groupBy: "indicator"
           aggregation: AVG
           filters: "country = 1"

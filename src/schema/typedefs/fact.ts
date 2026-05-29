@@ -7,7 +7,7 @@ import type { DocumentNode } from 'graphql';
 /**
  * GraphQL type definitions for fact table queries.
  *
- * Declares all types used by fact queries: Fact, DimensionDetail,
+ * Declares all types used by fact queries: Fact, Measure, DimensionDetail,
  * pagination wrappers (PaginatedFacts), D3-optimized dataset types
  * (DatasetWithMetadata, AggregatedFactsWithMetadata), the JSON scalar,
  * the DataFormat enum, and four Query entry points.
@@ -23,10 +23,18 @@ const factTypeDefs: DocumentNode = gql`
     label: String!
   }
 
+  "A single measure of a fact row. The value preserves its original type (Float, Int, String…) via the JSON scalar."
+  type Measure {
+    "Name of the measure column (e.g. value, lower_bound, notes)"
+    name: String!
+    "Raw measure value, original type preserved"
+    value: JSON
+  }
+
   "A single fact record from the fact table"
   type Fact {
-    "Numeric value of the fact"
-    value: Float
+    "All measures of the row (every column with is_primary_key = false)"
+    measures: [Measure!]!
     "Detailed dimension information including labels"
     dimensionDetails: [DimensionDetail]
   }
@@ -152,6 +160,8 @@ const factTypeDefs: DocumentNode = gql`
       filters: String
       structuredFilters: [Filter]
       groupBy: String!
+      "Measure column to aggregate (e.g. value, lower_bound)"
+      measure: String!
       aggregation: Aggregation! = SUM
       limit: Int! = 100
       offset: Int! = 0
@@ -166,6 +176,8 @@ const factTypeDefs: DocumentNode = gql`
       filters: String
       structuredFilters: [Filter]
       groupBy: String!
+      "Measure column to aggregate (e.g. value, lower_bound)"
+      measure: String!
       aggregation: Aggregation! = SUM
       limit: Int! = 100
       offset: Int! = 0

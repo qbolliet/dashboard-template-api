@@ -23,6 +23,7 @@ interface AggregatedFactsParams {
   filters: string | null;
   structuredFilters: unknown | null;
   groupBy: string;
+  measure: string;
   aggregation: string;
   limit: number;
   offset: number;
@@ -134,6 +135,7 @@ describe('AggregatedFactsLoader', () => {
     filters: null,
     structuredFilters: null,
     groupBy: 'country',
+    measure: 'value',
     aggregation: 'SUM',
     limit: 10,
     offset: 0,
@@ -235,6 +237,16 @@ describe('AggregatedFactsLoader', () => {
 
       const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('SUM(value)');
+    });
+
+    test('agrège la colonne mesure spécifiée', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({ ...baseParams, measure: 'lower_bound', aggregation: 'AVG' });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('AVG(lower_bound)');
     });
 
     test('inclut LIMIT et OFFSET', async () => {

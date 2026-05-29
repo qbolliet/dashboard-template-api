@@ -1,7 +1,7 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { buildWhereClause } from '../utils/utils.js';
+import { buildWhereClause, validateIdentifier } from '../utils/utils.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
 import type { StructuredFilter } from '../utils/utils.js';
 
@@ -16,6 +16,8 @@ interface AggregatedQueryParams {
   filters?: string | null;
   structuredFilters?: StructuredFilter[] | null;
   groupBy: string;
+  /** Measure column to aggregate (e.g. value, lower_bound). */
+  measure: string;
   aggregation: AggregationType;
   limit: number;
   offset: number;
@@ -146,6 +148,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
       filters,
       structuredFilters,
       groupBy,
+      measure,
       aggregation,
       limit,
       offset,
@@ -157,6 +160,9 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
     // Validation des paramètres de pagination
     this.validatePagination(limit, offset);
+
+    // Validation du nom de la colonne mesure avant interpolation SQL (anti-injection)
+    const measureColumn = validateIdentifier(measure, 'measure');
 
     // Construction de la condition de filtre
     const whereClause = buildWhereClause(filters, structuredFilters);
@@ -176,7 +182,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const query = `
             SELECT
                 ${groupBy} as key,
-                ${aggregationQuery}(value) as aggregatedValue,
+                ${aggregationQuery}(${measureColumn}) as aggregatedValue,
                 COUNT(*) as count
             FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
