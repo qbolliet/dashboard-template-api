@@ -85,7 +85,7 @@
     "jest": "^30.4.2",
     "lint-staged": "^15.2.10",
     "prettier": "^3.4.0",
-    "ts-jest": "^29.4.0",
+    "ts-jest": "^29.4.11",
     "tsx": "^4.22.2",
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.11.0",
