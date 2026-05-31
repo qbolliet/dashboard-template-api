@@ -47,7 +47,7 @@
     ]
   },
   "dependencies": {
-    "@apollo/server": "^5.5.0",
+    "@apollo/server": "^5.5.1",
     "@as-integrations/express5": "^1.1.2",
     "@duckdb/node-api": "^1.5.2-r.2",
     "@graphql-tools/merge": "^9.1.9",
