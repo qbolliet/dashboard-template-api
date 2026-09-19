@@ -5,6 +5,7 @@ import { databaseManager } from '../db/index.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
+import { validateIdentifier } from '../utils/utils.js';
 
 // ─── Interfaces de la connexion DuckDB ───────────────────────────────────────
 
@@ -55,6 +56,13 @@ interface BaseLoaderConfig {
   catalogId?: string | null;
   /** DuckLake schema within the catalog. Null = catalog's configured default. */
   schema?: string | null;
+  /**
+   * Result variant sharing the same cache prefix (e.g. 'with-count', 'with-metadata').
+   * Included in the cache key after the schema so that loaders returning different
+   * shapes for the same parameters never share an entry, while the invalidation
+   * patterns `prefix:catalog:schema:*` still match.
+   */
+  cacheVariant?: string | null;
 }
 
 /** Sort criterion for SQL ORDER BY clauses. */
@@ -79,6 +87,7 @@ class BaseQueryLoader {
   cacheTimeout: number;
   catalogId: string | null;
   schema: string | null;
+  cacheVariant: string | null;
 
   // Initialisation des propriétés du loader
   /**
@@ -93,6 +102,7 @@ class BaseQueryLoader {
     this.cacheTimeout = config.cacheTimeout || globalConfig.API.LOADERS.DEFAULT_CACHE_TIMEOUT;
     this.catalogId = config.catalogId ?? null;
     this.schema = config.schema ?? null;
+    this.cacheVariant = config.cacheVariant ?? null;
   }
 
   // Méthode exécutant une fonction à partir d'une connexion à la base de données
@@ -170,7 +180,9 @@ class BaseQueryLoader {
     try {
       // Le schéma fait partie de la clé : deux schémas d'un même catalogue ne
       // doivent jamais partager une entrée de cache (modalités/IDs différents).
-      const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${JSON.stringify(key)}`;
+      // La variante sépare les loaders d'un même préfixe renvoyant des formes différentes.
+      const variant = this.cacheVariant ? `${this.cacheVariant}:` : '';
+      const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${variant}${JSON.stringify(key)}`;
       return await withCache<T>(cacheKey, loader, this.cacheTimeout);
     } catch (error) {
       logger.error(`Cache error in ${this.cachePrefix} loader:`, error);
@@ -283,23 +295,43 @@ class FactQueryLoader extends BaseQueryLoader {
   /**
    * Builds a SQL SELECT clause from a list of field names.
    *
+   * Every field name is validated as a SQL identifier before interpolation.
+   *
    * @param fields - Array of column names to include in the SELECT.
    * @returns Comma-separated field list, or '*' when fields is empty or null.
+   * @throws {GraphQLError} When a field name is not a valid identifier.
    */
   buildSelectClause(fields: string[] | null | undefined): string {
-    return fields && fields.length > 0 ? fields.join(', ') : '*';
+    if (!fields || fields.length === 0) return '*';
+    // Validation de chaque colonne avant interpolation (anti-injection)
+    return fields.map((f) => validateIdentifier(f, 'field')).join(', ');
   }
 
   // Méthode de construction de la clause d'ordonnancement SQL
   /**
    * Builds a SQL ORDER BY clause from sort configuration.
    *
+   * Field names are validated as SQL identifiers and the direction is
+   * restricted to ASC / DESC before interpolation.
+   *
    * @param sort - Array of sort items, each with a field name and direction.
    * @returns ORDER BY clause string, or empty string when sort is empty or null.
+   * @throws {GraphQLError} When a field name or direction is invalid.
    */
   buildSortClause(sort: SortItem[] | null | undefined): string {
     if (!sort || sort.length === 0) return '';
-    return `ORDER BY ${sort.map((s) => `${s.field} ${s.order}`).join(', ')}`;
+    const items = sort.map((s) => {
+      const field = validateIdentifier(s.field, 'sortField');
+      // Direction restreinte à ASC / DESC (défaut ASC)
+      const order = s.order ?? 'ASC';
+      if (order !== 'ASC' && order !== 'DESC') {
+        throw new GraphQLError('Sort order must be either "ASC" or "DESC"', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
+      }
+      return `${field} ${order}`;
+    });
+    return `ORDER BY ${items.join(', ')}`;
   }
 
   // Méthode de validation des paramètres de pagination

@@ -45,6 +45,15 @@ SECURITY:
     # Sanitizers personnalisés par champ
     CUSTOM_SANITIZERS: {}
 
+  # Bornes anti-abus de l'arbre de filtres (structuredFilters)
+  FILTER_TREE:
+    # Profondeur maximale d'imbrication des groupes (racine = 0)
+    MAX_DEPTH: 5
+    # Nombre maximal de critères (feuilles) dans l'arbre
+    MAX_CRITERIA: 50
+    # Nombre maximal de valeurs d'une liste IN / NOT_IN
+    MAX_IN_VALUES: 1000
+
   # Configuration du monitoring
   MONITORING:
     # Seuil pour les requêtes lentes (ms) — surchargeable via SLOW_QUERY_THRESHOLD pour debug

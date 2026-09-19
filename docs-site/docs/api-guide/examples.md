@@ -187,10 +187,15 @@ query {
 query {
   getFactTable(
     fields: ["year", "country", "gdp_growth"]
-    structuredFilters: [
-      { key: "year", operator: ">=", value: "2010" }
-      { key: "country", operator: "IN", values: ["FRA", "DEU", "ESP"] }
-    ]
+    structuredFilters: {
+      children: [
+        { criterion: { variable: "year", operation: GTE, value: 2010 } }
+        {
+          connector: AND
+          criterion: { variable: "country", operation: IN, value: ["FRA", "DEU", "ESP"] }
+        }
+      ]
+    }
     sort: [{ field: "year", order: DESC }]
     limit: 50
     offset: 0
@@ -218,7 +223,9 @@ query {
 query {
   getFactTableWithMetadata(
     fields: ["year", "country", "gdp_growth"]
-    structuredFilters: [{ key: "year", operator: ">=", value: "2015" }]
+    structuredFilters: {
+      children: [{ criterion: { variable: "year", operation: GTE, value: 2015 } }]
+    }
     limit: 200
     format: OBJECTS
     catalog: "macroeconomics"
@@ -243,7 +250,9 @@ query {
   getAggregatedFacts(
     groupBy: "country"
     aggregation: AVG
-    structuredFilters: [{ key: "year", operator: ">=", value: "2010" }]
+    structuredFilters: {
+      children: [{ criterion: { variable: "year", operation: GTE, value: 2010 } }]
+    }
     sort: [{ field: "aggregatedValue", order: DESC }]
     limit: 20
     catalog: "macroeconomics"

@@ -1,17 +1,17 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { buildWhereClause } from '../utils/utils.js';
+import { buildWhere } from '../utils/filter-tree.js';
 import type { DuckDBConnection, SortItem, D3QueryResult } from './base-loader.js';
-import type { StructuredFilter } from '../utils/utils.js';
+import type { CompiledFilter } from '../utils/filter-tree.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
 
 /** Parameters for a fact table query. */
 interface FactQueryParams {
   fields?: string[];
-  filters?: string | null;
-  structuredFilters?: StructuredFilter[] | null;
+  /** Filter compiled by treeToSQL (never built from raw client SQL). */
+  where?: CompiledFilter | null;
   limit: number;
   offset: number;
   sort?: SortItem[];
@@ -64,8 +64,13 @@ class FactLoader extends FactQueryLoader {
    *
    * @param catalogId - Catalog alias to query; null uses the default catalog.
    * @param schema - DuckLake schema within the catalog; null uses the catalog default.
+   * @param cacheVariant - Result variant included in the cache key (null = default shape).
    */
-  constructor(catalogId: string | null = null, schema: string | null = null) {
+  constructor(
+    catalogId: string | null = null,
+    schema: string | null = null,
+    cacheVariant: string | null = null,
+  ) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'facts',
@@ -73,6 +78,7 @@ class FactLoader extends FactQueryLoader {
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
       catalogId,
       schema,
+      cacheVariant,
     });
   }
 
@@ -90,23 +96,15 @@ class FactLoader extends FactQueryLoader {
    * @throws {Error} When pagination parameters exceed configured limits.
    */
   async loadFacts(connection: DuckDBConnection, params: FactQueryParams): Promise<FactQueryResult> {
-    const {
-      fields,
-      filters,
-      structuredFilters,
-      limit,
-      offset,
-      sort,
-      format = 'default',
-      includeCount = false,
-    } = params;
+    const { fields, where, limit, offset, sort, format = 'default', includeCount = false } = params;
 
     // Validation des paramètres de pagination
     this.validatePagination(limit, offset);
 
     // Construction des clauses SQL
     const selectClause = this.buildSelectClause(fields);
-    const whereClause = buildWhereClause(filters, structuredFilters);
+    const whereClause = buildWhere(where);
+    const queryParams = where?.params ?? [];
     const sortClause = this.buildSortClause(sort);
 
     const query = `
@@ -121,20 +119,20 @@ class FactLoader extends FactQueryLoader {
     switch (format) {
       case 'metadata':
         // Format enrichi avec métadonnées D3 (colonnes, extents)
-        data = await connection.getWithMetadata(query);
+        data = await connection.getWithMetadata(query, queryParams);
         break;
       case 'json':
         // Format tableau de tableaux optimisé pour les gros datasets
-        data = await connection.getAsJsonArray(query);
+        data = await connection.getAsJsonArray(query, queryParams);
         break;
       default:
         // Format par défaut — tableau d'objets
-        data = await connection.all(query);
+        data = await connection.all(query, queryParams);
     }
 
     // Enrichissement avec le comptage total si demandé
     if (includeCount || format === 'with-count') {
-      const total = await this.getCount(connection, { filters, structuredFilters });
+      const total = await this.getCount(connection, where);
 
       // Enrichissement des métadonnées D3 si déjà présentes
       if (format === 'metadata' && (data as D3QueryResult).metadata) {
@@ -165,19 +163,16 @@ class FactLoader extends FactQueryLoader {
 
   // Méthode de comptage du nombre total d'observations correspondant aux filtres
   /**
-   * Gets the total count of rows matching the given filters.
+   * Gets the total count of rows matching the given filter.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param filters - Object containing raw and structured filter parameters.
+   * @param where - Compiled filter (SQL predicate and parameters), or null.
    * @returns Total row count as a number.
    */
-  async getCount(
-    connection: DuckDBConnection,
-    { filters, structuredFilters }: Pick<FactQueryParams, 'filters' | 'structuredFilters'>,
-  ): Promise<number> {
-    const whereClause = buildWhereClause(filters, structuredFilters);
+  async getCount(connection: DuckDBConnection, where?: CompiledFilter | null): Promise<number> {
+    const whereClause = buildWhere(where);
     const countQuery = `SELECT COUNT(*) as total FROM ${this.qualifyTable('fact_table')} ${whereClause}`;
-    const result = await connection.all(countQuery);
+    const result = await connection.all(countQuery, where?.params ?? []);
     return result[0].total as number;
   }
 }
@@ -209,7 +204,7 @@ const createFactWithCountLoader = (
   catalogId: string | null = null,
   schema: string | null = null,
 ) => {
-  const loader = new FactLoader(catalogId, schema);
+  const loader = new FactLoader(catalogId, schema, 'with-count');
   return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
     loader.loadFacts(connection, { ...params, includeCount: true }),
   );
@@ -227,7 +222,7 @@ const createFactWithMetadataLoader = (
   catalogId: string | null = null,
   schema: string | null = null,
 ) => {
-  const loader = new FactLoader(catalogId, schema);
+  const loader = new FactLoader(catalogId, schema, 'with-metadata');
   return loader.createLoader<FactQueryParams, FactQueryResult>((connection, params) =>
     loader.loadFacts(connection, { ...params, format: 'metadata', includeCount: true }),
   );

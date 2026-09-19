@@ -215,6 +215,20 @@ describe('Query fields — fact', () => {
   });
 
   /**
+   * Verification that the raw SQL filters argument is gone and structuredFilters is a FilterNode.
+   */
+  test.each([
+    'getFactTable',
+    'getFactTableWithMetadata',
+    'getAggregatedFacts',
+    'getAggregatedFactsWithMetadata',
+  ])('%s has structuredFilters: FilterNode and no filters argument', (queryName) => {
+    const args = queryFields[queryName].args;
+    expect(args.find((a) => a.name === 'filters')).toBeUndefined();
+    expect(String(args.find((a) => a.name === 'structuredFilters')!.type)).toBe('FilterNode');
+  });
+
+  /**
    * Verification that getFactTableWithMetadata has a format arg defaulting to OBJECTS.
    */
   test('getFactTableWithMetadata exists and has format arg defaulting to OBJECTS', () => {

@@ -2,7 +2,8 @@
  * Tests for the common GraphQL type definitions.
  *
  * Validates the schema-level invariants (existence, Query type, JSON scalar),
- * the shared enums (SortOrder, Aggregation), input types (Filter, SortInput),
+ * the shared enums (SortOrder, Aggregation, FilterConnector, FilterOperation),
+ * input types (FilterNode, FilterCriterion, SortInput),
  * and common object types (AggregatedFact, SelectOption).
  */
 
@@ -83,21 +84,64 @@ describe('Enums — common', () => {
 
 describe('Input types — common', () => {
   /**
-   * Verification that Filter input has all required fields with correct nullability.
+   * Verification that the legacy flat Filter input has been removed.
    */
-  test('Filter input has key, operator, value, values fields', () => {
-    // Extraction des champs du type Input Filter
-    const type = assertInputObjectType(schema.getType('Filter'));
-    const fields = type.getFields();
+  test('legacy Filter input no longer exists', () => {
+    expect(schema.getType('Filter')).toBeUndefined();
+  });
 
-    // Présence des champs attendus
-    for (const f of ['key', 'operator', 'value', 'values']) {
-      expect(fields).toHaveProperty(f);
-    }
+  /**
+   * Verification that FilterCriterion has variable/operation (NonNull) and a JSON value.
+   */
+  test('FilterCriterion has variable, operation (NonNull) and value (JSON)', () => {
+    const fields = assertInputObjectType(schema.getType('FilterCriterion')).getFields();
 
-    // Champs obligatoires — contrainte NonNull
-    expect(isNonNullType(fields.key.type)).toBe(true);
-    expect(isNonNullType(fields.operator.type)).toBe(true);
+    expect(isNonNullType(fields.variable.type)).toBe(true);
+    expect(isNonNullType(fields.operation.type)).toBe(true);
+    expect(String(fields.operation.type)).toBe('FilterOperation!');
+    expect(String(fields.value.type)).toBe('JSON');
+  });
+
+  /**
+   * Verification that FilterNode is recursive with optional connector/criterion/children.
+   */
+  test('FilterNode has connector, criterion and recursive children', () => {
+    const fields = assertInputObjectType(schema.getType('FilterNode')).getFields();
+
+    expect(String(fields.connector.type)).toBe('FilterConnector');
+    expect(String(fields.criterion.type)).toBe('FilterCriterion');
+    expect(String(fields.children.type)).toBe('[FilterNode!]');
+  });
+
+  /**
+   * Verification of the FilterConnector and FilterOperation enum values.
+   */
+  test('FilterConnector and FilterOperation expose the contract values', () => {
+    const connectors = assertEnumType(schema.getType('FilterConnector'))
+      .getValues()
+      .map((v) => v.name);
+    expect(connectors).toEqual(['AND', 'OR']);
+
+    const operations = assertEnumType(schema.getType('FilterOperation'))
+      .getValues()
+      .map((v) => v.name);
+    expect(operations).toEqual([
+      'EQ',
+      'NEQ',
+      'GT',
+      'GTE',
+      'LT',
+      'LTE',
+      'BETWEEN',
+      'IN',
+      'NOT_IN',
+      'BEFORE',
+      'AFTER',
+      'CONTAINS',
+      'STARTS',
+      'IS_NULL',
+      'IS_NOT_NULL',
+    ]);
   });
 
   /**
@@ -125,7 +169,7 @@ describe('Object types — common', () => {
   test('AggregatedFact has key, aggregatedValue, count, keyLabel', () => {
     // Extraction des champs du type AggregatedFact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFact')
+      schema.getType('AggregatedFact'),
     ).getFields();
 
     // Présence des champs métier attendus
@@ -140,7 +184,7 @@ describe('Object types — common', () => {
   test('SelectOption has non-null value and label', () => {
     // Extraction des champs du type SelectOption
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('SelectOption')
+      schema.getType('SelectOption'),
     ).getFields();
 
     expect(fields).toHaveProperty('value');

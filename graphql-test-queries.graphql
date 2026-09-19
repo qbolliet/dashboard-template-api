@@ -204,7 +204,7 @@ query TestFactTablePublicFinance {
 # Test 3.2: Requête avec filtres (IDs entiers des dimensions)
 query TestFactTableWithFilters {
   getFactTable(
-    filters: "country = 1 AND indicator = 1"
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "indicator", operation: EQ, value: 1 } }] }
     limit: 20
     offset: 0
   ) {
@@ -222,10 +222,7 @@ query TestFactTableWithFilters {
 # Utilise les champs catégoriels propres au catalogue default
 query TestFactTableStructuredFilters {
   getFactTable(
-    structuredFilters: [
-      { key: "country", operator: "=", value: "1" }
-      { key: "kind", operator: "=", value: "1" }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }] }
     limit: 10
     offset: 0
   ) {
@@ -242,10 +239,7 @@ query TestFactTableStructuredFilters {
 # Test 3.3b: Filtres structurés sur le catalogue macroeconomics
 query TestFactTableStructuredFiltersMacro {
   getFactTable(
-    structuredFilters: [
-      { key: "country", operator: "=", value: "1" }
-      { key: "scenario", operator: "=", value: "1" }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "scenario", operation: EQ, value: 1 } }] }
     limit: 10
     offset: 0
     catalog: "macroeconomics"
@@ -339,9 +333,7 @@ query TestFactTableWithMetadata {
 # Test 4.2: Requête avec métadonnées et filtres (IN sur plusieurs valeurs)
 query TestFactTableMetadataFiltered {
   getFactTableWithMetadata(
-    structuredFilters: [
-      { key: "country", operator: "IN", values: ["1", "2", "3"] }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
     limit: 100
     offset: 0
   ) {
@@ -422,7 +414,7 @@ query TestAggregatedFactsFiltered {
     measure: "value"
     groupBy: "indicator"
     aggregation: AVG
-    filters: "country IN (1, 2) AND kind = 1"
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2] } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }] }
     limit: 20
     offset: 0
   ) {
@@ -690,9 +682,7 @@ query TestComplexQuery {
 
   # Faits avec détails
   facts: getFactTable(
-    structuredFilters: [
-      { key: "country", operator: "=", value: "1" }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
     sort: [{ field: "value", order: DESC }]
     limit: 5
     offset: 0
@@ -716,7 +706,7 @@ query TestComplexQuery {
     measure: "value"
     groupBy: "indicator"
     aggregation: AVG
-    filters: "country = 1"
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
   ) {
     key
     keyLabel
@@ -768,14 +758,12 @@ query TestLargeAggregation {
 
 # Pour tester avec des variables dans Apollo Studio
 query TestWithVariables(
-  $country: String!
+  $country: JSON!
   $limit: Int!
   $offset: Int!
 ) {
   getFactTable(
-    structuredFilters: [
-      { key: "country", operator: "=", value: $country }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: $country } }] }
     limit: $limit
     offset: $offset
   ) {
@@ -1325,9 +1313,7 @@ query TestFactTableFormatArrays {
 # Test 18.3: Format ARRAYS avec filtres et tri
 query TestFactTableFormatArraysFiltered {
   getFactTableWithMetadata(
-    structuredFilters: [
-      { key: "country", operator: "IN", values: ["0", "1", "2"] }
-    ]
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [0, 1, 2] } }] }
     sort: [{ field: "value", order: DESC }]
     limit: 10
     offset: 0

@@ -76,6 +76,13 @@ interface SecurityMonitoringConfig {
   LOG_ALL_METRICS: boolean;
 }
 
+/** Anti-abuse bounds of the structured filter tree. */
+interface FilterTreeConfig {
+  MAX_DEPTH: number;
+  MAX_CRITERIA: number;
+  MAX_IN_VALUES?: number;
+}
+
 /** Full security configuration (SECURITY section of the YAML). */
 interface SecurityConfig {
   MAX_QUERY_DEPTH: number;
@@ -83,6 +90,7 @@ interface SecurityConfig {
   COMPLEXITY: ComplexityConfig;
   SANITIZATION: SanitizationConfig;
   MONITORING: SecurityMonitoringConfig;
+  FILTER_TREE?: FilterTreeConfig;
 }
 
 /** Global security limits (SECURITY_LIMITS section of the YAML). */

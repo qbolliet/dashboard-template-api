@@ -20,8 +20,7 @@ import {
 /** Paramètres de base pour le chargement de faits agrégés. */
 interface AggregatedFactsParams {
   fields: string[] | null;
-  filters: string | null;
-  structuredFilters: unknown | null;
+  where: { sql: string; params: unknown[] } | null;
   groupBy: string;
   measure: string;
   aggregation: string;
@@ -132,8 +131,7 @@ describe('AggregatedFactsLoader', () => {
   // Paramètres de base réutilisés dans chaque test
   const baseParams: AggregatedFactsParams = {
     fields: null,
-    filters: null,
-    structuredFilters: null,
+    where: null,
     groupBy: 'country',
     measure: 'value',
     aggregation: 'SUM',
@@ -197,6 +195,35 @@ describe('AggregatedFactsLoader', () => {
         count: 10,
         _groupByField: 'country',
       });
+    });
+
+    test('transmet la clause WHERE compilée et ses paramètres', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({
+        ...baseParams,
+        where: { sql: '"value" BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE)', params: [1, 2] },
+      });
+
+      const [query, params] = mockConnection.all.mock.calls[0];
+      expect(query).toContain('WHERE "value" BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE)');
+      expect(params).toEqual([1, 2]);
+    });
+
+    test('rejette un groupBy malformé avant toute requête', async () => {
+      const loader = createAggregatedFactsLoader('main');
+      await expect(
+        loader.load({ ...baseParams, groupBy: 'a; DROP TABLE fact_table' }),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      expect(mockConnection.all).not.toHaveBeenCalled();
+    });
+
+    test('rejette une mesure malformée', async () => {
+      const loader = createAggregatedFactsLoader('main');
+      await expect(
+        loader.load({ ...baseParams, measure: 'value) FROM x; --' }),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
     test('convertit les valeurs en nombres', async () => {
@@ -277,6 +304,18 @@ describe('AggregatedFactsLoader', () => {
       expect(result).toHaveProperty('hasNextPage', true);
       expect(result).toHaveProperty('currentPage', 1);
       expect(result).toHaveProperty('totalPages', 3);
+    });
+
+    test('transmet les paramètres du filtre à la requête de comptage des groupes', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ totalGroups: 0 }]);
+
+      const loader = createAggregatedFactsWithCountLoader('main');
+      await loader.load({ ...baseParams, where: { sql: '"kind" = ?', params: ['x'] } });
+
+      const [countQuery, countParams] = mockConnection.all.mock.calls[1];
+      expect(countQuery).toContain('COUNT(DISTINCT country)');
+      expect(countQuery).toContain('WHERE "kind" = ?');
+      expect(countParams).toEqual(['x']);
     });
   });
 

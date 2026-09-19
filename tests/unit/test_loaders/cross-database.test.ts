@@ -277,17 +277,17 @@ describe('CrossDatabaseLoader', () => {
 
     test('lève une erreur pour un joinField invalide', async () => {
       const loader = createCompareFacts();
-      // validateIdentifier lance une erreur → catchée par createLoader → null
-      const result = await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ['bad field!'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
-
-      expect(result).toBeNull();
+      // validateIdentifier lève une GraphQLError BAD_USER_INPUT, propagée par createLoader
+      await expect(
+        loader.load({
+          catalogA: 'db_a',
+          catalogB: 'db_b',
+          joinFields: ['bad field!'],
+          limit: 10,
+          offset: 0,
+          sort: [],
+        } satisfies CompareFactsParams),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
     test('résout les champs catégoriels via dim_* avant la jointure', async () => {
@@ -431,16 +431,16 @@ describe('CrossDatabaseLoader', () => {
 
     test('lève une erreur pour un groupBy invalide', async () => {
       const loader = createCompareAggregatedFacts();
-      const result = await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        groupBy: 'bad field!',
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams);
-
-      expect(result).toBeNull();
+      await expect(
+        loader.load({
+          catalogA: 'db_a',
+          catalogB: 'db_b',
+          groupBy: 'bad field!',
+          aggregation: 'SUM',
+          limit: 10,
+          offset: 0,
+        } satisfies CompareAggregatedParams),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
     test("résout un groupBy catégoriel via dim_* avant l'agrégation", async () => {
@@ -553,13 +553,13 @@ describe('CrossDatabaseLoader', () => {
 
     test('lève une erreur pour un fieldName invalide', async () => {
       const loader = createCrossDatabaseSelectOptions();
-      const result = await loader.load({
-        fieldName: 'bad field!',
-        catalogs: ['db1'],
-        limit: 50,
-      } satisfies CrossDatabaseSelectParams);
-
-      expect(result).toBeNull();
+      await expect(
+        loader.load({
+          fieldName: 'bad field!',
+          catalogs: ['db1'],
+          limit: 50,
+        } satisfies CrossDatabaseSelectParams),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
   });
 });

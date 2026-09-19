@@ -1,9 +1,10 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { buildWhereClause, validateIdentifier } from '../utils/utils.js';
+import { validateIdentifier } from '../utils/utils.js';
+import { buildWhere } from '../utils/filter-tree.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
-import type { StructuredFilter } from '../utils/utils.js';
+import type { CompiledFilter } from '../utils/filter-tree.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
 
@@ -13,8 +14,8 @@ type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MOD
 /** Parameters for an aggregated fact query. */
 interface AggregatedQueryParams {
   fields?: string[];
-  filters?: string | null;
-  structuredFilters?: StructuredFilter[] | null;
+  /** Filter compiled by treeToSQL (never built from raw client SQL). */
+  where?: CompiledFilter | null;
   groupBy: string;
   /** Measure column to aggregate (e.g. value, lower_bound). */
   measure: string;
@@ -103,8 +104,13 @@ class AggregatedFactsLoader extends FactQueryLoader {
    *
    * @param catalogId - Catalog alias to query; null uses the default catalog.
    * @param schema - DuckLake schema within the catalog; null uses the catalog default.
+   * @param cacheVariant - Result variant included in the cache key (null = default shape).
    */
-  constructor(catalogId: string | null = null, schema: string | null = null) {
+  constructor(
+    catalogId: string | null = null,
+    schema: string | null = null,
+    cacheVariant: string | null = null,
+  ) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'aggregated-facts',
@@ -112,6 +118,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
       catalogId,
       schema,
+      cacheVariant,
     });
   }
 
@@ -145,8 +152,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     params: AggregatedQueryParams,
   ): Promise<AggregatedResult> {
     const {
-      filters,
-      structuredFilters,
+      where,
       groupBy,
       measure,
       aggregation,
@@ -163,9 +169,11 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
     // Validation du nom de la colonne mesure avant interpolation SQL (anti-injection)
     const measureColumn = validateIdentifier(measure, 'measure');
+    // Validation de la colonne de regroupement (interpolée dans SELECT et GROUP BY)
+    const groupByColumn = validateIdentifier(groupBy, 'groupBy');
 
-    // Construction de la condition de filtre
-    const whereClause = buildWhereClause(filters, structuredFilters);
+    // Construction de la condition de filtre paramétrée
+    const whereClause = buildWhere(where);
 
     // Résolution de la fonction SQL d'agrégation
     const aggregationQuery = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
@@ -181,18 +189,18 @@ class AggregatedFactsLoader extends FactQueryLoader {
     // Construction de la requête principale
     const query = `
             SELECT
-                ${groupBy} as key,
+                ${groupByColumn} as key,
                 ${aggregationQuery}(${measureColumn}) as aggregatedValue,
                 COUNT(*) as count
             FROM ${this.qualifyTable('fact_table')}
             ${whereClause}
-            GROUP BY ${groupBy}
+            GROUP BY ${groupByColumn}
             ${sortClause}
             LIMIT ${limit} OFFSET ${offset}
         `;
 
     // Exécution de la requête et mise en forme des lignes
-    const results = await connection.all(query);
+    const results = await connection.all(query, where?.params ?? []);
     const data: AggregatedFactRow[] = results.map((row) => ({
       ...row,
       key: String(row.key),
@@ -250,15 +258,16 @@ class AggregatedFactsLoader extends FactQueryLoader {
    * Gets the total number of distinct groups for pagination purposes.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Query parameters (only filters and groupBy are used).
+   * @param params - Query parameters (only where and groupBy are used).
    * @returns Total distinct group count.
    */
   async getTotalGroups(
     connection: DuckDBConnection,
-    params: Pick<AggregatedQueryParams, 'filters' | 'structuredFilters' | 'groupBy'>,
+    params: Pick<AggregatedQueryParams, 'where' | 'groupBy'>,
   ): Promise<number> {
-    const { filters, structuredFilters, groupBy } = params;
-    const whereClause = buildWhereClause(filters, structuredFilters);
+    const { where } = params;
+    const groupBy = validateIdentifier(params.groupBy, 'groupBy');
+    const whereClause = buildWhere(where);
 
     const countQuery = `
             SELECT COUNT(DISTINCT ${groupBy}) as totalGroups
@@ -266,7 +275,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
             ${whereClause}
         `;
 
-    const result = await connection.all(countQuery);
+    const result = await connection.all(countQuery, where?.params ?? []);
     return result[0].totalGroups as number;
   }
 
@@ -398,7 +407,7 @@ const createAggregatedFactsWithMetadataLoader = (
   catalogId: string | null = null,
   schema: string | null = null,
 ) => {
-  const loader = new AggregatedFactsLoader(catalogId, schema);
+  const loader = new AggregatedFactsLoader(catalogId, schema, 'with-metadata');
   return loader.createLoader<AggregatedQueryParams, AggregatedResult>((connection, params) =>
     loader.loadAggregatedFacts(connection, { ...params, includeMetadata: true }),
   );
@@ -416,7 +425,7 @@ const createAggregatedFactsWithCountLoader = (
   catalogId: string | null = null,
   schema: string | null = null,
 ) => {
-  const loader = new AggregatedFactsLoader(catalogId, schema);
+  const loader = new AggregatedFactsLoader(catalogId, schema, 'with-count');
   return loader.createLoader<AggregatedQueryParams, AggregatedResult>((connection, params) =>
     loader.loadAggregatedFacts(connection, { ...params, includeCount: true }),
   );

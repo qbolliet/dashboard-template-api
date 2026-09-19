@@ -2,7 +2,8 @@
  * Integration tests for the getFactTable, getFactTableWithMetadata resolvers,
  * and associated error handling and complex combined queries.
  *
- * Covers pagination, string and structured filters, sorting, field selection,
+ * Covers pagination, filter trees (FilterNode: AND/OR groups, typed
+ * operations, BAD_USER_INPUT rejections), sorting, field selection,
  * dimension details, format options (OBJECTS/ARRAYS), SQL injection guards,
  * and multi-resolver single-request composition.
  */
@@ -19,6 +20,52 @@ beforeAll(async () => {
   await ensureSetup();
   server = await getServer();
 }, 60000);
+
+// ─── Fonctions utilitaires ────────────────────────────────────────────────────
+
+/**
+ * Runs getFactTable with a filter tree passed as a variable and returns the
+ * total, or the GraphQL errors.
+ *
+ * @param structuredFilters - Filter tree (FilterNode) or null.
+ * @returns Total row count and errors of the response.
+ */
+// Exécution d'un comptage filtré via variables GraphQL
+async function countWith(structuredFilters: unknown): Promise<{
+  total?: number;
+  errors?: ReadonlyArray<{ message: string; extensions?: Record<string, unknown> }>;
+}> {
+  const result = await execute(server, {
+    query: `
+      query Count($f: FilterNode) {
+        getFactTable(structuredFilters: $f, limit: 1, offset: 0) { total }
+      }
+    `,
+    variables: { f: structuredFilters },
+  });
+  return {
+    total: (result.data?.getFactTable as { total: number } | null | undefined)?.total,
+    errors: result.errors as ReadonlyArray<{
+      message: string;
+      extensions?: Record<string, unknown>;
+    }>,
+  };
+}
+
+/**
+ * Builds a filter tree leaf.
+ *
+ * @param variable - Column name.
+ * @param operation - FilterOperation value.
+ * @param value - Criterion value (omitted for IS_NULL / IS_NOT_NULL).
+ * @param connector - Connector with the previous node.
+ * @returns FilterNode leaf object.
+ */
+// Construction d'une feuille d'arbre de filtres
+const leaf = (variable: string, operation: string, value?: unknown, connector?: 'AND' | 'OR') => ({
+  ...(connector ? { connector } : {}),
+  criterion: { variable, operation, ...(value !== undefined ? { value } : {}) },
+});
 
 // ─── Tests getFactTable ───────────────────────────────────────────────────────
 
@@ -53,29 +100,30 @@ describe('getFactTable', () => {
     expect(ft.totalPages).toBeGreaterThan(0);
   });
 
-  test('applies string filters', async () => {
+  test('rejects the removed raw SQL filters argument', async () => {
     const query = `
       query {
         getFactTable(filters: "country = 1 AND indicator = 1", limit: 20, offset: 0) {
-          data { measures { name value } }
           total
         }
       }
     `;
     const result = await execute(server, { query });
 
-    expect(result.errors).toBeUndefined();
-    expect(Array.isArray((result.data!.getFactTable as { data: unknown[] }).data)).toBe(true);
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].message).toContain('Unknown argument "filters"');
   });
 
-  test('applies structured filters', async () => {
+  test('applies a flat AND filter tree (inline literal)', async () => {
     const query = `
       query {
         getFactTable(
-          structuredFilters: [
-            { key: "country", operator: "=", value: "1" }
-            { key: "kind", operator: "=", value: "1" }
-          ]
+          structuredFilters: {
+            children: [
+              { criterion: { variable: "country", operation: EQ, value: 1 } }
+              { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }
+            ]
+          }
           limit: 10
           offset: 0
         ) {
@@ -87,7 +135,109 @@ describe('getFactTable', () => {
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
-    expect(Array.isArray((result.data!.getFactTable as { data: unknown[] }).data)).toBe(true);
+    const ft = result.data!.getFactTable as { data: unknown[]; total: number };
+    expect(Array.isArray(ft.data)).toBe(true);
+
+    // Le filtre restreint le jeu de données
+    const { total: unfiltered } = await countWith(null);
+    expect(ft.total).toBeLessThanOrEqual(unfiltered!);
+  });
+
+  test('OR group is equivalent to IN, and parenthesized sub-groups combine with AND', async () => {
+    const viaIn = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
+    const viaOr = await countWith({
+      children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')],
+    });
+    expect(viaIn.errors).toBeUndefined();
+    expect(viaOr.errors).toBeUndefined();
+    expect(viaOr.total).toBe(viaIn.total);
+
+    // kind = 1 AND (country = 1 OR country = 2) ≡ kind = 1 AND country IN (1, 2)
+    const grouped = await countWith({
+      children: [
+        leaf('kind', 'EQ', 1),
+        { connector: 'AND', children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')] },
+      ],
+    });
+    const flat = await countWith({
+      children: [leaf('kind', 'EQ', 1), leaf('country', 'IN', [1, 2], 'AND')],
+    });
+    expect(grouped.errors).toBeUndefined();
+    expect(grouped.total).toBe(flat.total);
+    expect(grouped.total!).toBeLessThanOrEqual(viaIn.total!);
+  });
+
+  test('NOT_IN is the complement of IN', async () => {
+    const all = await countWith(null);
+    const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
+    const notIn = await countWith({ children: [leaf('country', 'NOT_IN', [1, 2])] });
+    expect(notIn.errors).toBeUndefined();
+    expect(inSet.total! + notIn.total!).toBe(all.total);
+  });
+
+  test('filters on a measure column (numeric BETWEEN on value)', async () => {
+    const result = await countWith({ children: [leaf('value', 'BETWEEN', { min: 0, max: 50 })] });
+    const gte = await countWith({
+      children: [leaf('value', 'GTE', 0), leaf('value', 'LTE', 50, 'AND')],
+    });
+    expect(result.errors).toBeUndefined();
+    expect(result.total).toBe(gte.total);
+  });
+
+  test('filters a TIMESTAMP column with ISO 8601 dates', async () => {
+    const all = await countWith(null);
+    const between = await countWith({
+      children: [leaf('date', 'BETWEEN', { min: '1900-01-01', max: '2200-12-31T23:59:59' })],
+    });
+    const before = await countWith({ children: [leaf('date', 'BEFORE', '1900-01-01')] });
+    expect(between.errors).toBeUndefined();
+    expect(before.errors).toBeUndefined();
+    expect(between.total).toBe(all.total);
+    expect(before.total).toBe(0);
+  });
+
+  test('IS_NULL / IS_NOT_NULL partition the rows', async () => {
+    const all = await countWith(null);
+    const isNull = await countWith({ children: [leaf('value', 'IS_NULL')] });
+    const notNull = await countWith({ children: [leaf('value', 'IS_NOT_NULL')] });
+    expect(isNull.errors).toBeUndefined();
+    expect(isNull.total! + notNull.total!).toBe(all.total);
+  });
+
+  test.each([
+    ['unknown column', { children: [leaf('no_such_column', 'EQ', 1)] }, 'no_such_column'],
+    [
+      'operation incompatible with the type',
+      { children: [leaf('country', 'CONTAINS', 'x')] },
+      'Allowed operations',
+    ],
+    ['incomplete BETWEEN', { children: [leaf('value', 'BETWEEN', { min: 1 })] }, '{min, max}'],
+    ['empty IN list', { children: [leaf('country', 'IN', [])] }, 'non-empty array'],
+    ['empty root group', { children: [] }, 'empty group'],
+    [
+      'criterion + children on one node',
+      {
+        criterion: { variable: 'country', operation: 'EQ', value: 1 },
+        children: [leaf('kind', 'EQ', 1)],
+      },
+      'exactly one',
+    ],
+    ['invalid date', { children: [leaf('date', 'AFTER', '31/12/2024')] }, 'ISO 8601'],
+    [
+      'date out of TIMESTAMP_NS range',
+      { children: [leaf('date', 'BEFORE', '2999-12-31')] },
+      'out of range',
+    ],
+    [
+      'injection in variable',
+      { children: [leaf('country = 1; DROP TABLE fact_table; --', 'EQ', 1)] },
+      'Invalid filter variable',
+    ],
+  ])('rejects %s with BAD_USER_INPUT', async (_label, tree, fragment) => {
+    const { errors } = await countWith(tree);
+    expect(errors).toBeDefined();
+    expect(errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(errors![0].message).toContain(fragment);
   });
 
   test('applies sorting — values in descending order', async () => {
@@ -182,56 +332,17 @@ describe('getFactTable', () => {
     expect(page1.total).toBeDefined();
   });
 
-  test('handles IN operator', async () => {
-    const query = `
-      query {
-        getFactTable(
-          structuredFilters: [{ key: "country", operator: "IN", values: ["1", "2", "3"] }]
-          limit: 10
-          offset: 0
-        ) { data { measures { name value } } total }
-      }
-    `;
-    const result = await execute(server, { query });
+  test('handles mixed operations in a single filter tree', async () => {
+    const { total, errors } = await countWith({
+      children: [
+        leaf('country', 'IN', [1, 2, 3]),
+        leaf('kind', 'EQ', 1, 'AND'),
+        leaf('indicator', 'NOT_IN', [5, 6], 'AND'),
+      ],
+    });
 
-    expect(result.errors).toBeUndefined();
-    expect(Array.isArray((result.data!.getFactTable as { data: unknown[] }).data)).toBe(true);
-  });
-
-  test('handles NOT IN operator', async () => {
-    const query = `
-      query {
-        getFactTable(
-          structuredFilters: [{ key: "country", operator: "NOT IN", values: ["1", "2"] }]
-          limit: 10
-          offset: 0
-        ) { data { measures { name value } } total }
-      }
-    `;
-    const result = await execute(server, { query });
-
-    expect(result.errors).toBeUndefined();
-    expect(Array.isArray((result.data!.getFactTable as { data: unknown[] }).data)).toBe(true);
-  });
-
-  test('handles mixed operators in a single filter set', async () => {
-    const query = `
-      query {
-        getFactTable(
-          structuredFilters: [
-            { key: "country", operator: "IN", values: ["1", "2", "3"] }
-            { key: "kind", operator: "=", value: "1" }
-            { key: "indicator", operator: "NOT IN", values: ["5", "6"] }
-          ]
-          limit: 10
-          offset: 0
-        ) { data { measures { name value } } total }
-      }
-    `;
-    const result = await execute(server, { query });
-
-    expect(result.errors).toBeUndefined();
-    expect(result.data!.getFactTable).toBeDefined();
+    expect(errors).toBeUndefined();
+    expect(typeof total).toBe('number');
   });
 
   test('rejects limit > 1000', async () => {
@@ -273,9 +384,9 @@ describe('getFactTable', () => {
 
   test('handles query variables', async () => {
     const query = `
-      query TestVars($country: String!, $limit: Int!, $offset: Int!) {
+      query TestVars($country: JSON!, $limit: Int!, $offset: Int!) {
         getFactTable(
-          structuredFilters: [{ key: "country", operator: "=", value: $country }]
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: $country } }] }
           limit: $limit
           offset: $offset
         ) { data { measures { name value } } total }
@@ -283,7 +394,7 @@ describe('getFactTable', () => {
     `;
     const result = await execute(server, {
       query,
-      variables: { country: '1', limit: 10, offset: 0 },
+      variables: { country: 1, limit: 10, offset: 0 },
     });
 
     expect(result.errors).toBeUndefined();
@@ -299,32 +410,30 @@ describe('getFactTable', () => {
     expect(Date.now() - t).toBeLessThan(10000);
   });
 
-  test('prevents SQL injection in string filters', async () => {
-    const query = `
-      query {
-        getFactTable(filters: "country = '1; DROP TABLE facts; --'", limit: 10, offset: 0) {
-          data { measures { name value } }
-        }
-      }
-    `;
-    const result = await execute(server, { query });
-    // Vérification que le serveur répond sans crash (l'injection doit être bloquée ou ignorée)
-    expect(result).toBeDefined();
+  test('binds injection attempts in values as plain parameters', async () => {
+    // La valeur est liée comme paramètre : elle est typée (numérique) et rejetée
+    const numeric = await countWith({ children: [leaf('country', 'EQ', '1 OR 1=1')] });
+    expect(numeric.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+
+    // Aucune ligne supprimée : le comptage reste identique après la tentative
+    const before = await countWith(null);
+    await countWith({ children: [leaf('country', 'IN', ['1; DROP TABLE fact_table; --'])] });
+    const after = await countWith(null);
+    expect(after.total).toBe(before.total);
   });
 
-  test('validates field names in structured filters', async () => {
-    const query = `
-      query {
-        getFactTable(
-          structuredFilters: [{ key: "'; DROP TABLE facts; --", operator: "=", value: "1" }]
-          limit: 10
-          offset: 0
-        ) { data { measures { name value } } }
-      }
-    `;
-    const result = await execute(server, { query });
-    // Vérification que le serveur répond sans crash (le nom de champ invalide est rejeté)
-    expect(result).toBeDefined();
+  test('rejects malformed fields and sort fields with BAD_USER_INPUT', async () => {
+    const badFields = await execute(server, {
+      query: `query { getFactTable(fields: ["country", "a; DROP TABLE fact_table"], limit: 5, offset: 0) { total } }`,
+    });
+    expect(badFields.errors).toBeDefined();
+    expect(badFields.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+
+    const badSort = await execute(server, {
+      query: `query { getFactTable(sort: [{ field: "value; DROP TABLE x", order: ASC }], limit: 5, offset: 0) { total } }`,
+    });
+    expect(badSort.errors).toBeDefined();
+    expect(badSort.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
   });
 });
 
@@ -408,7 +517,7 @@ describe('getFactTableWithMetadata', () => {
     const query = `
       query {
         getFactTableWithMetadata(
-          structuredFilters: [{ key: "country", operator: "IN", values: ["1", "2", "3"] }]
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
           sort: [{ field: "value", order: DESC }]
           limit: 10
           offset: 0
@@ -437,7 +546,7 @@ describe('getFactTableWithMetadata', () => {
     const query = `
       query {
         getFactTableWithMetadata(
-          structuredFilters: [{ key: "country", operator: "IN", values: ["1", "2", "3"] }]
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
           limit: 100
           offset: 0
         ) { columns data metadata { count extents total } }
@@ -473,19 +582,20 @@ describe('error handling', () => {
     expect(result.errors![0].message).toContain('SortOrder');
   });
 
-  test('handles invalid filter operator gracefully (no crash)', async () => {
+  test('rejects an unknown filter operation at validation time', async () => {
     const query = `
       query {
         getFactTable(
-          structuredFilters: [{ key: "country", operator: "INVALID_OP", value: "1" }]
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: INVALID_OP, value: 1 } }] }
           limit: 10
           offset: 0
         ) { data { measures { name value } } }
       }
     `;
     const result = await execute(server, { query });
-    // Vérification de l'absence de crash — pas de vérification du contenu exact de l'erreur
-    expect(result).toBeDefined();
+    // L'enum FilterOperation rejette l'opération avant toute exécution
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].message).toContain('FilterOperation');
   });
 });
 
@@ -498,7 +608,7 @@ describe('complex combined query', () => {
         countryMeta: getMetaData(name: "country") { name label is_categorical }
         countries: getDimensionTable(name: "country") { value label }
         facts: getFactTable(
-          structuredFilters: [{ key: "country", operator: "=", value: "1" }]
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
           sort: [{ field: "value", order: DESC }]
           limit: 5
           offset: 0
@@ -507,7 +617,7 @@ describe('complex combined query', () => {
           measure: "value"
           groupBy: "indicator"
           aggregation: AVG
-          filters: "country = 1"
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
         ) { key keyLabel aggregatedValue }
         options: getSelectOptions(fieldName: "indicator") { value label }
       }

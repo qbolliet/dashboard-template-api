@@ -66,6 +66,50 @@ export interface ConnectionWrapper {
 export const escapeSqlString = (v: string | undefined | null): string =>
   (v ?? '').replace(/'/g, "''");
 
+// Bornes des entiers liés via bindInteger (INTEGER DuckDB, 32 bits signé)
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
+
+/**
+ * Binds a single parameter to a prepared statement, choosing the DuckDB type
+ * from the JavaScript value.
+ *
+ * Integers within the signed 32-bit range are bound as INTEGER; larger safe
+ * integers and bigint values are bound as BIGINT so they are not truncated.
+ *
+ * @param prepared - The prepared statement to bind to.
+ * @param param - The value to bind.
+ * @param paramIndex - 1-based parameter index.
+ */
+// Liaison d'un paramètre de requête préparée selon son type JavaScript
+export const bindParam = (
+  prepared: Awaited<ReturnType<DuckDBConnection['prepare']>>,
+  param: unknown,
+  paramIndex: number,
+): void => {
+  if (param === null || param === undefined) {
+    prepared.bindNull(paramIndex);
+  } else if (typeof param === 'string') {
+    prepared.bindVarchar(paramIndex, param);
+  } else if (typeof param === 'number') {
+    if (Number.isInteger(param) && param >= INT32_MIN && param <= INT32_MAX) {
+      prepared.bindInteger(paramIndex, param);
+    } else if (Number.isSafeInteger(param)) {
+      // Entier au-delà de 2^31 : liaison en BIGINT pour éviter la troncature
+      prepared.bindBigInt(paramIndex, BigInt(param));
+    } else {
+      prepared.bindDouble(paramIndex, param);
+    }
+  } else if (typeof param === 'bigint') {
+    prepared.bindBigInt(paramIndex, param);
+  } else if (typeof param === 'boolean') {
+    prepared.bindBoolean(paramIndex, param);
+  } else {
+    // Conversion en string pour les types complexes
+    prepared.bindVarchar(paramIndex, String(param));
+  }
+};
+
 /** Sanitize an alias into a safe SQL secret-name suffix ([a-zA-Z0-9_]). */
 const sanitizeSecretSuffix = (alias: string): string => alias.replace(/[^a-zA-Z0-9_]/g, '_');
 
@@ -538,36 +582,6 @@ class DuckDBPool {
 
             // Nouvelle connexion à l'instance partagée
             const duckdbConnection = await instance.connect();
-
-            /**
-             * Helper to bind a single parameter to a prepared statement.
-             *
-             * @param prepared - The prepared statement to bind to.
-             * @param param - The value to bind.
-             * @param paramIndex - 1-based parameter index.
-             */
-            const bindParam = (
-              prepared: Awaited<ReturnType<DuckDBConnection['prepare']>>,
-              param: unknown,
-              paramIndex: number,
-            ): void => {
-              if (param === null) {
-                prepared.bindNull(paramIndex);
-              } else if (typeof param === 'string') {
-                prepared.bindVarchar(paramIndex, param);
-              } else if (typeof param === 'number') {
-                if (Number.isInteger(param)) {
-                  prepared.bindInteger(paramIndex, param);
-                } else {
-                  prepared.bindDouble(paramIndex, param);
-                }
-              } else if (typeof param === 'boolean') {
-                prepared.bindBoolean(paramIndex, param);
-              } else {
-                // Conversion en string pour les types complexes
-                prepared.bindVarchar(paramIndex, String(param));
-              }
-            };
 
             // Création d'un wrapper exposant les méthodes de requête
             const newConnection: ConnectionWrapper = {

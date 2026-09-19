@@ -207,7 +207,7 @@ class QueryComplexityAnalyzer {
         const limit = this.extractNumericValue(value as ValueNode | number);
         const factor = config.SECURITY_LIMITS?.COMPLEXITY_CALCULATION_FACTOR ?? 0.1;
         complexity += Math.min(limit, 100) * factor;
-      } else if (argName === 'filters' || argName === 'where') {
+      } else if (argName === 'structuredFilters' || argName === 'where') {
         // Coût fixe pour les prédicats de filtre
         complexity += 2;
       } else if (argName === 'orderBy' || argName === 'sort') {

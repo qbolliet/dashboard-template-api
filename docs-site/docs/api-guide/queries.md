@@ -9,16 +9,98 @@ All operations are GraphQL queries (read-only). Send them to `POST /graphql` wit
 
 ## Common input types
 
-### Filter
+### FilterNode (filter tree)
 
-Applies a condition on a field:
+Filters are expressed as a **tree** of criteria, mirroring the frontend
+`MultiCriterionMenu` (`buildTree`). The server compiles it into a
+**parameterized** SQL `WHERE` clause: values are never interpolated, and column
+types are read from the `metadata` table (`sql_type`), never from the client.
 
 ```graphql
-input Filter {
-  key: String! # field name
-  operator: String! # "=", "!=", ">", ">=", "<", "<=", "IN", "NOT IN", "LIKE"
-  value: String # single value
-  values: [String!] # list of values (for IN / NOT IN)
+enum FilterConnector {
+  AND
+  OR
+}
+
+enum FilterOperation {
+  EQ
+  NEQ
+  GT
+  GTE
+  LT
+  LTE
+  BETWEEN
+  IN
+  NOT_IN
+  BEFORE
+  AFTER
+  CONTAINS
+  STARTS
+  IS_NULL
+  IS_NOT_NULL
+}
+
+input FilterCriterion {
+  variable: String! # column name (must exist in metadata)
+  operation: FilterOperation!
+  value: JSON # see "Value shapes" below
+}
+
+input FilterNode {
+  connector: FilterConnector # connector with the PREVIOUS node of the group (ignored for the first, default AND)
+  criterion: FilterCriterion # leaf …
+  children: [FilterNode!] # … or group — exactly one of the two
+}
+```
+
+Rules:
+
+- The root node is a **non-empty group** (`children`). To apply no filter, omit
+  `structuredFilters` (an empty group is rejected).
+- Each node sets **exactly one** of `criterion` / `children`; groups cannot be empty.
+- Children are joined left to right with their connector; sub-groups are
+  parenthesized (standard SQL precedence applies inside a group: `AND` before `OR`).
+- Bounds (`config/security.yaml`, `SECURITY.FILTER_TREE`): group nesting depth
+  ≤ `MAX_DEPTH` (5, root = 0), criteria ≤ `MAX_CRITERIA` (50), IN list ≤
+  `MAX_IN_VALUES` (1000).
+
+Allowed operations per column type family:
+
+| Family  | SQL types                                                                                           | Operations                                                   |
+| ------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| numeric | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `U*INT` `UBIGINT` `FLOAT` `DOUBLE` `DECIMAL(p,s)` | `EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL` |
+| date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                             | `EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL`            |
+| text    | `VARCHAR`                                                                                           | `EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL`       |
+| boolean | `BOOLEAN`                                                                                           | `EQ NEQ IS_NULL IS_NOT_NULL`                                 |
+
+Value shapes:
+
+- comparisons (`EQ`, `GT`, `BEFORE`, `CONTAINS`…): a scalar — number (or numeric
+  string for integers beyond 2^53), ISO 8601 string for dates (`YYYY-MM-DD` for
+  `DATE`), string for text, `true`/`false` for booleans;
+- `IN` / `NOT_IN`: a non-empty array of scalars;
+- `BETWEEN`: `{ "min": …, "max": … }` (bounds included);
+- `IS_NULL` / `IS_NOT_NULL`: no value.
+
+`CONTAINS` / `STARTS` match the value literally (`%` and `_` are escaped).
+Any invalid tree, unknown column, incompatible operation or malformed value is
+rejected with a `BAD_USER_INPUT` error naming the column, its type and the
+allowed operations.
+
+Example — `kind = 1 AND (country = 1 OR country = 2)`:
+
+```graphql
+structuredFilters: {
+  children: [
+    { criterion: { variable: "kind", operation: EQ, value: 1 } }
+    {
+      connector: AND
+      children: [
+        { criterion: { variable: "country", operation: EQ, value: 1 } }
+        { connector: OR, criterion: { variable: "country", operation: EQ, value: 2 } }
+      ]
+    }
+  ]
 }
 ```
 
@@ -46,8 +128,7 @@ Paginated fact rows with dimension labels.
 ```graphql
 getFactTable(
   fields: [String!]            # columns to return (omit for all)
-  filters: String              # raw SQL WHERE clause (legacy)
-  structuredFilters: [Filter]  # structured filter array (recommended)
+  structuredFilters: FilterNode # filter tree (root = group)
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
@@ -88,8 +169,7 @@ D3-optimised dataset with column metadata and extents.
 ```graphql
 getFactTableWithMetadata(
   fields: [String!]
-  filters: String
-  structuredFilters: [Filter]
+  structuredFilters: FilterNode
   limit: Int! = 100
   offset: Int! = 0
   sort: [SortInput!]
@@ -111,8 +191,7 @@ Grouped aggregation for charts.
 ```graphql
 getAggregatedFacts(
   fields: [String!]
-  filters: String
-  structuredFilters: [Filter]
+  structuredFilters: FilterNode
   groupBy: String!
   aggregation: Aggregation! = SUM
   limit: Int! = 100

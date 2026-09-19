@@ -4,9 +4,10 @@ import { GraphQLError } from 'graphql';
 import { enrichAggregatedFacts } from './field-resolvers.js';
 import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
+import { compileFilterTree } from '../../utils/filter-tree.js';
 import type { GraphQLContext } from './types.js';
 import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
-import type { StructuredFilter } from '../../utils/utils.js';
+import type { FilterNodeInput } from '../../utils/filter-tree.js';
 import type { AggregatedFactParent } from './field-resolvers.js';
 
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
@@ -28,8 +29,7 @@ export interface AggregatedSortItem {
 /** Common arguments for the getAggregatedFacts and getAggregatedFactsWithMetadata queries. */
 export interface AggregatedFactsArgs {
   fields?: string[];
-  filters?: string | null;
-  structuredFilters?: StructuredFilter[] | null;
+  structuredFilters?: FilterNodeInput | null;
   groupBy: string;
   measure: string;
   aggregation?: AggregationType;
@@ -150,7 +150,6 @@ const aggregatedFactsResolvers = {
       _: unknown,
       {
         fields,
-        filters,
         structuredFilters,
         groupBy,
         measure,
@@ -169,12 +168,15 @@ const aggregatedFactsResolvers = {
       try {
         const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
+        // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
+        const where = await compileFilterTree(structuredFilters, (names) =>
+          activeLoaders.metadata.loadMany(names),
+        );
 
         const results = (await withTimeout(
           activeLoaders.aggregatedFacts.load({
             fields,
-            filters,
-            structuredFilters,
+            where,
             groupBy,
             measure,
             aggregation,
@@ -195,6 +197,8 @@ const aggregatedFactsResolvers = {
           'Aggregated facts labels enrichment timeout',
         );
       } catch (error) {
+        // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
+        if (error instanceof GraphQLError) throw error;
         if ((error as Error).message === 'Aggregated facts fetch timeout') {
           throw error;
         }
@@ -218,7 +222,6 @@ const aggregatedFactsResolvers = {
       _: unknown,
       {
         fields,
-        filters,
         structuredFilters,
         groupBy,
         measure,
@@ -237,12 +240,15 @@ const aggregatedFactsResolvers = {
       try {
         const targetLoaders = getLoadersForCatalog(catalog, schema);
         const activeLoaders = targetLoaders ?? loaders;
+        // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
+        const where = await compileFilterTree(structuredFilters, (names) =>
+          activeLoaders.metadata.loadMany(names),
+        );
 
         const result = (await withTimeout(
           activeLoaders.aggregatedFactsWithMetadata.load({
             fields,
-            filters,
-            structuredFilters,
+            where,
             groupBy,
             measure,
             aggregation,
@@ -265,6 +271,8 @@ const aggregatedFactsResolvers = {
 
         return result;
       } catch (error) {
+        // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
+        if (error instanceof GraphQLError) throw error;
         if ((error as Error).message === 'Aggregated facts fetch timeout') {
           throw error;
         }

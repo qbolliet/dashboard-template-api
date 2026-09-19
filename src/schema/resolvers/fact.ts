@@ -3,15 +3,52 @@ import { withTimeout } from '../../utils/timeout.js';
 import { enrichFactsWithDimensions } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
 import { GraphQLError } from 'graphql';
+import { compileFilterTree } from '../../utils/filter-tree.js';
 import type { GraphQLContext } from './types.js';
 import type { FactQueryParams } from '../../loaders/fact.js';
+import type { LoadersCollection } from '../../loaders/index.js';
+import type { FilterNodeInput } from '../../utils/filter-tree.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
 /** Common arguments for fact table queries, including catalog/schema routing. */
-export interface FactTableArgs extends FactQueryParams {
+export interface FactTableArgs extends Omit<FactQueryParams, 'where' | 'format'> {
+  structuredFilters?: FilterNodeInput | null;
+  format?: 'OBJECTS' | 'ARRAYS' | null;
   catalog?: string | null;
   schema?: string | null;
+}
+
+// ─── Fonctions utilitaires ────────────────────────────────────────────────────
+
+/**
+ * Builds the fact loader parameters from the GraphQL arguments.
+ *
+ * The filter tree is validated and compiled into a parameterized predicate
+ * using the metadata of the target catalog/schema. Only the compiled filter
+ * reaches the loader, so the DataLoader/Redis cache key derives from a
+ * deterministic SQL string and parameter list.
+ *
+ * @param args - GraphQL arguments of the fact query.
+ * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @returns Parameters for the fact loaders.
+ * @throws {GraphQLError} BAD_USER_INPUT when the filter tree is invalid.
+ */
+// Construction des paramètres du loader et compilation de l'arbre de filtres
+async function buildFactParams(
+  args: FactTableArgs,
+  activeLoaders: LoadersCollection,
+): Promise<FactQueryParams> {
+  const where = await compileFilterTree(args.structuredFilters, (names) =>
+    activeLoaders.metadata.loadMany(names),
+  );
+  return {
+    fields: args.fields,
+    where,
+    limit: args.limit,
+    offset: args.offset,
+    sort: args.sort,
+  };
 }
 
 // ─── Interfaces des résultats enrichis ───────────────────────────────────────
@@ -47,7 +84,8 @@ const factResolvers = {
      * @param args - Fact query parameters including limit, offset and database.
      * @param context - GraphQL context with loaders.
      * @returns Paginated result object with enriched fact rows.
-     * @throws {GraphQLError} When limit or offset exceed configured maximums.
+     * @throws {GraphQLError} When limit or offset exceed configured maximums,
+     *   or when the filter tree is invalid (BAD_USER_INPUT).
      */
     // Requête standard des faits avec pagination et comptage
     getFactTable: async (
@@ -69,11 +107,11 @@ const factResolvers = {
 
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
-      const factLoader = targetLoaders ? targetLoaders.factWithCount : loaders.factWithCount;
       const enrichmentLoaders = targetLoaders ?? loaders;
+      const params = await buildFactParams(args, enrichmentLoaders);
 
       const result = (await withTimeout(
-        factLoader.load(args),
+        enrichmentLoaders.factWithCount.load(params),
         config.API.TIMEOUTS.FACT_SIMPLE,
         'Fact table fetch timeout',
       )) as PaginatedFactResult;
@@ -112,9 +150,10 @@ const factResolvers = {
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
       const activeLoaders = targetLoaders ?? loaders;
+      const params = await buildFactParams(args, activeLoaders);
 
       const result = (await withTimeout(
-        activeLoaders.factWithMetadata.load(args),
+        activeLoaders.factWithMetadata.load(params),
         config.API.TIMEOUTS.FACT_SIMPLE,
         'Metadata fact table fetch timeout',
       )) as PaginatedFactResult;

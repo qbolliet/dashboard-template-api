@@ -117,14 +117,19 @@ describe('getAggregatedFacts', () => {
     }
   });
 
-  test('applies filters to aggregation', async () => {
+  test('applies a filter tree to aggregation', async () => {
     const query = `
       query {
         getAggregatedFacts(
           measure: "value"
           groupBy: "indicator"
           aggregation: AVG
-          filters: "country IN (1, 2) AND kind = 1"
+          structuredFilters: {
+            children: [
+              { criterion: { variable: "country", operation: IN, value: [1, 2] } }
+              { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }
+            ]
+          }
           limit: 20
           offset: 0
         ) { key aggregatedValue count }
@@ -134,6 +139,66 @@ describe('getAggregatedFacts', () => {
 
     expect(result.errors).toBeUndefined();
     expect(Array.isArray(result.data!.getAggregatedFacts)).toBe(true);
+  });
+
+  test('filtered COUNT aggregation matches the filtered fact count', async () => {
+    const tree = {
+      children: [
+        { criterion: { variable: 'value', operation: 'GT', value: 0 } },
+        {
+          connector: 'AND',
+          children: [
+            { criterion: { variable: 'kind', operation: 'EQ', value: 1 } },
+            { connector: 'OR', criterion: { variable: 'kind', operation: 'EQ', value: 2 } },
+          ],
+        },
+      ],
+    };
+    const result = await execute(server, {
+      query: `
+        query Agg($f: FilterNode) {
+          agg: getAggregatedFacts(measure: "value", groupBy: "kind", aggregation: COUNT, structuredFilters: $f, limit: 100, offset: 0) { key count }
+          facts: getFactTable(structuredFilters: $f, limit: 1, offset: 0) { total }
+        }
+      `,
+      variables: { f: tree },
+    });
+
+    expect(result.errors).toBeUndefined();
+    const groups = result.data!.agg as Array<{ key: string; count: number }>;
+    // Seuls les groupes kind 1 et 2 subsistent, et les effectifs se recoupent
+    expect(groups.every((g) => ['1', '2'].includes(g.key))).toBe(true);
+    const sum = groups.reduce((acc, g) => acc + g.count, 0);
+    expect(sum).toBe((result.data!.facts as { total: number }).total);
+  });
+
+  test('surfaces filter validation errors as BAD_USER_INPUT (not masked)', async () => {
+    const query = `
+      query {
+        getAggregatedFacts(
+          measure: "value"
+          groupBy: "indicator"
+          structuredFilters: { children: [{ criterion: { variable: "value", operation: CONTAINS, value: "1" } }] }
+        ) { key aggregatedValue }
+      }
+    `;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(result.errors![0].message).toContain('Allowed operations');
+  });
+
+  test('rejects a malformed groupBy with BAD_USER_INPUT', async () => {
+    const query = `
+      query {
+        getAggregatedFacts(measure: "value", groupBy: "country; DROP TABLE fact_table") { key }
+      }
+    `;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
   });
 
   test('sorts aggregated results in descending order', async () => {

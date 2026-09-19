@@ -131,8 +131,8 @@ const factTypeDefs: DocumentNode = gql`
     "Get fact table data with pagination and filtering"
     getFactTable(
       fields: [String!]
-      filters: String
-      structuredFilters: [Filter]
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause"
+      structuredFilters: FilterNode
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
@@ -143,8 +143,8 @@ const factTypeDefs: DocumentNode = gql`
     "Get fact data optimized for D3 visualization"
     getFactTableWithMetadata(
       fields: [String!]
-      filters: String
-      structuredFilters: [Filter]
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause"
+      structuredFilters: FilterNode
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
@@ -157,8 +157,8 @@ const factTypeDefs: DocumentNode = gql`
     "Get aggregated facts for charts and summaries"
     getAggregatedFacts(
       fields: [String!]
-      filters: String
-      structuredFilters: [Filter]
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause"
+      structuredFilters: FilterNode
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
@@ -173,8 +173,8 @@ const factTypeDefs: DocumentNode = gql`
     "Get aggregated facts with D3 metadata"
     getAggregatedFactsWithMetadata(
       fields: [String!]
-      filters: String
-      structuredFilters: [Filter]
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause"
+      structuredFilters: FilterNode
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
