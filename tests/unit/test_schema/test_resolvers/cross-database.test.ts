@@ -2,10 +2,10 @@
  * Integration tests for cross-database GraphQL resolvers.
  *
  * Covers the CROSS_DATABASE_DISABLED guard, input validation, and
- * (when ALLOW_CROSS_DATABASE_QUERIES=true) functional tests for
- * compareFacts, compareAggregatedFacts, and crossDatabaseSelectOptions.
- *
- * Run with: ALLOW_CROSS_DATABASE_QUERIES=true npm test
+ * (when ALLOW_CROSS_CATALOG_QUERIES=true, which tests/setup/setup-env.ts
+ * sets) functional tests for compareFacts, compareAggregatedFacts, and
+ * crossDatabaseSelectOptions — all joining directly on the labels carried
+ * by the columns of the two test catalogs.
  */
 
 import { ApolloServer } from '@apollo/server';
@@ -14,8 +14,10 @@ import { databaseManager } from '../../../../src/db/index.js';
 
 // ─── Configuration des tests cross-database ───────────────────────────────────
 
-// Activation conditionnelle des tests nécessitant la fonctionnalité cross-database
-const CROSS_DB_ENABLED = process.env.ALLOW_CROSS_DATABASE_QUERIES === 'true';
+// Activation conditionnelle des tests nécessitant la fonctionnalité cross-catalogue.
+// Le drapeau est ALLOW_CROSS_CATALOG_QUERIES (cf. config/database.yaml) : l'ancien
+// nom ALLOW_CROSS_DATABASE_QUERIES désactivait silencieusement toute la suite.
+const CROSS_DB_ENABLED = process.env.ALLOW_CROSS_CATALOG_QUERIES === 'true';
 
 // ─── État partagé ─────────────────────────────────────────────────────────────
 
@@ -373,5 +375,143 @@ describeCrossDB('compareAggregatedFacts (enabled)', () => {
 
     expect(result.errors).toBeUndefined();
     expect(typeof (result.data!.compareAggregatedFacts as { total: number }).total).toBe('number');
+  });
+});
+
+describeCrossDB('comparaisons sur les libellés des catalogues de test', () => {
+  /**
+   * Aggregates the `value` measure of default and macroeconomics by column.
+   *
+   * Aggregating first keeps the comparison to one row per label, so the
+   * assertions below never depend on where the pagination window falls.
+   *
+   * @param groupBy - Column used as the grouping key.
+   * @returns The compareAggregatedFacts rows.
+   */
+  // Comparaison default ↔ macroeconomics, agrégée par libellé
+  async function compareAggregatedOn(groupBy: string) {
+    const result = await execute(server, {
+      query: `
+        query {
+          compareAggregatedFacts(
+            catalogA: "default"
+            catalogB: "macroeconomics"
+            groupBy: "${groupBy}"
+            aggregation: SUM
+            limit: 100
+            offset: 0
+          ) { data { key valueA valueB delta deltaPercent } total }
+        }
+      `,
+    });
+    expect(result.errors).toBeUndefined();
+    return (
+      result.data!.compareAggregatedFacts as {
+        total: number;
+        data: Array<{
+          key: string;
+          valueA: number | null;
+          valueB: number | null;
+          delta: number | null;
+          deltaPercent: number | null;
+        }>;
+      }
+    ).data;
+  }
+
+  test('apparie les libellés communs et écarte les libellés disjoints', async () => {
+    const rows = await compareAggregatedOn('country');
+    const keys = rows.map((row) => row.key);
+
+    // Libellés présents dans les deux catalogues
+    expect(keys).toContain('France');
+    expect(keys).toContain('Germany');
+    // Libellés propres à un seul catalogue : écartés par la jointure interne
+    expect(keys).not.toContain('Portugal');
+    expect(keys).not.toContain('Netherlands');
+  });
+
+  test('delta vaut valueB - valueA et deltaPercent en découle', async () => {
+    const rows = await compareAggregatedOn('country');
+    const row = rows.find((r) => r.key === 'France')!;
+
+    expect(row).toBeDefined();
+    expect(Math.abs(row.delta! - (row.valueB! - row.valueA!))).toBeLessThan(0.0001);
+    const expected = ((row.valueB! - row.valueA!) / row.valueA!) * 100;
+    expect(Math.abs(row.deltaPercent! - expected)).toBeLessThan(0.0001);
+  });
+
+  test('deltaPercent est nul quand valueA vaut 0 (pas de division par zéro)', async () => {
+    const rows = await compareAggregatedOn('country');
+    // Zeroland ne porte qu'une ligne par catalogue, à 0 côté default
+    const zero = rows.find((row) => row.key === 'Zeroland')!;
+
+    expect(zero).toBeDefined();
+    expect(zero.valueA).toBe(0);
+    expect(zero.delta).toBe(zero.valueB);
+    // CASE WHEN a.value != 0 : la division n'est jamais tentée
+    expect(zero.deltaPercent).toBeNull();
+  });
+
+  test('compareFacts joint sur les libellés des colonnes-clés', async () => {
+    const result = await execute(server, {
+      query: `
+        query {
+          compareFacts(
+            catalogA: "default"
+            catalogB: "macroeconomics"
+            joinFields: ["country", "indicator", "kind", "date"]
+            limit: 50
+            offset: 0
+          ) { data { key valueA valueB delta } total }
+        }
+      `,
+    });
+
+    expect(result.errors).toBeUndefined();
+    const rows = (
+      result.data!.compareFacts as {
+        data: Array<{ key: string; valueA: number | null; valueB: number | null; delta: number }>;
+      }
+    ).data;
+    expect(rows.length).toBeGreaterThan(0);
+
+    // Les quatre colonnes de jointure portent des libellés, concaténés dans la clé
+    const disjoint = ['Portugal', 'Netherlands', 'Belgium'];
+    for (const row of rows) {
+      const parts = row.key.split('::');
+      expect(parts).toHaveLength(4);
+      // Aucun libellé propre à un seul catalogue ne peut apparaître
+      expect(disjoint).not.toContain(parts[0]);
+      expect(Math.abs(row.delta - (row.valueB! - row.valueA!))).toBeLessThan(0.0001);
+    }
+  });
+
+  test('crossDatabaseSelectOptions intersecte les libellés des trois catalogues', async () => {
+    const result = await execute(server, {
+      query: `
+        query {
+          crossDatabaseSelectOptions(
+            fieldName: "country"
+            catalogs: ["default", "macroeconomics", "public_finance"]
+            limit: 50
+          ) { value label }
+        }
+      `,
+    });
+
+    expect(result.errors).toBeUndefined();
+    const opts = result.data!.crossDatabaseSelectOptions as Array<{
+      value: string;
+      label: string;
+    }>;
+    const values = opts.map((o) => o.value);
+    expect(values).toContain('France');
+    // Chaque catalogue a son pays propre : aucun ne survit à l'intersection
+    expect(values).not.toContain('Portugal');
+    expect(values).not.toContain('Netherlands');
+    expect(values).not.toContain('Belgium');
+    // label = value partout
+    expect(opts.every((o) => o.value === o.label)).toBe(true);
   });
 });

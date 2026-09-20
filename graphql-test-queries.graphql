@@ -37,7 +37,6 @@ query TestGetMetadata {
   getMetaData(name: "country") {
     name
     label
-    python_type
     sql_type
     is_categorical
   }
@@ -48,7 +47,6 @@ query TestGetMetadataSpecificDB {
   getMetaData(name: "country", catalog: "macroeconomics") {
     name
     label
-    python_type
     sql_type
     is_categorical
   }
@@ -94,56 +92,57 @@ query TestMultipleMetadataCrossDB {
 }
 
 # ============================================
-# 2. TESTS DES TABLES DE DIMENSION
+# 2. MODALITÉS D'UNE COLONNE CATÉGORIELLE
 # ============================================
+# La fact table stocke les LIBELLÉS : il n'existe plus de table dim_*.
+# Les modalités d'un menu s'obtiennent par un SELECT DISTINCT sur la colonne,
+# avec label = value.
 
-# Test 2.1: Récupérer une table de dimension (catalogue default)
-query TestGetDimension {
-  getDimensionTable(name: "country") {
+# Test 2.1: Modalités d'une colonne (catalogue default)
+query TestGetOptions {
+  getSelectOptions(fieldName: "country") {
     value
     label
   }
 }
 
-# Test 2.1b: Récupérer une table de dimension depuis le catalogue macroeconomics
-query TestGetDimensionMacroeconomics {
-  getDimensionTable(name: "country", catalog: "macroeconomics") {
+# Test 2.1b: Modalités depuis le catalogue macroeconomics
+query TestGetOptionsMacroeconomics {
+  getSelectOptions(fieldName: "country", catalog: "macroeconomics") {
     value
     label
   }
 }
 
-# Test 2.2: Récupérer plusieurs dimensions du catalogue default
-query TestMultipleDimensions {
-  countries: getDimensionTable(name: "country") {
+# Test 2.2: Plusieurs colonnes en une requête
+query TestMultipleOptions {
+  countries: getSelectOptions(fieldName: "country") {
     value
     label
   }
-  indicators: getDimensionTable(name: "indicator") {
+  indicators: getSelectOptions(fieldName: "indicator") {
     value
     label
   }
-  kinds: getDimensionTable(name: "kind") {
+  kinds: getSelectOptions(fieldName: "kind") {
     value
     label
   }
 }
 
-# Test 2.2b: Dimensions depuis des catalogues différents
-# Attention: chaque catalogue a ses propres dimensions catégorielles
-query TestMultipleDimensionsCrossDB {
-  # default: indicator, country, kind, model, training, horizon
-  defaultCountries: getDimensionTable(name: "country", catalog: "default") {
+# Test 2.3: Hiérarchie de colonnes (schéma geography)
+# region -> departement -> commune, déclarée par metadata.parent_name.
+# Les communes absentes sont NULL et sont exclues du DISTINCT.
+query TestHierarchyLevels {
+  regions: getSelectOptions(fieldName: "region", schema: "geography") {
     value
     label
   }
-  # macroeconomics: indicator, country, frequency, source, scenario, year
-  macroeconomicsScenarios: getDimensionTable(name: "scenario", catalog: "macroeconomics") {
+  departements: getSelectOptions(fieldName: "departement", schema: "geography") {
     value
     label
   }
-  # public_finance: indicator, country, sector, category, classification, year
-  public_financeSectors: getDimensionTable(name: "sector", catalog: "public_finance") {
+  communes: getSelectOptions(fieldName: "commune", schema: "geography", searchTerm: "di") {
     value
     label
   }
@@ -201,10 +200,10 @@ query TestFactTablePublicFinance {
   }
 }
 
-# Test 3.2: Requête avec filtres (IDs entiers des dimensions)
+# Test 3.2: Requête avec filtres (libellés portés par les colonnes)
 query TestFactTableWithFilters {
   getFactTable(
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "indicator", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }, { connector: AND, criterion: { variable: "indicator", operation: EQ, value: "GDP Growth Rate" } }] }
     limit: 20
     offset: 0
   ) {
@@ -222,7 +221,7 @@ query TestFactTableWithFilters {
 # Utilise les champs catégoriels propres au catalogue default
 query TestFactTableStructuredFilters {
   getFactTable(
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: "Actual" } }] }
     limit: 10
     offset: 0
   ) {
@@ -239,7 +238,7 @@ query TestFactTableStructuredFilters {
 # Test 3.3b: Filtres structurés sur le catalogue macroeconomics
 query TestFactTableStructuredFiltersMacro {
   getFactTable(
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }, { connector: AND, criterion: { variable: "scenario", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }, { connector: AND, criterion: { variable: "scenario", operation: EQ, value: 1 } }] }
     limit: 10
     offset: 0
     catalog: "macroeconomics"
@@ -291,19 +290,19 @@ query TestFactTableSelectFields {
   }
 }
 
-# Test 3.6: Requête avec détails des dimensions (enrichissement automatique)
-# /!\ Renvoie l'erreur suivante : "Cannot return null for non-nullable field DimensionDetail.label."
-query TestFactTableWithDimensionDetails {
+# Test 3.6: Coordonnées et mesures d'une ligne
+# Fact.keys porte TOUTES les colonnes-clés (dates et identifiants compris),
+# valeurs NULL comprises ; Fact.measures porte les colonnes non-clés.
+query TestFactTableKeysAndMeasures {
   getFactTable(limit: 5, offset: 0) {
     data {
       measures {
         name
         value
       }
-      dimensionDetails {
+      keys {
         name
         value
-        label
       }
     }
     total
@@ -333,7 +332,7 @@ query TestFactTableWithMetadata {
 # Test 4.2: Requête avec métadonnées et filtres (IN sur plusieurs valeurs)
 query TestFactTableMetadataFiltered {
   getFactTableWithMetadata(
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: ["France", "Germany", "Spain"] } }] }
     limit: 100
     offset: 0
   ) {
@@ -414,7 +413,7 @@ query TestAggregatedFactsFiltered {
     measure: "value"
     groupBy: "indicator"
     aggregation: AVG
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2] } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: ["France", "Germany"] } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: "Actual" } }] }
     limit: 20
     offset: 0
   ) {
@@ -441,7 +440,7 @@ query TestAggregatedFactsSorted {
 }
 
 # Test 5.5: Agrégation avec labels de clés
-query TestAggregatedFactsWithKeyLabels {
+query TestAggregatedFactsByLabel {
   getAggregatedFacts(
     measure: "value"
     groupBy: "country"
@@ -450,7 +449,6 @@ query TestAggregatedFactsWithKeyLabels {
     offset: 0
   ) {
     key
-    keyLabel
     aggregatedValue
     count
   }
@@ -471,7 +469,6 @@ query TestAggregatedFactsWithMetadata {
   ) {
     data {
       key
-      keyLabel
       aggregatedValue
       count
     }
@@ -506,7 +503,6 @@ query TestAggregatedFactsWithMetadataMacro {
   ) {
     data {
       key
-      keyLabel
       aggregatedValue
       count
     }
@@ -674,15 +670,15 @@ query TestComplexQuery {
     is_categorical
   }
 
-  # Dimensions
-  countries: getDimensionTable(name: "country") {
+  # Modalités d'une colonne catégorielle
+  countries: getSelectOptions(fieldName: "country") {
     value
     label
   }
 
   # Faits avec détails
   facts: getFactTable(
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
     sort: [{ field: "value", order: DESC }]
     limit: 5
     offset: 0
@@ -692,10 +688,9 @@ query TestComplexQuery {
         name
         value
       }
-      dimensionDetails {
+      keys {
         name
         value
-        label
       }
     }
     total
@@ -706,10 +701,9 @@ query TestComplexQuery {
     measure: "value"
     groupBy: "indicator"
     aggregation: AVG
-    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
+    structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
   ) {
     key
-    keyLabel
     aggregatedValue
   }
 
@@ -799,7 +793,7 @@ query TestWithHTTPHeader {
     label
     is_categorical
   }
-  getDimensionTable(name: "country") {
+  getSelectOptions(fieldName: "country") {
     value
     label
   }
@@ -829,8 +823,8 @@ query TestComplexMultiDB {
     is_categorical
   }
 
-  # Dimensions depuis macroeconomics (champs propres à ce catalogue)
-  macroeconomicsDims: getDimensionTable(name: "scenario", catalog: "macroeconomics") {
+  # Modalités d'une colonne propre à macroeconomics
+  macroeconomicsOptions: getSelectOptions(fieldName: "indicator", catalog: "macroeconomics") {
     value
     label
   }
@@ -905,7 +899,7 @@ query TestEmptyDatabase {
 #    - macroeconomics   (macro-économie: indicator, country, frequency, source, scenario, year)
 #    - public_finance   (finances publiques: indicator, country, sector, category, classification, year)
 #
-# 5. CHAMPS CATÉGORIELS PAR CATALOGUE (utilisables dans getDimensionTable / groupBy):
+# 5. CHAMPS CATÉGORIELS PAR CATALOGUE (utilisables dans getSelectOptions / groupBy):
 #    default:         indicator, country, kind, model, training, horizon
 #    macroeconomics:  indicator, country, frequency, source, scenario, year
 #    public_finance:  indicator, country, sector, category, classification, year
@@ -920,7 +914,7 @@ query TestEmptyDatabase {
 #    Vide:     { "X-Catalog-ID": "" }         -> utilise default
 
 # ============================================
-# 16. TESTS CATALOGUE (getCatalogs, getCatalogSchema, getSharedDimensions)
+# 16. TESTS CATALOGUE (getCatalogs, getCatalogSchema, getSharedFields)
 # ============================================
 
 # Test 16.1: Lister tous les catalogues disponibles avec leurs schémas
@@ -960,7 +954,7 @@ query TestGetCatalogsThenSchema {
 }
 
 # Test 16.1d: Cascade — catalogues → schémas → champs en UNE seule requête
-# Les sous-champs fields/dimensionNames sont chargés à la demande via la
+# Le sous-champ fields est chargé à la demande via la
 # selection set GraphQL ; un client qui veut juste les noms ne paie rien.
 query TestGetCatalogsCascade {
   getCatalogs {
@@ -968,7 +962,6 @@ query TestGetCatalogsCascade {
     defaultSchema
     schemas {
       name
-      dimensionNames
       fields {
         name
         label
@@ -984,7 +977,6 @@ query TestGetCatalogSchema {
   getCatalogSchema(catalog: "macroeconomics") {
     name
     label
-    python_type
     sql_type
     is_categorical
   }
@@ -1018,37 +1010,37 @@ query TestGetCatalogSchemaMultiple {
   }
 }
 
-# Test 16.3: Dimensions communes à deux catalogues (schémas par défaut)
+# Test 16.3: Champs communs à deux catalogues (schémas par défaut)
 # Résultat attendu: ["indicator", "country"]
-query TestGetSharedDimensions {
-  getSharedDimensions(targets: [
+query TestGetSharedFields {
+  getSharedFields(targets: [
     { catalog: "default" }
     { catalog: "macroeconomics" }
   ])
 }
 
-# Test 16.3b: Dimensions communes aux trois catalogues
+# Test 16.3b: Champs communs aux trois catalogues
 # Résultat attendu: ["indicator", "country"]
-query TestGetSharedDimensionsAll {
-  getSharedDimensions(targets: [
+query TestGetSharedFieldsAll {
+  getSharedFields(targets: [
     { catalog: "default" }
     { catalog: "macroeconomics" }
     { catalog: "public_finance" }
   ])
 }
 
-# Test 16.3c: Dimensions communes puis récupération des options disponibles
+# Test 16.3c: Champs communs puis récupération des options disponibles
 # Utile pour construire un filtre partagé cross-catalogue dans l'UI
-query TestSharedDimensionsWithOptions {
-  sharedDimensions: getSharedDimensions(targets: [
+query TestSharedFieldsWithOptions {
+  sharedFields: getSharedFields(targets: [
     { catalog: "default" }
     { catalog: "macroeconomics" }
   ])
-  countryOptions: getDimensionTable(name: "country", catalog: "default") {
+  countryOptions: getSelectOptions(fieldName: "country", catalog: "default") {
     value
     label
   }
-  indicatorOptions: getDimensionTable(name: "indicator", catalog: "default") {
+  indicatorOptions: getSelectOptions(fieldName: "indicator", catalog: "default") {
     value
     label
   }
@@ -1056,8 +1048,8 @@ query TestSharedDimensionsWithOptions {
 
 # Test 16.3d: Mix de schémas explicites et implicites (schéma par défaut)
 # Démontre que `schema` est optionnel cible par cible
-query TestSharedDimensionsMixedSchemas {
-  getSharedDimensions(targets: [
+query TestSharedFieldsMixedSchemas {
+  getSharedFields(targets: [
     { catalog: "default", schema: "main" }
     { catalog: "macroeconomics" }
   ])
@@ -1372,7 +1364,7 @@ query TestGetFieldsAll {
   }
 }
 
-# Test 19.2: Champs catégoriels uniquement (menus de dimensions)
+# Test 19.2: Champs catégoriels uniquement (menus de sélection)
 query TestGetFieldsCategorical {
   getFields(isCategorical: true) {
     value
@@ -1459,7 +1451,7 @@ query TestGetFieldsInvalidDatabase {
 # Un catalogue peut contenir plusieurs schémas. L'argument `schema` choisit le
 # schéma au sein du catalogue choisi par `catalog`. Omis => schéma par défaut
 # du catalogue (config SCHEMA, "main"). Les deux arguments sont disponibles sur
-# getMetaData, getDimensionTable, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
+# getMetaData, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
 # getSelectOptions, getGroupedSelectOptions, getCatalogSchema et getFields.
 
 # Test 20.1: Métadonnées d'un schéma nommé au sein d'un catalogue
@@ -1519,7 +1511,7 @@ query TestCompareFactsCrossCatalog {
 }
 
 # Test 20.5: Agrégation cross-catalogue (default vs public_finance), groupBy catégoriel
-# Jointure sur les labels de la dimension 'country' (et non sur l'ID brut).
+# Jointure directe sur la colonne 'country', qui porte le libellé.
 query TestCompareAggregatedCrossCatalog {
   compareAggregatedFacts(
     catalogA: "default"
@@ -1606,7 +1598,6 @@ query TestGetCatalogSchemaWithSchema {
 }
 
 # Test 20bis.3: Table des faits dans un schéma explicite
-# /!\ Renvoie l'erreur : "Cannot return null for non-nullable field DimensionDetail.label."
 query TestFactTableWithSchema {
   getFactTable(catalog: "default", schema: "main", limit: 5, offset: 0) {
     data {
@@ -1614,19 +1605,18 @@ query TestFactTableWithSchema {
         name
         value
       }
-      dimensionDetails {
+      keys {
         name
         value
-        label
       }
     }
     total
   }
 }
 
-# Test 20bis.4: Dimensions partagées entre deux schémas spécifiés explicitement
-query TestSharedDimensionsCrossSchema {
-  getSharedDimensions(targets: [
+# Test 20bis.4: Champs partagés entre deux schémas spécifiés explicitement
+query TestSharedFieldsCrossSchema {
+  getSharedFields(targets: [
     { catalog: "default", schema: "main" }
     { catalog: "macroeconomics", schema: "main" }
   ])

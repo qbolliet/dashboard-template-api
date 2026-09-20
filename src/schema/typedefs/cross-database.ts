@@ -15,10 +15,8 @@ import type { DocumentNode } from 'graphql';
 const crossDatabaseTypeDefs: DocumentNode = gql`
   "Comparaison d'une valeur entre deux catalogues sur une clé commune"
   type ComparedFact {
-    "Valeur de la clé commune (dimension de jointure)"
+    "Valeur de la clé commune (libellé porté par la colonne de jointure)"
     key: String!
-    "Label lisible de la clé (si dimension catégorielle)"
-    keyLabel: String
     "Valeur dans le catalogue A"
     valueA: Float
     "Valeur dans le catalogue B"
@@ -39,7 +37,7 @@ const crossDatabaseTypeDefs: DocumentNode = gql`
   }
 
   extend type Query {
-    "Compare les faits de deux datasets (catalogue + schéma) sur des champs de jointure communs. Les champs catégoriels sont résolus en labels via les tables dim_* avant la jointure (jamais sur l'ID brut)."
+    "Compare les faits de deux datasets (catalogue + schéma) sur des champs de jointure communs. La fact table porte les libellés : la jointure est directe sur les colonnes, alignées en VARCHAR pour absorber une différence de type entre catalogues."
     compareFacts(
       "Premier catalogue (référence)"
       catalogA: String!
@@ -56,7 +54,7 @@ const crossDatabaseTypeDefs: DocumentNode = gql`
       sort: [SortInput!]
     ): PaginatedComparedFacts!
 
-    "Compare les faits agrégés de deux datasets (catalogue + schéma) sur un groupBy commun. Un groupBy catégoriel est agrégé par label (jamais par ID brut)."
+    "Compare les faits agrégés de deux datasets (catalogue + schéma) sur un groupBy commun. Chaque côté agrège directement sur sa colonne, qui porte le libellé."
     compareAggregatedFacts(
       catalogA: String!
       catalogB: String!

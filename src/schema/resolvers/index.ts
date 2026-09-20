@@ -1,6 +1,5 @@
 // Importation des modules d'intérêt
 import { metadataResolvers } from './metadata.js';
-import { dimensionResolvers } from './dimension.js';
 import { factResolvers } from './fact.js';
 import { aggregatedFactsResolvers } from './aggregated-facts.js';
 import { selectOptionsResolvers } from './select-options.js';
@@ -12,20 +11,19 @@ import { crossDatabaseResolvers } from './cross-database.js';
 /**
  * Combined GraphQL resolvers for the entire API.
  *
- * Merges Query resolvers from every sub-module and attaches field resolvers
- * for dimension label resolution on Fact and AggregatedFact types.
+ * Merges Query resolvers from every sub-module and attaches the field
+ * resolvers exposing the key/measure partition of a Fact.
  */
 const resolvers = {
   Query: {
     ...metadataResolvers.Query,
-    ...dimensionResolvers.Query,
     ...factResolvers.Query,
     ...aggregatedFactsResolvers.Query,
     ...selectOptionsResolvers.Query,
     ...catalogResolvers.Query,
     ...crossDatabaseResolvers.Query,
   },
-  // Field resolvers : labels sur Fact/AggregatedFact + cascade lazy sur CatalogSchemaInfo
+  // Field resolvers : partition clés/mesures de Fact + cascade lazy sur CatalogSchemaInfo
   ...fieldResolvers,
   CatalogSchemaInfo: catalogResolvers.CatalogSchemaInfo,
 };

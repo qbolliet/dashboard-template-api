@@ -184,14 +184,14 @@ describe('Object types — common', () => {
   /**
    * Verification that AggregatedFact exposes all expected fields.
    */
-  test('AggregatedFact has key, aggregatedValue, count, keyLabel', () => {
+  test('AggregatedFact has key, aggregatedValue, count (no keyLabel)', () => {
     // Extraction des champs du type AggregatedFact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('AggregatedFact'),
     ).getFields();
 
     // Présence des champs métier attendus
-    for (const f of ['key', 'aggregatedValue', 'count', 'keyLabel']) {
+    for (const f of ['key', 'aggregatedValue', 'count']) {
       expect(fields).toHaveProperty(f);
     }
   });

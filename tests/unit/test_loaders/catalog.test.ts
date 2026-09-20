@@ -1,9 +1,8 @@
 /**
- * Unit tests for CatalogMetadataLoader and CatalogDimensionNamesLoader
- * (src/loaders/catalog.ts).
+ * Unit tests for CatalogMetadataLoader (src/loaders/catalog.ts).
  *
- * Verifies full-catalog metadata retrieval with boolean coercion,
- * categorical field name extraction, and SQL query qualification.
+ * Verifies full-catalog metadata retrieval with boolean coercion
+ * and SQL query qualification.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -39,7 +38,6 @@ interface DataLoaderInstance {
 /** Module catalog.ts après import dynamique. */
 interface CatalogModule {
   createCatalogMetadataLoader: () => DataLoaderInstance;
-  createCatalogDimensionNamesLoader: () => DataLoaderInstance;
 }
 
 // ─── État des mocks partagés ───────────────────────────────────────────────────
@@ -72,10 +70,9 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 
 // Déclarations avant beforeAll — remplies après résolution des mocks
 let createCatalogMetadataLoader: CatalogModule['createCatalogMetadataLoader'];
-let createCatalogDimensionNamesLoader: CatalogModule['createCatalogDimensionNamesLoader'];
 
 beforeAll(async () => {
-  ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } =
+  ({ createCatalogMetadataLoader } =
     (await import('../../../src/loaders/catalog.js')) as unknown as CatalogModule);
 });
 
@@ -185,70 +182,6 @@ describe('CatalogMetadataLoader', () => {
 
       const loader = createCatalogMetadataLoader();
       const result = await loader.load({ catalog: 'empty_catalog' });
-
-      expect(result).toEqual([]);
-    });
-  });
-});
-
-// ─── CatalogDimensionNamesLoader ──────────────────────────────────────────────
-
-describe('CatalogDimensionNamesLoader', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
-    mockPool.acquire.mockResolvedValue(mockConnection);
-  });
-
-  // ── Instanciation ─────────────────────────────────────────────────────────
-
-  describe('createCatalogDimensionNamesLoader', () => {
-    test('crée un DataLoader valide', () => {
-      const loader = createCatalogDimensionNamesLoader();
-      expect(loader).toBeDefined();
-      expect(typeof loader.load).toBe('function');
-    });
-  });
-
-  // ── Extraction des noms de champs catégoriels ─────────────────────────────
-
-  describe('loadDimensionNames', () => {
-    test('retourne les noms des champs catégoriels', async () => {
-      mockConnection.all.mockResolvedValue([{ name: 'country' }, { name: 'status' }]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      const result = await loader.load({ catalog: 'catalog1' });
-
-      expect(result).toEqual(['country', 'status']);
-    });
-
-    test('filtre par is_categorical = true dans la requête', async () => {
-      mockConnection.all.mockResolvedValue([]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      await loader.load({ catalog: 'mydb' });
-
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('is_categorical');
-      expect(query).toContain('true');
-    });
-
-    test('utilise le bon catalogue dans la requête SQL', async () => {
-      mockConnection.all.mockResolvedValue([]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      await loader.load({ catalog: 'target_db' });
-
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"target_db"');
-    });
-
-    test('retourne un tableau vide si aucun champ catégoriel', async () => {
-      mockConnection.all.mockResolvedValue([]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      const result = await loader.load({ catalog: 'catalog_no_dims' });
 
       expect(result).toEqual([]);
     });

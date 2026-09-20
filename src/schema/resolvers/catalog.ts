@@ -2,6 +2,7 @@
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
+import { sqlTypeFamily } from '../../utils/filter-tree.js';
 import type { CatalogMetadataRow } from '../../loaders/catalog.js';
 import type { SelectOption } from '../../loaders/select-options.js';
 
@@ -23,14 +24,14 @@ export interface FieldsArgs {
   namePattern?: string | null;
 }
 
-/** A single (catalog, schema) target as accepted by getSharedDimensions. */
+/** A single (catalog, schema) target as accepted by getSharedFields. */
 export interface CatalogSchemaTarget {
   catalog: string;
   schema?: string | null;
 }
 
-/** Arguments for the getSharedDimensions query. */
-export interface SharedDimensionsArgs {
+/** Arguments for the getSharedFields query. */
+export interface SharedFieldsArgs {
   targets: CatalogSchemaTarget[];
 }
 
@@ -38,8 +39,8 @@ export interface SharedDimensionsArgs {
 
 /**
  * Source object exposed by Catalog.schemas to resolve CatalogSchemaInfo
- * sub-fields. Carries the parent catalog id so that the `fields` and
- * `dimensionNames` field resolvers know which DataLoader key to use.
+ * sub-fields. Carries the parent catalog id so that the `fields` field
+ * resolver knows which DataLoader key to use.
  */
 export interface CatalogSchemaInfoSource {
   catalogId: string;
@@ -77,18 +78,37 @@ function validateSchemaForCatalog(catalog: string, schema?: string | null): void
   }
 }
 
+/**
+ * Resolves the SQL type family of a metadata row.
+ *
+ * A column whose SQL type is unknown to the filter compiler yields null: it
+ * then only matches another column that is equally unknown, which keeps the
+ * intersection conservative instead of silently pairing incompatible columns.
+ *
+ * @param row - Metadata row of a catalog/schema.
+ * @returns The type family, or null when the SQL type is unsupported.
+ */
+// Famille de type SQL d'une colonne, null si le type n'est pas reconnu
+function typeFamilyOf(row: CatalogMetadataRow): string | null {
+  try {
+    return sqlTypeFamily(String(row.sql_type ?? ''));
+  } catch {
+    return null;
+  }
+}
+
 // Construction d'un resolver pour le catalogue multi-bases
 /**
  * Resolvers for catalog introspection queries.
  *
  * Exposes the list of available catalogs and their schemas (with lazy
- * per-schema fields and dimension names via the CatalogSchemaInfo type
- * resolvers), the field metadata of a specific (catalog, schema) pair,
- * a filtered SelectOption view of those fields, and the intersection of
- * dimensions across several (catalog, schema) targets.
+ * per-schema fields via the CatalogSchemaInfo type resolver), the field
+ * metadata of a specific (catalog, schema) pair, a filtered SelectOption
+ * view of those fields, and the intersection of fields across several
+ * (catalog, schema) targets.
  */
 const catalogResolvers = {
-  // ── Type resolver: per-schema lazy loading of fields and dimension names ──
+  // ── Type resolver: per-schema lazy loading of the field metadata ──
   CatalogSchemaInfo: {
     /**
      * Loads the metadata table rows of the schema this source describes.
@@ -108,27 +128,6 @@ const catalogResolvers = {
     ): Promise<CatalogMetadataRow[]> => {
       return loaders.catalogMetadata.load({ catalog: parent.catalogId, schema: parent.name });
     },
-
-    /**
-     * Loads the names of categorical fields in the schema this source describes.
-     *
-     * Invoked only when the client selects `dimensionNames` under `schemas { … }`.
-     *
-     * @param parent - Source object {catalogId, name} carried from Catalog.schemas.
-     * @param _ - Field arguments (none).
-     * @param context - GraphQL context with loaders.
-     * @returns Array of categorical field names for this schema.
-     */
-    dimensionNames: async (
-      parent: CatalogSchemaInfoSource,
-      _: Record<string, never>,
-      { loaders }: GraphQLContext,
-    ): Promise<string[]> => {
-      return loaders.catalogDimensionNames.load({
-        catalog: parent.catalogId,
-        schema: parent.name,
-      });
-    },
   },
 
   Query: {
@@ -136,9 +135,9 @@ const catalogResolvers = {
      * Lists all available catalogs with their hosted schemas.
      *
      * Returns catalog identifiers and per-schema sources usable by the
-     * CatalogSchemaInfo type resolvers. The `fields` and `dimensionNames`
-     * sub-fields of each schema are loaded only when explicitly selected
-     * by the client (lazy cascade via GraphQL selection sets).
+     * CatalogSchemaInfo type resolvers. The `fields` sub-field of each
+     * schema is loaded only when explicitly selected by the client
+     * (lazy cascade via GraphQL selection sets).
      *
      * @param _ - Parent resolver result (unused at root).
      * @param __ - Query arguments (none).
@@ -235,23 +234,25 @@ const catalogResolvers = {
     },
 
     /**
-     * Finds dimension names that are shared across all specified targets.
+     * Finds the categorical field names shared by all specified targets.
      *
      * Each target is a (catalog, schema) pair; schema is optional and
-     * defaults to the catalog's default schema. Catalogs and schemas
-     * are validated against the allow-list before loading. The result
-     * is the intersection of dimension name sets across all targets.
+     * defaults to the catalog's default schema. Catalogs and schemas are
+     * validated against the allow-list before loading. A field is shared
+     * when every target declares it as categorical under the same name and
+     * with the same SQL type family, so it is safe to use as a join key in
+     * a cross-catalog query.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - List of (catalog, schema) targets.
      * @param context - GraphQL context with loaders.
-     * @returns Array of dimension names present in every specified target.
+     * @returns Array of field names present in every specified target.
      * @throws {GraphQLError} When targets is empty or contains invalid identifiers.
      */
-    // Calcul de l'intersection des dimensions partagées entre plusieurs cibles
-    getSharedDimensions: async (
+    // Intersection des metadata des cibles : même nom, même famille de type
+    getSharedFields: async (
       _: unknown,
-      { targets }: SharedDimensionsArgs,
+      { targets }: SharedFieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<string[]> => {
       // Validation de la présence d'au moins une cible
@@ -269,15 +270,27 @@ const catalogResolvers = {
         validateSchemaForCatalog(catalog, schema);
       });
 
-      const dimensionSets = await Promise.all(
+      const metadataSets = await Promise.all(
         targets.map(({ catalog, schema }) =>
-          loaders.catalogDimensionNames.load({ catalog, schema: schema ?? null }),
+          loaders.catalogMetadata.load({ catalog, schema: schema ?? null }),
         ),
       );
 
-      // Intersection des ensembles de dimensions
-      const [first, ...rest] = dimensionSets;
-      return first.filter((dim) => rest.every((set) => set.includes(dim)));
+      // Indexation par nom de colonne catégorielle, avec sa famille de type
+      const indexed = metadataSets.map((rows) => {
+        const families = new Map<string, string | null>();
+        rows
+          .filter((row) => Boolean(row.is_categorical))
+          .forEach((row) => families.set(String(row.name), typeFamilyOf(row)));
+        return families;
+      });
+
+      const [first, ...rest] = indexed;
+      return [...first.entries()]
+        .filter(([name, family]) =>
+          rest.every((other) => other.has(name) && other.get(name) === family),
+        )
+        .map(([name]) => name);
     },
   },
 };

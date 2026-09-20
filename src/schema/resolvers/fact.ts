@@ -1,6 +1,6 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
-import { enrichFactsWithDimensions } from '../../utils/dimension-enrichment.js';
+import { partitionFacts } from '../../utils/fact-partition.js';
 import { config } from '../../utils/config-loader.js';
 import { GraphQLError } from 'graphql';
 import { compileFilterTree } from '../../utils/filter-tree.js';
@@ -69,16 +69,17 @@ export interface PaginatedFactResult {
  * Resolvers for fact table queries.
  *
  * Handles the retrieval and formatting of fact data from the database,
- * including optional dimension enrichment and D3-compatible output formats.
+ * including the key/measure partition of each row and D3-compatible
+ * output formats.
  */
 const factResolvers = {
   Query: {
     /**
-     * Fetches a paginated page of fact rows with dimension enrichment.
+     * Fetches a paginated page of fact rows, split into keys and measures.
      *
      * Validates the pagination parameters against configured limits before
-     * issuing the DataLoader call, then enriches every returned row with
-     * its categorical dimension labels in a single bulk pass.
+     * issuing the DataLoader call, then partitions the columns of every
+     * returned row in a single bulk pass.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - Fact query parameters including limit, offset and database.
@@ -107,31 +108,31 @@ const factResolvers = {
 
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
-      const enrichmentLoaders = targetLoaders ?? loaders;
-      const params = await buildFactParams(args, enrichmentLoaders);
+      const activeLoaders = targetLoaders ?? loaders;
+      const params = await buildFactParams(args, activeLoaders);
 
       const result = (await withTimeout(
-        enrichmentLoaders.factWithCount.load(params),
+        activeLoaders.factWithCount.load(params),
         config.API.TIMEOUTS.FACT_SIMPLE,
         'Fact table fetch timeout',
       )) as PaginatedFactResult;
 
-      // Enrichissement en masse des dimensions pour toutes les lignes
+      // Partition en masse des colonnes (clés / mesures) pour toutes les lignes
       if (result && result.data) {
-        const enrichedData = await withTimeout(
-          enrichFactsWithDimensions(result.data, enrichmentLoaders),
+        const partitionedData = await withTimeout(
+          partitionFacts(result.data, activeLoaders),
           config.API.TIMEOUTS.FACT_COMPLEX,
-          'Dimension enrichment timeout',
+          'Fact partition timeout',
         );
 
-        return { ...result, data: enrichedData };
+        return { ...result, data: partitionedData };
       }
 
       return result;
     },
 
     /**
-     * Fetches fact rows with D3-compatible metadata and dimension enrichment.
+     * Fetches fact rows with D3-compatible metadata, split into keys and measures.
      *
      * Supports the ARRAYS output format which transposes row objects into
      * column-ordered arrays for direct consumption by D3 charting code.
@@ -158,12 +159,12 @@ const factResolvers = {
         'Metadata fact table fetch timeout',
       )) as PaginatedFactResult;
 
-      // Enrichissement en masse des dimensions pour toutes les lignes
+      // Partition en masse des colonnes (clés / mesures) pour toutes les lignes
       if (result && result.data) {
-        const enrichedData = await withTimeout(
-          enrichFactsWithDimensions(result.data, activeLoaders),
+        const partitionedData = await withTimeout(
+          partitionFacts(result.data, activeLoaders),
           config.API.TIMEOUTS.FACT_COMPLEX,
-          'Dimension enrichment timeout',
+          'Fact partition timeout',
         );
 
         // Format ARRAYS : transformation de [{col: val}] en [[val1, val2, ...]]
@@ -171,13 +172,13 @@ const factResolvers = {
         if (args.format === 'ARRAYS' && result.columns) {
           return {
             ...result,
-            data: enrichedData.map((row) =>
+            data: partitionedData.map((row) =>
               result.columns!.map((col) => (row as Record<string, unknown>)[col] ?? null),
             ),
           };
         }
 
-        return { ...result, data: enrichedData };
+        return { ...result, data: partitionedData };
       }
 
       return result;

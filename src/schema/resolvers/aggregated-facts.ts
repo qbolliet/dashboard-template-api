@@ -1,14 +1,11 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { GraphQLError } from 'graphql';
-import { enrichAggregatedFacts } from './field-resolvers.js';
-import { enrichAggregatedFactsWithLabels } from '../../utils/dimension-enrichment.js';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
 import type { GraphQLContext } from './types.js';
 import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
-import type { AggregatedFactParent } from './field-resolvers.js';
 
 // ─── Types d'agrégation ───────────────────────────────────────────────────────
 
@@ -42,9 +39,15 @@ export interface AggregatedFactsArgs {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
+/** One aggregated row: a group-by key and its aggregated value. */
+export interface AggregatedFactRow {
+  key: unknown;
+  [key: string]: unknown;
+}
+
 /** Aggregated result with metadata, used by getAggregatedFactsWithMetadata. */
 export interface AggregatedWithMetadataResult {
-  data: AggregatedFactParent[];
+  data: AggregatedFactRow[];
   [key: string]: unknown;
 }
 
@@ -129,16 +132,15 @@ function validateAggregatedArgs(
  * Resolvers for aggregated fact queries.
  *
  * Supports flexible grouping, multiple aggregation functions, sorting,
- * pagination, and optional D3 metadata enrichment. Results are enriched
- * with human-readable labels for categorical group-by dimensions.
+ * pagination, and optional D3 metadata. The group-by column of the fact
+ * table already holds its label, so the key needs no resolution.
  */
 const aggregatedFactsResolvers = {
   Query: {
     /**
-     * Fetches aggregated facts grouped by a dimension field.
+     * Fetches aggregated facts grouped by a fact table column.
      *
-     * Validates all arguments, loads aggregated data via DataLoader,
-     * then enriches every row with its groupBy field and keyLabel.
+     * Validates all arguments, then loads the aggregated data via DataLoader.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - Aggregation query parameters.
@@ -186,16 +188,10 @@ const aggregatedFactsResolvers = {
           } as AggregatedQueryParams),
           config.API.TIMEOUTS.AGGREGATED_SIMPLE,
           'Aggregated facts fetch timeout',
-        )) as unknown as AggregatedFactParent[];
+        )) as unknown as AggregatedFactRow[];
 
-        // Enrichissement des résultats avec le champ de regroupement
-        // et chargement en masse des labels
-        const enrichedResults = enrichAggregatedFacts(results, groupBy);
-        return await withTimeout(
-          enrichAggregatedFactsWithLabels(enrichedResults, groupBy, activeLoaders),
-          config.API.TIMEOUTS.AGGREGATED_SIMPLE,
-          'Aggregated facts labels enrichment timeout',
-        );
+        // La clé porte déjà son libellé : aucune résolution supplémentaire
+        return results;
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
         if (error instanceof GraphQLError) throw error;
@@ -260,15 +256,7 @@ const aggregatedFactsResolvers = {
           'Aggregated facts with metadata fetch timeout',
         )) as unknown as AggregatedWithMetadataResult;
 
-        // Enrichissement des données avec le champ de regroupement
-        // et chargement en masse des labels
-        const enrichedData = enrichAggregatedFacts(result.data, groupBy);
-        result.data = await withTimeout(
-          enrichAggregatedFactsWithLabels(enrichedData, groupBy, activeLoaders),
-          config.API.TIMEOUTS.AGGREGATED_SIMPLE,
-          'Aggregated facts labels enrichment timeout',
-        );
-
+        // La clé porte déjà son libellé : aucune résolution supplémentaire
         return result;
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client

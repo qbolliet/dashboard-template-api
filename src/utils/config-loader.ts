@@ -143,7 +143,6 @@ interface LoadersConfig {
   MAX_BATCH_SIZE: number;
   DEFAULT_CACHE_TIMEOUT: number;
   FACT_CACHE_TIMEOUT: number;
-  DIMENSION_CACHE_TIMEOUT: number;
   METADATA_CACHE_TIMEOUT: number;
   SELECT_OPTIONS_CACHE_TIMEOUT: number;
 }
@@ -197,7 +196,6 @@ interface CacheRedisConfig {
 interface CacheTTLConfig {
   DEFAULT: number;
   METADATA: number;
-  DIMENSIONS: number;
   FACTS: number;
   AGGREGATED_FACTS: number;
   SELECT_OPTIONS: number;
@@ -283,7 +281,6 @@ interface AppConfig {
       FACT_COMPLEX: number;
       AGGREGATED_SIMPLE: number;
       AGGREGATED_COMPLEX: number;
-      DIMENSION: number;
       METADATA: number;
       SELECT_OPTIONS: number;
       CACHE_DEFAULT: number;

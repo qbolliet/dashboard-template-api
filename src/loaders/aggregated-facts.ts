@@ -93,7 +93,7 @@ type AggregatedResult =
 /**
  * Loader for aggregated fact queries.
  *
- * Groups fact table rows by a dimension field and applies a SQL aggregation
+ * Groups fact table rows by a column and applies a SQL aggregation
  * function (SUM, AVG, etc.). Supports optional metadata enrichment and
  * pagination with total group count.
  */
@@ -136,7 +136,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
   // Méthode de chargement des faits agrégés
   /**
-   * Loads aggregated fact data grouped by a dimension field.
+   * Loads aggregated fact data grouped by a fact table column.
    *
    * Applies filters, aggregation, sorting, and pagination. When
    * includeMetadata or includeCount are true, additional queries are

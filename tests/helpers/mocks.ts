@@ -19,7 +19,6 @@ interface LoaderConfig {
       BATCH_SIZE: number;
       METADATA_CACHE_TIMEOUT: number;
       FACT_CACHE_TIMEOUT: number;
-      DIMENSION_CACHE_TIMEOUT: number;
       SELECT_OPTIONS_CACHE_TIMEOUT: number;
       MAX_BATCH_SIZE: number;
     };
@@ -72,7 +71,6 @@ export const makeLoaderConfig = (): LoaderConfig => ({
       BATCH_SIZE: 10,
       METADATA_CACHE_TIMEOUT: 600000,
       FACT_CACHE_TIMEOUT: 300000,
-      DIMENSION_CACHE_TIMEOUT: 600000,
       SELECT_OPTIONS_CACHE_TIMEOUT: 600000,
       MAX_BATCH_SIZE: 50,
     },

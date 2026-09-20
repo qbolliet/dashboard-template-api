@@ -1,6 +1,5 @@
 // Importation des modules de création de loaders
 import { createMetadataLoader } from './metadata.js';
-import { createDimensionLoader, createDimensionValueLoader } from './dimension.js';
 import {
   createFactLoader,
   createFactWithCountLoader,
@@ -12,7 +11,7 @@ import {
   createAggregatedFactsWithMetadataLoader,
   createAggregatedFactsWithCountLoader,
 } from './aggregated-facts.js';
-import { createCatalogMetadataLoader, createCatalogDimensionNamesLoader } from './catalog.js';
+import { createCatalogMetadataLoader } from './catalog.js';
 import {
   createCompareFacts,
   createCompareAggregatedFacts,
@@ -21,7 +20,6 @@ import {
 import { databaseManager } from '../db/index.js';
 
 import type { MetadataRow } from './metadata.js';
-import type { DimensionRecord, DimensionValue, DimensionValueParams } from './dimension.js';
 import type { FactQueryParams, FactQueryResult } from './fact.js';
 import type { SelectOptionsParams, SelectOption } from './select-options.js';
 import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
@@ -48,8 +46,6 @@ interface KeyValuePair<K, V> {
 /** Optional initial data for priming the full set of loaders. */
 interface PrimeData {
   metadata?: KeyValuePair<string, MetadataRow | null>[];
-  dimensions?: KeyValuePair<string, DimensionRecord[]>[];
-  dimensionValues?: KeyValuePair<DimensionValueParams, DimensionValue>[];
   facts?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithCount?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithMetadata?: KeyValuePair<FactQueryParams, FactQueryResult>[];
@@ -64,8 +60,6 @@ interface PrimeData {
 /** Complete collection of loaders available for a single GraphQL request. */
 interface LoadersCollection {
   metadata: Loader<string, MetadataRow | null>;
-  dimension: Loader<string, DimensionRecord[]>;
-  dimensionValue: Loader<DimensionValueParams, DimensionValue>;
   fact: Loader<FactQueryParams, FactQueryResult>;
   factWithCount: Loader<FactQueryParams, FactQueryResult>;
   factWithMetadata: Loader<FactQueryParams, FactQueryResult>;
@@ -74,7 +68,6 @@ interface LoadersCollection {
   aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
   catalogMetadata: Loader<CatalogSchemaKey, CatalogMetadataRow[]>;
-  catalogDimensionNames: Loader<CatalogSchemaKey, string[]>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
   compareAggregatedFacts: Loader<CompareAggregatedFactsParams, ComparisonResult>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
@@ -112,10 +105,8 @@ const createLoaders = (
     }
   }
 
-  // Initialisation des loaders de méta-données et dimensions
+  // Loader des méta-données de colonnes
   const metadataLoader = createMetadataLoader(catalogId, schema);
-  const dimensionLoader = createDimensionLoader(catalogId, schema);
-  const dimensionValueLoader = createDimensionValueLoader(catalogId, schema);
 
   // Loaders pour les faits
   const factLoader = createFactLoader(catalogId, schema);
@@ -134,7 +125,6 @@ const createLoaders = (
 
   // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
-  const catalogDimensionNamesLoader = createCatalogDimensionNamesLoader();
   const compareFactsLoader = createCompareFacts();
   const compareAggregatedFactsLoader = createCompareAggregatedFacts();
   const crossDatabaseSelectOptionsLoader = createCrossDatabaseSelectOptions();
@@ -142,8 +132,6 @@ const createLoaders = (
   // Retourne un objet avec l'ensemble des loaders et les méthodes utilitaires
   return {
     metadata: metadataLoader,
-    dimension: dimensionLoader,
-    dimensionValue: dimensionValueLoader,
     fact: factLoader,
     factWithCount: factWithCountLoader,
     factWithMetadata: factWithMetadataLoader,
@@ -152,7 +140,6 @@ const createLoaders = (
     aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
     selectOptions: selectOptionsLoader,
     catalogMetadata: catalogMetadataLoader,
-    catalogDimensionNames: catalogDimensionNamesLoader,
     compareFacts: compareFactsLoader,
     compareAggregatedFacts: compareAggregatedFactsLoader,
     crossDatabaseSelectOptions: crossDatabaseSelectOptionsLoader,
@@ -160,8 +147,6 @@ const createLoaders = (
     // Méthode de nettoyage du cache de l'ensemble des loaders
     clearAll: () => {
       metadataLoader.clearAll();
-      dimensionLoader.clearAll();
-      dimensionValueLoader.clearAll();
       factLoader.clearAll();
       factWithCountLoader.clearAll();
       factWithMetadataLoader.clearAll();
@@ -170,7 +155,6 @@ const createLoaders = (
       aggregatedFactsWithCountLoader.clearAll();
       selectOptionsLoader.clearAll();
       catalogMetadataLoader.clearAll();
-      catalogDimensionNamesLoader.clearAll();
       compareFactsLoader.clearAll();
       compareAggregatedFactsLoader.clearAll();
       crossDatabaseSelectOptionsLoader.clearAll();
@@ -180,8 +164,6 @@ const createLoaders = (
     prime: async (initialData: PrimeData = {}) => {
       const {
         metadata = [],
-        dimensions = [],
-        dimensionValues = [],
         facts = [],
         factsWithCount = [],
         factsWithMetadata = [],
@@ -194,12 +176,6 @@ const createLoaders = (
       // Amorçage de chaque loader avec ses données initiales
       metadata.forEach(({ key, value }) => {
         metadataLoader.prime(key, value);
-      });
-      dimensions.forEach(({ key, value }) => {
-        dimensionLoader.prime(key, value);
-      });
-      dimensionValues.forEach(({ key, value }) => {
-        dimensionValueLoader.prime(key, value);
       });
       facts.forEach(({ key, value }) => {
         factLoader.prime(key, value);

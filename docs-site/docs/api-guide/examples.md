@@ -22,8 +22,8 @@ query {
 ```
 
 `getCatalogs` returns each catalog with its identifier, default schema, and
-the list of hosted schemas. Per-schema details (`fields`, `dimensionNames`)
-are exposed as sub-fields and only loaded when the client requests them —
+the list of hosted schemas. Per-schema details (`fields`) are exposed as
+sub-fields and only loaded when the client requests them —
 see the cascade example below — or via `getCatalogSchema` / `getFields`.
 
 ## Inspect a schema's fields
@@ -42,12 +42,11 @@ query {
 ## Cascade introspection: catalogs → schemas → fields
 
 A single round-trip can fetch every catalog with the metadata of every one
-of its schemas. The `fields` and `dimensionNames` sub-fields are resolved
-lazily through GraphQL's selection set, so requesting `schemas { name }` is
-just as cheap as the previous example — only adding `fields` or
-`dimensionNames` triggers the per-schema loads (each load is batched and
-DataLoader-cached, so a multi-schema catalog hits the database once per
-schema, in parallel).
+of its schemas. The `fields` sub-field is resolved lazily through GraphQL's
+selection set, so requesting `schemas { name }` is just as cheap as the
+previous example — only adding `fields` triggers the per-schema loads (each
+load is batched and DataLoader-cached, so a multi-schema catalog hits the
+database once per schema, in parallel).
 
 ```graphql
 query {
@@ -56,7 +55,6 @@ query {
     defaultSchema
     schemas {
       name
-      dimensionNames
       fields {
         name
         label
@@ -84,7 +82,7 @@ query {
 ```
 
 The same `schema` argument is available on every data query
-(`getFactTable`, `getAggregatedFacts`, `getMetaData`, `getDimensionTable`,
+(`getFactTable`, `getAggregatedFacts`, `getMetaData`,
 `getSelectOptions`, `getGroupedSelectOptions`, `getFields`). An unknown
 schema returns a `GraphQLError` (allow-list validation).
 
@@ -106,11 +104,11 @@ query {
 }
 ```
 
-### Dimension table
+### Modalities of a categorical column
 
 ```graphql
 query {
-  getDimensionTable(name: "country", catalog: "macroeconomics", schema: "staging") {
+  getSelectOptions(fieldName: "country", catalog: "macroeconomics", schema: "staging") {
     value
     label
   }
@@ -170,11 +168,14 @@ query {
 }
 ```
 
-## Browse a dimension
+## Browse the modalities of a column
+
+The fact table stores labels, so a menu is a `SELECT DISTINCT` over the
+column and `label` always equals `value`.
 
 ```graphql
 query {
-  getDimensionTable(name: "country", catalog: "macroeconomics") {
+  getSelectOptions(fieldName: "country", catalog: "macroeconomics") {
     value
     label
   }
@@ -206,11 +207,13 @@ query {
     currentPage
     totalPages
     data {
-      value
-      dimensionDetails {
+      keys {
         name
         value
-        label
+      }
+      measures {
+        name
+        value
       }
     }
   }
@@ -355,7 +358,6 @@ query {
     total
     data {
       key
-      keyLabel
       valueA
       valueB
       delta
@@ -365,14 +367,16 @@ query {
 }
 ```
 
-## Shared dimensions across catalogs
+## Shared fields across catalogs
 
-`getSharedDimensions` takes a list of `(catalog, schema)` targets. Each
-target's `schema` is optional and defaults to the catalog's default schema.
+`getSharedFields` takes a list of `(catalog, schema)` targets and returns the
+categorical columns every target declares under the same name and SQL type
+family — the columns usable as `joinFields` in a comparison. Each target's
+`schema` is optional and defaults to the catalog's default schema.
 
 ```graphql
 query {
-  getSharedDimensions(
+  getSharedFields(
     targets: [{ catalog: "macroeconomics" }, { catalog: "public_finance", schema: "staging" }]
   )
 }
@@ -386,5 +390,5 @@ For clients that cannot modify each query, pass the catalog ID as a header:
 curl -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
   -H "x-catalog-id: macroeconomics" \
-  -d '{"query": "{ getDimensionTable(name: \"country\") { value label } }"}'
+  -d '{"query": "{ getSelectOptions(fieldName: \"country\") { value label } }"}'
 ```

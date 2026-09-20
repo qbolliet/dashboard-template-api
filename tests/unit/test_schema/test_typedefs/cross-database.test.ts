@@ -15,14 +15,14 @@ describe('Object types — cross-database', () => {
   /**
    * Verification that ComparedFact exposes all comparison fields.
    */
-  test('ComparedFact has key, keyLabel, valueA, valueB, delta, deltaPercent', () => {
+  test('ComparedFact has key, valueA, valueB, delta, deltaPercent (no keyLabel)', () => {
     // Extraction des champs du type ComparedFact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('ComparedFact'),
     ).getFields();
 
     // Présence des champs de comparaison attendus
-    for (const f of ['key', 'keyLabel', 'valueA', 'valueB', 'delta', 'deltaPercent']) {
+    for (const f of ['key', 'valueA', 'valueB', 'delta', 'deltaPercent']) {
       expect(fields).toHaveProperty(f);
     }
 

@@ -1,16 +1,13 @@
 /**
  * Unit tests for CrossDatabaseLoader (src/loaders/cross-database.ts).
  *
- * Verifies fact comparison across two datasets (label-resolving JOIN generation,
- * numeric coercion, null handling), aggregated comparison with CTEs, and
- * cross-catalog select options for categorical and non-categorical fields.
+ * Verifies fact comparison across two datasets (JOIN generation, numeric
+ * coercion, null handling), aggregated comparison with CTEs, and cross-catalog
+ * select options.
  *
- * Note: compareFacts/compareAggregatedFacts first query the metadata table of
- * each side (getCategoricalMap) to decide whether each join/groupBy field is
- * categorical. In these unit tests we return empty metadata so fields are treated
- * as continuous (matched on raw values), which keeps the generated SQL simple and
- * deterministic. The two leading mocked `connection.all` results are those
- * metadata lookups; the main query and count query follow.
+ * Note: the fact table carries the labels, so no table is consulted before the
+ * comparison itself — each loader issues exactly its main query and its count
+ * query, which the mocked `connection.all` results follow in that order.
  *
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
@@ -148,11 +145,7 @@ describe('CrossDatabaseLoader', () => {
       const rows: CompareRow[] = [
         { key: '1', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
       ];
-      mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
-        .mockResolvedValueOnce(rows)
-        .mockResolvedValueOnce([{ total: 1 }]);
+      mockConnection.all.mockResolvedValueOnce(rows).mockResolvedValueOnce([{ total: 1 }]);
 
       const loader = createCompareFacts();
       const result = (await loader.load({
@@ -172,11 +165,7 @@ describe('CrossDatabaseLoader', () => {
     });
 
     test('inclut les deux catalogues dans la requête JOIN', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
       const loader = createCompareFacts();
       await loader.load({
@@ -188,19 +177,14 @@ describe('CrossDatabaseLoader', () => {
         sort: [],
       } satisfies CompareFactsParams);
 
-      // calls[0]/[1] = métadonnées ; calls[2] = requête principale
-      const query = mockConnection.all.mock.calls[2][0] as string;
+      const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('"db_a"');
       expect(query).toContain('"db_b"');
       expect(query).toContain('JOIN');
     });
 
     test('gère plusieurs joinFields (clé concaténée)', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
       const loader = createCompareFacts();
       await loader.load({
@@ -212,14 +196,12 @@ describe('CrossDatabaseLoader', () => {
         sort: [],
       } satisfies CompareFactsParams);
 
-      const query = mockConnection.all.mock.calls[2][0] as string;
+      const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('CONCAT');
     });
 
     test('convertit les valeurs numériques correctement', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
         .mockResolvedValueOnce([
           {
             key: '42',
@@ -248,8 +230,6 @@ describe('CrossDatabaseLoader', () => {
 
     test('gère les valeurs null dans delta et deltaPercent', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
         .mockResolvedValueOnce([
           {
             key: '1',
@@ -290,10 +270,8 @@ describe('CrossDatabaseLoader', () => {
       ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
-    test('résout les champs catégoriels via dim_* avant la jointure', async () => {
+    test('joint directement sur les libellés, sans table dim_*', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // getCategoricalMap A
-        .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // getCategoricalMap B
         .mockResolvedValueOnce([
           { key: 'France', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
         ])
@@ -309,21 +287,16 @@ describe('CrossDatabaseLoader', () => {
         sort: [],
       } satisfies CompareFactsParams);
 
-      // calls[0]/[1] = métadonnées ; calls[2] = requête principale
-      const mainQuery = mockConnection.all.mock.calls[2][0] as string;
-      // Les deux CTEs joignent leurs tables dim_country respectives
-      expect(mainQuery).toContain('JOIN "db_2023".main.dim_country');
-      expect(mainQuery).toContain('JOIN "db_2024".main.dim_country');
-      // La jointure finale porte sur les labels (jamais les IDs bruts)
+      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
+      // La colonne porte le libellé : aucune table de dimension n'est jointe
+      expect(mainQuery).not.toContain('dim_');
+      // Chaque côté expose sa colonne de jointure, alignée en VARCHAR
+      expect(mainQuery).toContain('CAST(f.country AS VARCHAR) AS k_country');
       expect(mainQuery).toContain('a.k_country = b.k_country');
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
       const loader = createCompareFacts();
       await loader.load({
@@ -337,15 +310,13 @@ describe('CrossDatabaseLoader', () => {
         sort: [],
       } satisfies CompareFactsParams);
 
-      const mainQuery = mockConnection.all.mock.calls[2][0] as string;
+      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
       expect(mainQuery).toContain('"db_2023".schema_a.fact_table');
       expect(mainQuery).toContain('"db_2023".schema_b.fact_table');
     });
 
-    test('gère le cas asymétrique : catégoriel côté A, brut côté B', async () => {
+    test('ne lit aucune métadonnée avant de comparer', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // catMapA — catégoriel
-        .mockResolvedValueOnce([]) // catMapB — non catégoriel
         .mockResolvedValueOnce([
           { key: 'France', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
         ])
@@ -361,15 +332,13 @@ describe('CrossDatabaseLoader', () => {
         sort: [],
       } satisfies CompareFactsParams)) as { data: CompareResult[] } | null;
 
-      // La requête réussit malgré l'asymétrie catégorielle
       expect(result).not.toBeNull();
       expect(result!.data[0]).toHaveProperty('key', 'France');
 
-      const mainQuery = mockConnection.all.mock.calls[2][0] as string;
-      // Côté A : dim join (champ catégoriel)
-      expect(mainQuery).toContain('JOIN "db_2023".main.dim_country');
-      // Côté B : valeur brute, pas de dim join
-      expect(mainQuery).not.toContain('JOIN "db_2024".main.dim_country');
+      // Deux requêtes seulement : la comparaison et son comptage
+      expect(mockConnection.all).toHaveBeenCalledTimes(2);
+      const queries = mockConnection.all.mock.calls.map((call) => call[0] as string);
+      expect(queries.some((query) => query.includes('.metadata'))).toBe(false);
     });
   });
 
@@ -383,8 +352,6 @@ describe('CrossDatabaseLoader', () => {
 
     test('retourne les faits agrégés comparés', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
         .mockResolvedValueOnce([
           { key: 'FR', valueA: 1000, valueB: 1200, delta: 200, deltaPercent: 20 },
         ])
@@ -407,11 +374,7 @@ describe('CrossDatabaseLoader', () => {
     });
 
     test('utilise les CTEs pour éviter le produit cartésien', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([]) // getCategoricalMap A
-        .mockResolvedValueOnce([]) // getCategoricalMap B
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
       const loader = createCompareAggregatedFacts();
       await loader.load({
@@ -423,7 +386,7 @@ describe('CrossDatabaseLoader', () => {
         offset: 0,
       } satisfies CompareAggregatedParams);
 
-      const query = mockConnection.all.mock.calls[2][0] as string;
+      const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('WITH');
       expect(query).toContain('agg_a');
       expect(query).toContain('agg_b');
@@ -443,10 +406,8 @@ describe('CrossDatabaseLoader', () => {
       ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
-    test("résout un groupBy catégoriel via dim_* avant l'agrégation", async () => {
+    test('agrège directement sur la colonne, sans jointure de dimension', async () => {
       mockConnection.all
-        .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // catMapA
-        .mockResolvedValueOnce([{ name: 'country', is_categorical: 1 }]) // catMapB
         .mockResolvedValueOnce([
           { key: 'France', valueA: 1000, valueB: 1200, delta: 200, deltaPercent: 20 },
         ])
@@ -462,19 +423,16 @@ describe('CrossDatabaseLoader', () => {
         offset: 0,
       } satisfies CompareAggregatedParams);
 
-      // calls[0]/[1] = métadonnées ; calls[2] = requête d'agrégation principale
-      const query = mockConnection.all.mock.calls[2][0] as string;
-      // Chaque CTE agrège par label (d.label), jamais par ID brut
-      expect(query).toContain('dim_country');
-      expect(query).toContain('GROUP BY d.label');
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      // La colonne porte le libellé : GROUP BY direct, aucune table dim_*
+      expect(query).not.toContain('dim_');
+      expect(query).toContain('GROUP BY country');
+      // Les clés des deux côtés sont alignées en VARCHAR avant la jointure
+      expect(query).toContain('CAST(country AS VARCHAR) AS key');
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([]) // catMapA
-        .mockResolvedValueOnce([]) // catMapB
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
       const loader = createCompareAggregatedFacts();
       await loader.load({
@@ -488,7 +446,7 @@ describe('CrossDatabaseLoader', () => {
         offset: 0,
       } satisfies CompareAggregatedParams);
 
-      const query = mockConnection.all.mock.calls[2][0] as string;
+      const query = mockConnection.all.mock.calls[0][0] as string;
       expect(query).toContain('"db_2023".schema_a.fact_table');
       expect(query).toContain('"db_2023".schema_b.fact_table');
     });
@@ -503,7 +461,7 @@ describe('CrossDatabaseLoader', () => {
     });
 
     test('retourne un tableau vide si aucun catalogue fourni', async () => {
-      mockConnection.all.mockResolvedValue([{ is_categorical: true }]);
+      mockConnection.all.mockResolvedValue([]);
 
       const loader = createCrossDatabaseSelectOptions();
       const result = await loader.load({
@@ -515,40 +473,43 @@ describe('CrossDatabaseLoader', () => {
       expect(result).toEqual([]);
     });
 
-    test('charge depuis la dimension pour un champ catégoriel (intersection sur label)', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: true }]) // métadonnée
-        .mockResolvedValueOnce([{ value: '1', label: 'France' }]); // dimension
+    test('intersecte les valeurs distinctes des fact tables', async () => {
+      mockConnection.all.mockResolvedValueOnce([{ value: 'France', label: 'France' }]);
 
       const loader = createCrossDatabaseSelectOptions();
       const result = await loader.load({
         fieldName: 'country',
-        catalogs: ['db1', 'db2'],
+        catalogs: ['db1', 'db2', 'db3'],
         limit: 50,
       } satisfies CrossDatabaseSelectParams);
 
-      expect(Array.isArray(result)).toBe(true);
-      const dimQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(dimQuery).toContain('dim_country');
-      // L'intersection se fait sur le label, jamais sur l'ID brut
-      expect(dimQuery).toContain('label IN');
+      expect(result).toEqual([{ value: 'France', label: 'France' }]);
+
+      // Une seule requête : plus de lecture préalable de metadata
+      expect(mockConnection.all).toHaveBeenCalledTimes(1);
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('fact_table');
+      expect(query).toContain('DISTINCT');
+      expect(query).toContain('INTERSECT');
+      expect(query).not.toContain('dim_');
+      // Valeurs alignées en VARCHAR, NULL exclus
+      expect(query).toContain('CAST(country AS VARCHAR)');
+      expect(query).toContain('IS NOT NULL');
     });
 
-    test('charge depuis fact_table pour un champ non catégoriel', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: false }]) // métadonnée
-        .mockResolvedValueOnce([{ value: '100' }]); // table des faits
+    test('sans autre catalogue, liste les valeurs de la seule cible', async () => {
+      mockConnection.all.mockResolvedValueOnce([{ value: '100', label: '100' }]);
 
       const loader = createCrossDatabaseSelectOptions();
       await loader.load({
         fieldName: 'amount',
-        catalogs: ['db1', 'db2'],
+        catalogs: ['db1'],
         limit: 50,
       } satisfies CrossDatabaseSelectParams);
 
-      const factQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(factQuery).toContain('fact_table');
-      expect(factQuery).toContain('DISTINCT');
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('DISTINCT');
+      expect(query).not.toContain('INTERSECT');
     });
 
     test('lève une erreur pour un fieldName invalide', async () => {

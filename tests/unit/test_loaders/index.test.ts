@@ -23,8 +23,6 @@ interface MockLoader {
 /** Objet loaders retourné par createLoaders — toutes les clés standard. */
 interface LoadersObject {
   metadata: MockLoader;
-  dimension: MockLoader;
-  dimensionValue: MockLoader;
   fact: MockLoader;
   factWithCount: MockLoader;
   factWithMetadata: MockLoader;
@@ -33,7 +31,6 @@ interface LoadersObject {
   aggregatedFactsWithCount: MockLoader;
   selectOptions: MockLoader;
   catalogMetadata: MockLoader;
-  catalogDimensionNames: MockLoader;
   compareFacts: MockLoader;
   compareAggregatedFacts: MockLoader;
   crossDatabaseSelectOptions: MockLoader;
@@ -45,7 +42,6 @@ interface LoadersObject {
 /** Données d'amorçage passées à prime(). */
 interface PrimeData {
   metadata?: Array<{ key: string; value: unknown }>;
-  dimensions?: Array<{ key: string; value: unknown }>;
   facts?: Array<{ key: string; value: unknown }>;
   selectOptions?: Array<{ key: string; value: unknown }>;
 }
@@ -89,11 +85,6 @@ jest.unstable_mockModule('../../../src/loaders/metadata.js', () => ({
   createMetadataLoader: jest.fn(() => makeMockLoader()),
 }));
 
-jest.unstable_mockModule('../../../src/loaders/dimension.js', () => ({
-  createDimensionLoader: jest.fn(() => makeMockLoader()),
-  createDimensionValueLoader: jest.fn(() => makeMockLoader()),
-}));
-
 jest.unstable_mockModule('../../../src/loaders/fact.js', () => ({
   createFactLoader: jest.fn(() => makeMockLoader()),
   createFactWithCountLoader: jest.fn(() => makeMockLoader()),
@@ -112,7 +103,6 @@ jest.unstable_mockModule('../../../src/loaders/select-options.js', () => ({
 
 jest.unstable_mockModule('../../../src/loaders/catalog.js', () => ({
   createCatalogMetadataLoader: jest.fn(() => makeMockLoader()),
-  createCatalogDimensionNamesLoader: jest.fn(() => makeMockLoader()),
 }));
 
 jest.unstable_mockModule('../../../src/loaders/cross-database.js', () => ({
@@ -127,8 +117,6 @@ jest.unstable_mockModule('../../../src/loaders/cross-database.js', () => ({
 let createLoaders: LoadersIndexModule['createLoaders'];
 let createLoadersForRequest: LoadersIndexModule['createLoadersForRequest'];
 let createMetadataLoader: jest.Mock;
-let createDimensionLoader: jest.Mock;
-let createDimensionValueLoader: jest.Mock;
 let createFactLoader: jest.Mock;
 let createFactWithCountLoader: jest.Mock;
 let createFactWithMetadataLoader: jest.Mock;
@@ -137,7 +125,6 @@ let createAggregatedFactsWithMetadataLoader: jest.Mock;
 let createAggregatedFactsWithCountLoader: jest.Mock;
 let createSelectOptionsLoader: jest.Mock;
 let createCatalogMetadataLoader: jest.Mock;
-let createCatalogDimensionNamesLoader: jest.Mock;
 let createCompareFacts: jest.Mock;
 let createCompareAggregatedFacts: jest.Mock;
 let createCrossDatabaseSelectOptions: jest.Mock;
@@ -149,12 +136,6 @@ beforeAll(async () => {
   ({ createMetadataLoader } = (await import('../../../src/loaders/metadata.js')) as {
     createMetadataLoader: jest.Mock;
   });
-
-  ({ createDimensionLoader, createDimensionValueLoader } =
-    (await import('../../../src/loaders/dimension.js')) as {
-      createDimensionLoader: jest.Mock;
-      createDimensionValueLoader: jest.Mock;
-    });
 
   ({ createFactLoader, createFactWithCountLoader, createFactWithMetadataLoader } =
     (await import('../../../src/loaders/fact.js')) as {
@@ -177,11 +158,9 @@ beforeAll(async () => {
     createSelectOptionsLoader: jest.Mock;
   });
 
-  ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } =
-    (await import('../../../src/loaders/catalog.js')) as {
-      createCatalogMetadataLoader: jest.Mock;
-      createCatalogDimensionNamesLoader: jest.Mock;
-    });
+  ({ createCatalogMetadataLoader } = (await import('../../../src/loaders/catalog.js')) as {
+    createCatalogMetadataLoader: jest.Mock;
+  });
 
   ({ createCompareFacts, createCompareAggregatedFacts, createCrossDatabaseSelectOptions } =
     (await import('../../../src/loaders/cross-database.js')) as {
@@ -194,8 +173,6 @@ beforeAll(async () => {
 // Clés de tous les loaders dans l'objet retourné par createLoaders
 const ALL_LOADER_KEYS: Array<keyof Omit<LoadersObject, 'clearAll' | 'prime'>> = [
   'metadata',
-  'dimension',
-  'dimensionValue',
   'fact',
   'factWithCount',
   'factWithMetadata',
@@ -204,7 +181,6 @@ const ALL_LOADER_KEYS: Array<keyof Omit<LoadersObject, 'clearAll' | 'prime'>> = 
   'aggregatedFactsWithCount',
   'selectOptions',
   'catalogMetadata',
-  'catalogDimensionNames',
   'compareFacts',
   'compareAggregatedFacts',
   'crossDatabaseSelectOptions',
@@ -219,8 +195,6 @@ describe('createLoaders', () => {
     test('contient tous les loaders standard', () => {
       const loaders = createLoaders();
       expect(loaders).toHaveProperty('metadata');
-      expect(loaders).toHaveProperty('dimension');
-      expect(loaders).toHaveProperty('dimensionValue');
       expect(loaders).toHaveProperty('fact');
       expect(loaders).toHaveProperty('factWithCount');
       expect(loaders).toHaveProperty('factWithMetadata');
@@ -233,7 +207,6 @@ describe('createLoaders', () => {
     test('contient les loaders catalog', () => {
       const loaders = createLoaders();
       expect(loaders).toHaveProperty('catalogMetadata');
-      expect(loaders).toHaveProperty('catalogDimensionNames');
     });
 
     test('contient les loaders cross-database', () => {
@@ -258,8 +231,6 @@ describe('createLoaders', () => {
       createLoaders(databaseId);
 
       expect(createMetadataLoader).toHaveBeenCalledWith(databaseId, null);
-      expect(createDimensionLoader).toHaveBeenCalledWith(databaseId, null);
-      expect(createDimensionValueLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createFactLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createFactWithCountLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createFactWithMetadataLoader).toHaveBeenCalledWith(databaseId, null);
@@ -272,7 +243,6 @@ describe('createLoaders', () => {
     test('les loaders catalog et cross-database sont créés sans argument', () => {
       createLoaders('analytics');
       expect(createCatalogMetadataLoader).toHaveBeenCalledWith();
-      expect(createCatalogDimensionNamesLoader).toHaveBeenCalledWith();
       expect(createCompareFacts).toHaveBeenCalledWith();
       expect(createCompareAggregatedFacts).toHaveBeenCalledWith();
       expect(createCrossDatabaseSelectOptions).toHaveBeenCalledWith();
@@ -321,18 +291,6 @@ describe('createLoaders', () => {
       });
 
       expect(loaders.metadata.prime).toHaveBeenCalledWith('age', { name: 'age', type: 'integer' });
-    });
-
-    test('amorce le loader dimension', async () => {
-      const loaders = createLoaders();
-
-      await loaders.prime({
-        dimensions: [{ key: 'country', value: [{ value: '1', label: 'France' }] }],
-      });
-
-      expect(loaders.dimension.prime).toHaveBeenCalledWith('country', [
-        { value: '1', label: 'France' },
-      ]);
     });
 
     test('amorce le loader fact', async () => {

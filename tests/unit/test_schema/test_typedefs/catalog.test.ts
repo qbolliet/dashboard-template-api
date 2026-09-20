@@ -3,7 +3,7 @@
  *
  * Validates the Catalog object type, the CatalogSchemaInput input type,
  * and the catalog-related query fields exposed by the schema:
- * getCatalogs, getCatalogSchema, getFields, and getSharedDimensions.
+ * getCatalogs, getCatalogSchema, getFields, and getSharedFields.
  */
 
 import { schema } from '../../../../src/schema/index.js';
@@ -41,19 +41,20 @@ describe('Object types — catalog', () => {
   /**
    * Verification that CatalogSchemaInfo exposes the lazy cascade fields.
    */
-  test('CatalogSchemaInfo has name, fields, dimensionNames (all non-null)', () => {
+  test('CatalogSchemaInfo has name and fields (all non-null)', () => {
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('CatalogSchemaInfo'),
     ).getFields();
 
-    // Présence des champs : name + cascade lazy (fields, dimensionNames)
-    for (const f of ['name', 'fields', 'dimensionNames']) {
+    // Présence des champs : name + cascade lazy (fields)
+    for (const f of ['name', 'fields']) {
       expect(fields).toHaveProperty(f);
     }
 
     expect(isNonNullType(fields.name.type)).toBe(true);
     expect(isNonNullType(fields.fields.type)).toBe(true);
-    expect(isNonNullType(fields.dimensionNames.type)).toBe(true);
+    // La couche dimension a disparu
+    expect(fields).not.toHaveProperty('dimensionNames');
   });
 });
 
@@ -117,18 +118,20 @@ describe('Query fields — catalog', () => {
   });
 
   /**
-   * Verification that getSharedDimensions takes a single required targets argument
+   * Verification that getSharedFields takes a single required targets argument
    * typed as a non-null list of non-null CatalogSchemaInput.
    */
-  test('getSharedDimensions has a single required targets arg', () => {
-    expect(queryFields).toHaveProperty('getSharedDimensions');
+  test('getSharedFields has a single required targets arg', () => {
+    expect(queryFields).toHaveProperty('getSharedFields');
+    // L'ancien nom a disparu, sans dépréciation
+    expect(queryFields).not.toHaveProperty('getSharedDimensions');
 
     // Un seul argument exposé : targets
-    const args = queryFields.getSharedDimensions.args.map((a) => a.name).sort();
+    const args = queryFields.getSharedFields.args.map((a) => a.name).sort();
     expect(args).toEqual(['targets']);
 
     // Argument targets obligatoire (liste non-null d'inputs non-null)
-    const targetsArg = queryFields.getSharedDimensions.args.find((a) => a.name === 'targets')!;
+    const targetsArg = queryFields.getSharedFields.args.find((a) => a.name === 'targets')!;
     expect(isNonNullType(targetsArg.type)).toBe(true);
 
     // Le contenu de la liste est lui aussi non-null (CatalogSchemaInput!)

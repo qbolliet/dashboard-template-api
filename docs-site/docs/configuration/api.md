@@ -15,10 +15,10 @@ API:
   DOMAIN: ${API_DOMAIN:-'https://your-production-domain.com'}
 ```
 
-| Key | Env var | Default | Description |
-|-----|---------|---------|-------------|
-| `PORT` | `PORT` | `4000` | TCP port the server listens on |
-| `DOMAIN` | `API_DOMAIN` | — | Public domain used for CORS and HSTS |
+| Key      | Env var      | Default | Description                          |
+| -------- | ------------ | ------- | ------------------------------------ |
+| `PORT`   | `PORT`       | `4000`  | TCP port the server listens on       |
+| `DOMAIN` | `API_DOMAIN` | —       | Public domain used for CORS and HSTS |
 
 ## CORS
 
@@ -49,11 +49,11 @@ API:
     MAX_FIELDS: ${MAX_FIELDS:-50}
 ```
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `MAX_REQUEST_SIZE` | `100kb` | Maximum HTTP request body size |
-| `MAX_FIELD_SIZE` | `1000` | Maximum value length for a single form field |
-| `MAX_FIELDS` | `50` | Maximum number of fields in a multipart form |
+| Key                | Default | Description                                  |
+| ------------------ | ------- | -------------------------------------------- |
+| `MAX_REQUEST_SIZE` | `100kb` | Maximum HTTP request body size               |
+| `MAX_FIELD_SIZE`   | `1000`  | Maximum value length for a single form field |
+| `MAX_FIELDS`       | `50`    | Maximum number of fields in a multipart form |
 
 ## GraphQL introspection & playground
 
@@ -85,15 +85,14 @@ API:
 
 Per-operation query timeouts:
 
-| Operation | Default |
-|-----------|---------|
-| Simple fact query | 10 000 ms |
-| Complex fact query | 15 000 ms |
-| Simple aggregation | 10 000 ms |
+| Operation           | Default   |
+| ------------------- | --------- |
+| Simple fact query   | 10 000 ms |
+| Complex fact query  | 15 000 ms |
+| Simple aggregation  | 10 000 ms |
 | Complex aggregation | 15 000 ms |
-| Dimension query | 5 000 ms |
-| Metadata query | 5 000 ms |
-| Select options | 5 000 ms |
+| Metadata query      | 5 000 ms  |
+| Select options      | 5 000 ms  |
 
 Override via the corresponding env vars (`FACT_SIMPLE_TIMEOUT`, `FACT_COMPLEX_TIMEOUT`, …).
 
@@ -106,7 +105,6 @@ API:
     MAX_BATCH_SIZE: ${MAX_LOADER_BATCH_SIZE:-50}
     DEFAULT_CACHE_TIMEOUT: ${LOADER_CACHE_TIMEOUT:-300}
     FACT_CACHE_TIMEOUT: ${FACT_LOADER_CACHE_TIMEOUT:-300}
-    DIMENSION_CACHE_TIMEOUT: ${DIMENSION_LOADER_CACHE_TIMEOUT:-600}
     METADATA_CACHE_TIMEOUT: ${METADATA_LOADER_CACHE_TIMEOUT:-600}
     SELECT_OPTIONS_CACHE_TIMEOUT: ${SELECT_OPTIONS_LOADER_CACHE_TIMEOUT:-600}
 ```

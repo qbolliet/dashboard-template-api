@@ -160,7 +160,7 @@ const crossDatabaseResolvers = {
     },
 
     /**
-     * Compares aggregated facts across two datasets grouped by a dimension.
+     * Compares aggregated facts across two datasets grouped by a column.
      * Arguments follow {@link CompareAggregatedFactsArgs}.
      *
      * @param _ - Parent resolver result (unused at root).

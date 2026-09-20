@@ -126,8 +126,8 @@ describe('getAggregatedFacts', () => {
           aggregation: AVG
           structuredFilters: {
             children: [
-              { criterion: { variable: "country", operation: IN, value: [1, 2] } }
-              { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }
+              { criterion: { variable: "country", operation: IN, value: ["France", "Germany"] } }
+              { connector: AND, criterion: { variable: "kind", operation: EQ, value: "Actual" } }
             ]
           }
           limit: 20
@@ -148,8 +148,11 @@ describe('getAggregatedFacts', () => {
         {
           connector: 'AND',
           children: [
-            { criterion: { variable: 'kind', operation: 'EQ', value: 1 } },
-            { connector: 'OR', criterion: { variable: 'kind', operation: 'EQ', value: 2 } },
+            { criterion: { variable: 'kind', operation: 'EQ', value: 'Actual' } },
+            {
+              connector: 'OR',
+              criterion: { variable: 'kind', operation: 'EQ', value: 'Forecast' },
+            },
           ],
         },
       ],
@@ -166,8 +169,8 @@ describe('getAggregatedFacts', () => {
 
     expect(result.errors).toBeUndefined();
     const groups = result.data!.agg as Array<{ key: string; count: number }>;
-    // Seuls les groupes kind 1 et 2 subsistent, et les effectifs se recoupent
-    expect(groups.every((g) => ['1', '2'].includes(g.key))).toBe(true);
+    // Seuls les groupes Actual et Forecast subsistent, et les effectifs se recoupent
+    expect(groups.every((g) => ['Actual', 'Forecast'].includes(g.key))).toBe(true);
     const sum = groups.reduce((acc, g) => acc + g.count, 0);
     expect(sum).toBe((result.data!.facts as { total: number }).total);
   });
@@ -227,12 +230,11 @@ describe('getAggregatedFacts', () => {
     }
   });
 
-  test('resolves keyLabel (human-readable, different from key)', async () => {
+  test('la clé de regroupement porte directement le libellé', async () => {
     const query = `
       query {
-        getAggregatedFacts(measure: "value", groupBy: "country", aggregation: SUM, limit: 5, offset: 0) {
+        getAggregatedFacts(measure: "value", groupBy: "country", aggregation: SUM, limit: 50, offset: 0) {
           key
-          keyLabel
           aggregatedValue
           count
         }
@@ -241,9 +243,22 @@ describe('getAggregatedFacts', () => {
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
-    const first = (result.data!.getAggregatedFacts as Array<{ key: string; keyLabel: string }>)[0];
-    expect(first.keyLabel).toBeDefined();
-    expect(first.keyLabel).not.toBe(first.key);
+    const keys = (result.data!.getAggregatedFacts as Array<{ key: string }>).map((g) => g.key);
+    expect(keys.length).toBeGreaterThan(0);
+    // La fact table stocke le libellé : plus aucune résolution, plus de keyLabel
+    expect(keys).toContain('France');
+  });
+
+  test('keyLabel a disparu du schéma', async () => {
+    const query = `
+      query {
+        getAggregatedFacts(measure: "value", groupBy: "country", limit: 1, offset: 0) { key keyLabel }
+      }
+    `;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeDefined();
+    expect(result.errors![0].message).toMatch(/keyLabel/);
   });
 
   test('paginates — respects limit', async () => {
@@ -343,7 +358,7 @@ describe('getAggregatedFactsWithMetadata', () => {
     const query = `
       query {
         getAggregatedFactsWithMetadata(measure: "value", groupBy: "indicator", aggregation: AVG, limit: 10, offset: 0) {
-          data { key keyLabel aggregatedValue count }
+          data { key aggregatedValue count }
           metadata {
             count
             keyExtent

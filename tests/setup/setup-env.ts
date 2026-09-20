@@ -16,6 +16,9 @@ process.env.DB_PATH = 'test-data/test-database.db';
 process.env.DEFAULT_CATALOG_PATH = 'data/test-default.ducklake';
 process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
 process.env.DEFAULT_READ_ONLY = 'true';
+// Les trois schémas du catalogue default : main (jeu principal), predictions
+// (comparaisons cross-schéma) et geography (hiérarchie de colonnes)
+process.env.DEFAULT_SCHEMAS = '["main", "predictions", "geography"]';
 // Redirection de macroeconomics et public_finance vers les catalogues synthétiques locaux
 process.env.MACROECONOMICS_CATALOG_PATH = 'data/test-macroeconomics.ducklake';
 process.env.MACROECONOMICS_DATA_PATH = 'data/test-macroeconomics_data/';
@@ -40,7 +43,6 @@ process.env.CACHE_TTL = '1000'; // TTL court pour les tests
 process.env.MAX_QUERY_COMPLEXITY = '1000';
 process.env.RATE_LIMIT_MAX = '1000'; // Limites élevées pour les tests
 // Timeouts élevés pour absorber la latence de démarrage à froid de DuckDB en environnement de test
-process.env.DIMENSION_TIMEOUT = '15000';
 process.env.METADATA_TIMEOUT = '15000';
 process.env.SELECT_OPTIONS_TIMEOUT = '15000';
 

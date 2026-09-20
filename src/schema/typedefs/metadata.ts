@@ -15,7 +15,6 @@ const metadataTypeDefs: DocumentNode = gql`
   type Metadata {
     name: String
     label: String
-    python_type: String
     sql_type: String
     is_categorical: Boolean
     is_primary_key: Boolean

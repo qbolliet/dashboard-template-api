@@ -2,7 +2,7 @@
  * Tests for the fact GraphQL type definitions.
  *
  * Validates the DataFormat enum, all fact-related object types
- * (DimensionDetail, Fact, PaginatedFacts, DatasetMetadata, DatasetWithMetadata,
+ * (FieldValue, Fact, PaginatedFacts, DatasetMetadata, DatasetWithMetadata,
  * AggregationStatistics, AggregatedFactsMetadata, AggregatedFactsWithMetadata),
  * and the fact query fields with their argument signatures.
  */
@@ -40,51 +40,49 @@ describe('Enums — fact', () => {
 
 describe('Object types — fact', () => {
   /**
-   * Verification that DimensionDetail has non-null name, value, and label.
+   * Verification that Fact exposes keys and measures, both non-null lists.
    */
-  test('DimensionDetail has non-null name, value, label', () => {
-    // Extraction des champs du type DimensionDetail
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DimensionDetail'),
-    ).getFields();
-
-    // Caractère non-null de chaque champ descriptif
-    for (const f of ['name', 'value', 'label']) {
-      expect(fields).toHaveProperty(f);
-      expect(isNonNullType(fields[f].type)).toBe(true);
-    }
-  });
-
-  /**
-   * Verification that Fact exposes measures (non-null list) and dimensionDetails.
-   */
-  test('Fact has measures and dimensionDetails (no scalar value)', () => {
+  test('Fact has keys and measures (no scalar value, no dimensionDetails)', () => {
     // Extraction des champs du type Fact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('Fact'),
     ).getFields();
 
+    expect(fields).toHaveProperty('keys');
     expect(fields).toHaveProperty('measures');
-    expect(fields).toHaveProperty('dimensionDetails');
     // Le champ scalaire mono-mesure a été retiré au profit de measures
     expect(fields).not.toHaveProperty('value');
-    // measures est une liste non-nullable
+    // La couche dimension a disparu : plus de dimensionDetails
+    expect(fields).not.toHaveProperty('dimensionDetails');
+    // Les deux listes sont non-nullables
+    expect(isNonNullType(fields.keys.type)).toBe(true);
     expect(isNonNullType(fields.measures.type)).toBe(true);
   });
 
   /**
-   * Verification that Measure exposes name (non-null) and value (JSON).
+   * Verification that the removed dimension types are gone from the schema.
    */
-  test('Measure has non-null name and a value field', () => {
-    // Extraction des champs du type Measure
+  test('DimensionDetail, Measure and Dimension no longer exist', () => {
+    for (const typeName of ['DimensionDetail', 'Measure', 'Dimension']) {
+      expect(schema.getType(typeName)).toBeUndefined();
+    }
+  });
+
+  /**
+   * Verification that FieldValue exposes name (non-null) and value (JSON).
+   */
+  test('FieldValue has non-null name and a value field', () => {
+    // Extraction des champs du type FieldValue
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('Measure'),
+      schema.getType('FieldValue'),
     ).getFields();
 
     expect(fields).toHaveProperty('name');
     expect(isNonNullType(fields.name.type)).toBe(true);
+    // La valeur reste nullable : une clé de hiérarchie absente vaut NULL
     expect(fields).toHaveProperty('value');
-    // Pas de label dupliqué par mesure
+    expect(isNonNullType(fields.value.type)).toBe(false);
+    // Pas de label dupliqué par colonne : la fact table porte le libellé
     expect(fields).not.toHaveProperty('label');
   });
 

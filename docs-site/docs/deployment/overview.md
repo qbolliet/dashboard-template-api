@@ -57,7 +57,7 @@ This section covers running the API in production. Three deployment modes are su
 | Component            | Purpose                                               | Notes                                        |
 | -------------------- | ----------------------------------------------------- | -------------------------------------------- |
 | API container        | Apollo + Express + DuckDB                             | Stateless, scales horizontally               |
-| Redis                | Cache for query results, metadata, dimensions         | Provided by Bitnami sub-chart, or external   |
+| Redis                | Cache for query results, metadata, select options     | Provided by Bitnami sub-chart, or external   |
 | S3 bucket            | Stores `.ducklake` catalogs + parquet data files      | Read via DuckDB httpfs                       |
 | Ingress              | TLS termination + routing                             | nginx-ingress recommended                    |
 | ConfigMap            | Non-secret env (catalog paths, NODE_ENV, REDIS_HOST…) | Generated from `values.config`               |

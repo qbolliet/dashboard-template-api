@@ -17,20 +17,16 @@ describe('Object types — metadata', () => {
   test('Metadata has all six fields', () => {
     // Extraction des champs du type Metadata
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('Metadata')
+      schema.getType('Metadata'),
     ).getFields();
 
-    // Présence des six champs descriptifs de colonne
-    for (const f of [
-      'name',
-      'label',
-      'python_type',
-      'sql_type',
-      'is_categorical',
-      'is_primary_key',
-    ]) {
+    // Présence des cinq champs descriptifs de colonne
+    for (const f of ['name', 'label', 'sql_type', 'is_categorical', 'is_primary_key']) {
       expect(fields).toHaveProperty(f);
     }
+
+    // python_type n'existe plus dans la base (redondant avec sql_type)
+    expect(fields).not.toHaveProperty('python_type');
   });
 });
 

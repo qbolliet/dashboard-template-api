@@ -4,8 +4,8 @@
  *
  * Covers pagination, filter trees (FilterNode: AND/OR groups, typed
  * operations, BAD_USER_INPUT rejections), sorting, field selection,
- * dimension details, format options (OBJECTS/ARRAYS), SQL injection guards,
- * and multi-resolver single-request composition.
+ * the key/measure partition of a row, format options (OBJECTS/ARRAYS),
+ * SQL injection guards, and multi-resolver single-request composition.
  */
 
 import { ApolloServer } from '@apollo/server';
@@ -120,8 +120,8 @@ describe('getFactTable', () => {
         getFactTable(
           structuredFilters: {
             children: [
-              { criterion: { variable: "country", operation: EQ, value: 1 } }
-              { connector: AND, criterion: { variable: "kind", operation: EQ, value: 1 } }
+              { criterion: { variable: "country", operation: EQ, value: "France" } }
+              { connector: AND, criterion: { variable: "kind", operation: EQ, value: "Actual" } }
             ]
           }
           limit: 10
@@ -144,23 +144,26 @@ describe('getFactTable', () => {
   });
 
   test('OR group is equivalent to IN, and parenthesized sub-groups combine with AND', async () => {
-    const viaIn = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
+    const viaIn = await countWith({ children: [leaf('country', 'IN', ['France', 'Germany'])] });
     const viaOr = await countWith({
-      children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')],
+      children: [leaf('country', 'EQ', 'France'), leaf('country', 'EQ', 'Germany', 'OR')],
     });
     expect(viaIn.errors).toBeUndefined();
     expect(viaOr.errors).toBeUndefined();
     expect(viaOr.total).toBe(viaIn.total);
 
-    // kind = 1 AND (country = 1 OR country = 2) ≡ kind = 1 AND country IN (1, 2)
+    // kind = Actual AND (country = France OR Germany) ≡ kind = Actual AND country IN (…)
     const grouped = await countWith({
       children: [
-        leaf('kind', 'EQ', 1),
-        { connector: 'AND', children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')] },
+        leaf('kind', 'EQ', 'Actual'),
+        {
+          connector: 'AND',
+          children: [leaf('country', 'EQ', 'France'), leaf('country', 'EQ', 'Germany', 'OR')],
+        },
       ],
     });
     const flat = await countWith({
-      children: [leaf('kind', 'EQ', 1), leaf('country', 'IN', [1, 2], 'AND')],
+      children: [leaf('kind', 'EQ', 'Actual'), leaf('country', 'IN', ['France', 'Germany'], 'AND')],
     });
     expect(grouped.errors).toBeUndefined();
     expect(grouped.total).toBe(flat.total);
@@ -168,13 +171,16 @@ describe('getFactTable', () => {
   });
 
   test('negate on a leaf and on a group is the SQL complement', async () => {
-    const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
+    const inSet = await countWith({ children: [leaf('country', 'IN', ['France', 'Germany'])] });
     const negatedLeaf = await countWith({
-      children: [{ negate: true, ...leaf('country', 'IN', [1, 2]) }],
+      children: [{ negate: true, ...leaf('country', 'IN', ['France', 'Germany']) }],
     });
     const negatedGroup = await countWith({
       children: [
-        { negate: true, children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')] },
+        {
+          negate: true,
+          children: [leaf('country', 'EQ', 'France'), leaf('country', 'EQ', 'Germany', 'OR')],
+        },
       ],
     });
     const all = await countWith(null);
@@ -204,7 +210,10 @@ describe('getFactTable', () => {
     const withConnector = async (connector: string) =>
       (
         await countWith({
-          children: [leaf('country', 'EQ', 1), { ...leaf('kind', 'EQ', 1), connector }],
+          children: [
+            leaf('country', 'EQ', 'France'),
+            { ...leaf('kind', 'EQ', 'Actual'), connector },
+          ],
         })
       ).total;
 
@@ -225,8 +234,8 @@ describe('getFactTable', () => {
 
   test('NOT_IN is the complement of IN', async () => {
     const all = await countWith(null);
-    const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
-    const notIn = await countWith({ children: [leaf('country', 'NOT_IN', [1, 2])] });
+    const inSet = await countWith({ children: [leaf('country', 'IN', ['France', 'Germany'])] });
+    const notIn = await countWith({ children: [leaf('country', 'NOT_IN', ['France', 'Germany'])] });
     expect(notIn.errors).toBeUndefined();
     expect(inSet.total! + notIn.total!).toBe(all.total);
   });
@@ -240,10 +249,10 @@ describe('getFactTable', () => {
     expect(result.total).toBe(gte.total);
   });
 
-  test('filters a TIMESTAMP column with ISO 8601 dates', async () => {
+  test('filters a DATE column with ISO 8601 dates', async () => {
     const all = await countWith(null);
     const between = await countWith({
-      children: [leaf('date', 'BETWEEN', { min: '1900-01-01', max: '2200-12-31T23:59:59' })],
+      children: [leaf('date', 'BETWEEN', { min: '1900-01-01', max: '2200-12-31' })],
     });
     const before = await countWith({ children: [leaf('date', 'BEFORE', '1900-01-01')] });
     expect(between.errors).toBeUndefined();
@@ -264,7 +273,7 @@ describe('getFactTable', () => {
     ['unknown column', { children: [leaf('no_such_column', 'EQ', 1)] }, 'no_such_column'],
     [
       'operation incompatible with the type',
-      { children: [leaf('country', 'CONTAINS', 'x')] },
+      { children: [leaf('value', 'CONTAINS', 'x')] },
       'Allowed operations',
     ],
     ['incomplete BETWEEN', { children: [leaf('value', 'BETWEEN', { min: 1 })] }, '{min, max}'],
@@ -273,17 +282,12 @@ describe('getFactTable', () => {
     [
       'criterion + children on one node',
       {
-        criterion: { variable: 'country', operation: 'EQ', value: 1 },
-        children: [leaf('kind', 'EQ', 1)],
+        criterion: { variable: 'country', operation: 'EQ', value: 'France' },
+        children: [leaf('kind', 'EQ', 'Actual')],
       },
       'exactly one',
     ],
-    ['invalid date', { children: [leaf('date', 'AFTER', '31/12/2024')] }, 'ISO 8601'],
-    [
-      'date out of TIMESTAMP_NS range',
-      { children: [leaf('date', 'BEFORE', '2999-12-31')] },
-      'out of range',
-    ],
+    ['invalid date', { children: [leaf('date', 'AFTER', '31/12/2024')] }, 'expected YYYY-MM-DD'],
     [
       'injection in variable',
       { children: [leaf('country = 1; DROP TABLE fact_table; --', 'EQ', 1)] },
@@ -339,13 +343,13 @@ describe('getFactTable', () => {
     expect((result.data!.getFactTable as { data: unknown[] }).data.length).toBeLessThanOrEqual(5);
   });
 
-  test('returns dimension details with labels', async () => {
+  test('keys porte toutes les colonnes-clés, mesures exclues', async () => {
     const query = `
       query {
         getFactTable(limit: 5, offset: 0) {
           data {
+            keys { name value }
             measures { name value }
-            dimensionDetails { name value label }
           }
           total
         }
@@ -355,18 +359,65 @@ describe('getFactTable', () => {
 
     expect(result.errors).toBeUndefined();
 
-    // Vérification de la présence du détail de dimension "country" avec son label
     const firstRow = (
       result.data!.getFactTable as {
-        data: Array<{ dimensionDetails: Array<{ name: string; label: unknown }> }>;
+        data: Array<{
+          keys: Array<{ name: string; value: unknown }>;
+          measures: Array<{ name: string; value: unknown }>;
+        }>;
       }
     ).data[0];
-    const details = firstRow.dimensionDetails;
-    expect(Array.isArray(details)).toBe(true);
-    const countryDetail = details.find((d) => d.name === 'country');
-    if (countryDetail) {
-      expect(countryDetail.label).toBeDefined();
-    }
+
+    const keyNames = firstRow.keys.map((k) => k.name);
+    // Les coordonnées catégorielles ET non catégorielles sont des clés :
+    // c'est le piège que Fact.keys corrige (date y figure, pas dans measures).
+    expect(keyNames).toEqual(
+      expect.arrayContaining(['country', 'indicator', 'kind', 'date', 'horizon']),
+    );
+    // La colonne porte son libellé, sans résolution
+    expect(firstRow.keys.find((k) => k.name === 'country')!.value).toEqual(expect.any(String));
+
+    const measureNames = firstRow.measures.map((m) => m.name);
+    expect(measureNames).toEqual(expect.arrayContaining(['value', 'quality_score']));
+    // Aucune colonne n'apparaît des deux côtés
+    expect(keyNames.filter((name) => measureNames.includes(name))).toEqual([]);
+  });
+
+  test('une clé NULL d’une hiérarchie irrégulière reste exposée', async () => {
+    const query = `
+      query {
+        getFactTable(
+          schema: "geography"
+          structuredFilters: { children: [{ criterion: { variable: "commune", operation: IS_NULL } }] }
+          limit: 1
+          offset: 0
+        ) {
+          data { keys { name value } measures { name value } }
+          total
+        }
+      }
+    `;
+    const result = await execute(server, { query });
+
+    expect(result.errors).toBeUndefined();
+    const row = (
+      result.data!.getFactTable as {
+        data: Array<{
+          keys: Array<{ name: string; value: unknown }>;
+          measures: Array<{ name: string; value: unknown }>;
+        }>;
+        total: number;
+      }
+    ).data[0];
+
+    // Le niveau absent vaut NULL et n'est pas omis : la forme des lignes est stable
+    const commune = row.keys.find((k) => k.name === 'commune');
+    expect(commune).toBeDefined();
+    expect(commune!.value).toBeNull();
+    // Les niveaux supérieurs sont bien renseignés, apostrophe comprise
+    expect(row.keys.find((k) => k.name === 'departement')!.value).toBe('Saône-et-Loire');
+    // Une mesure nulle est également conservée
+    expect(row.measures.find((m) => m.name === 'density')!.value).toBeNull();
   });
 
   test('handles multiple pages — currentPage increments correctly', async () => {
@@ -391,9 +442,9 @@ describe('getFactTable', () => {
   test('handles mixed operations in a single filter tree', async () => {
     const { total, errors } = await countWith({
       children: [
-        leaf('country', 'IN', [1, 2, 3]),
-        leaf('kind', 'EQ', 1, 'AND'),
-        leaf('indicator', 'NOT_IN', [5, 6], 'AND'),
+        leaf('country', 'IN', ['France', 'Germany', 'Spain']),
+        leaf('kind', 'EQ', 'Actual', 'AND'),
+        leaf('indicator', 'NOT_IN', ['Trade Balance'], 'AND'),
       ],
     });
 
@@ -450,7 +501,7 @@ describe('getFactTable', () => {
     `;
     const result = await execute(server, {
       query,
-      variables: { country: 1, limit: 10, offset: 0 },
+      variables: { country: 'France', limit: 10, offset: 0 },
     });
 
     expect(result.errors).toBeUndefined();
@@ -467,8 +518,14 @@ describe('getFactTable', () => {
   });
 
   test('binds injection attempts in values as plain parameters', async () => {
-    // La valeur est liée comme paramètre : elle est typée (numérique) et rejetée
-    const numeric = await countWith({ children: [leaf('country', 'EQ', '1 OR 1=1')] });
+    // country est un VARCHAR : la charge est liée comme valeur, donc cherchée
+    // littéralement — elle ne correspond à aucun libellé et ne s'exécute pas.
+    const injected = await countWith({ children: [leaf('country', 'EQ', "France' OR '1'='1")] });
+    expect(injected.errors).toBeUndefined();
+    expect(injected.total).toBe(0);
+
+    // Une valeur numérique sur une colonne texte reste refusée par le typage
+    const numeric = await countWith({ children: [leaf('value', 'EQ', 'not-a-number')] });
     expect(numeric.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
 
     // Aucune ligne supprimée : le comptage reste identique après la tentative
@@ -573,7 +630,7 @@ describe('getFactTableWithMetadata', () => {
     const query = `
       query {
         getFactTableWithMetadata(
-          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: ["France", "Germany", "Spain"] } }] }
           sort: [{ field: "value", order: DESC }]
           limit: 10
           offset: 0
@@ -602,7 +659,7 @@ describe('getFactTableWithMetadata', () => {
     const query = `
       query {
         getFactTableWithMetadata(
-          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: [1, 2, 3] } }] }
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: ["France", "Germany", "Spain"] } }] }
           limit: 100
           offset: 0
         ) { columns data metadata { count extents total } }
@@ -658,24 +715,23 @@ describe('error handling', () => {
 // ─── Tests de requête combinée complexe ───────────────────────────────────────
 
 describe('complex combined query', () => {
-  test('metadata + dimensions + facts + aggregations + options in one request', async () => {
+  test('metadata + facts + aggregations + options in one request', async () => {
     const query = `
       query {
         countryMeta: getMetaData(name: "country") { name label is_categorical }
-        countries: getDimensionTable(name: "country") { value label }
         facts: getFactTable(
-          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
           sort: [{ field: "value", order: DESC }]
           limit: 5
           offset: 0
-        ) { data { measures { name value } dimensionDetails { name value label } } total }
+        ) { data { keys { name value } measures { name value } } total }
         aggregated: getAggregatedFacts(
           measure: "value"
           groupBy: "indicator"
           aggregation: AVG
-          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: 1 } }] }
-        ) { key keyLabel aggregatedValue }
-        options: getSelectOptions(fieldName: "indicator") { value label }
+          structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
+        ) { key aggregatedValue }
+        options: getSelectOptions(fieldName: "country") { value label }
       }
     `;
     const result = await execute(server, { query });
@@ -684,9 +740,11 @@ describe('complex combined query', () => {
 
     // Vérification de la présence et cohérence de tous les résultats dans la réponse combinée
     expect((result.data!.countryMeta as { name: string }).name).toBe('country');
-    expect(Array.isArray(result.data!.countries)).toBe(true);
     expect((result.data!.facts as { data: unknown }).data).toBeDefined();
     expect(Array.isArray(result.data!.aggregated)).toBe(true);
-    expect(Array.isArray(result.data!.options)).toBe(true);
+    // Les options du menu sont les libellés eux-mêmes
+    const options = result.data!.options as Array<{ value: string; label: string }>;
+    expect(options.every((o) => o.value === o.label)).toBe(true);
+    expect(options.map((o) => o.value)).toContain('France');
   });
 });

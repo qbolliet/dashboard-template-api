@@ -1,13 +1,16 @@
 /**
  * Unit tests for SelectOptionsLoader (src/loaders/select-options.ts).
  *
- * Verifies option loading from dimension tables for categorical fields,
- * from fact_table for non-categorical fields, searchTerm filtering,
- * error handling, and string coercion of all values.
+ * The fact table stores labels directly, so there is a single load path:
+ * a DISTINCT scan of the column with `label = value`. Verifies that path,
+ * NULL exclusion, ordering, searchTerm parameterization (with escaped LIKE
+ * wildcards), string coercion, and the errors raised for an unknown or
+ * malformed field name.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
 import { jest } from '@jest/globals';
+import { GraphQLError } from 'graphql';
 import {
   makeLoaderConfig,
   makePool,
@@ -76,6 +79,26 @@ beforeAll(async () => {
     (await import('../../../src/loaders/select-options.js')) as unknown as SelectOptionsModule);
 });
 
+// ─── Fonctions utilitaires ────────────────────────────────────────────────────
+
+/**
+ * Makes the metadata lookup succeed, then returns the given rows.
+ *
+ * @param rows - Rows the DISTINCT query resolves to.
+ */
+// Colonne déclarée en metadata, puis résultat du SELECT DISTINCT
+const mockDeclaredField = (rows: Record<string, unknown>[]): void => {
+  mockConnection.all
+    .mockResolvedValueOnce([{ name: 'country' }])
+    .mockResolvedValueOnce(rows as never);
+};
+
+/** Returns the SQL of the DISTINCT query (second call) and its parameters. */
+const distinctCall = (): [string, unknown[]] => [
+  mockConnection.all.mock.calls[1][0] as string,
+  mockConnection.all.mock.calls[1][1] as unknown[],
+];
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('SelectOptionsLoader', () => {
@@ -101,121 +124,117 @@ describe('SelectOptionsLoader', () => {
     });
   });
 
-  // ── Chargement pour un champ catégoriel ───────────────────────────────────
+  // ── Chemin unique : DISTINCT sur la fact table ────────────────────────────
 
-  describe('loadSelectOptions - champ catégoriel', () => {
-    test('charge depuis la table de dimension pour un champ catégoriel', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 1 }]) // métadonnée
-        .mockResolvedValueOnce([
-          // table de dimension
-          { value: '1', label: 'France' },
-          { value: '2', label: 'Allemagne' },
-        ]);
+  describe('loadSelectOptions', () => {
+    test('charge les valeurs distinctes de la fact table, label = value', async () => {
+      mockDeclaredField([{ value: 'France' }, { value: 'Germany' }]);
 
       const loader = createSelectOptionsLoader('main');
       const result = await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
 
+      // La fact table porte le libellé : aucune résolution supplémentaire
       expect(result).toEqual([
-        { value: '1', label: 'France' },
-        { value: '2', label: 'Allemagne' },
+        { value: 'France', label: 'France' },
+        { value: 'Germany', label: 'Germany' },
       ]);
-      const dimQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(dimQuery).toContain('dim_country');
     });
 
-    test('filtre par searchTerm dans la dimension', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 1 }])
-        .mockResolvedValueOnce([{ value: '1', label: 'France' }]);
+    test('interroge la fact table, jamais une table dim_*', async () => {
+      mockDeclaredField([{ value: 'France' }]);
 
       const loader = createSelectOptionsLoader('main');
-      await loader.load({ fieldName: 'country', limit: 50, searchTerm: 'fra' });
+      await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
 
-      const dimQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(dimQuery).toContain('LIKE');
-      expect(mockConnection.all.mock.calls[1][1]).toContain('%fra%');
-    });
-  });
-
-  // ── Chargement pour un champ non catégoriel ───────────────────────────────
-
-  describe('loadSelectOptions - champ non catégoriel', () => {
-    test('charge les valeurs distinctes depuis la table des faits', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 0 }]) // métadonnée
-        .mockResolvedValueOnce([
-          // table des faits
-          { value: '100' },
-          { value: '200' },
-        ]);
-
-      const loader = createSelectOptionsLoader('main');
-      const result = await loader.load({ fieldName: 'amount', limit: 50, searchTerm: null });
-
-      expect(result).toEqual([
-        { value: '100', label: '100' },
-        { value: '200', label: '200' },
-      ]);
-      const factQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(factQuery).toContain('DISTINCT');
-      expect(factQuery).toContain('fact_table');
+      const [sql] = distinctCall();
+      expect(sql).toContain('DISTINCT');
+      expect(sql).toContain('fact_table');
+      expect(sql).not.toContain('dim_');
     });
 
-    test('filtre par searchTerm dans les faits', async () => {
-      mockConnection.all.mockResolvedValueOnce([{ is_categorical: 0 }]).mockResolvedValueOnce([]);
+    test('exclut les valeurs NULL et trie les modalités', async () => {
+      mockDeclaredField([{ value: 'France' }]);
 
       const loader = createSelectOptionsLoader('main');
-      await loader.load({ fieldName: 'amount', limit: 50, searchTerm: '10' });
+      await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
 
-      const factQuery = mockConnection.all.mock.calls[1][0] as string;
-      expect(factQuery).toContain('LIKE');
-      expect(mockConnection.all.mock.calls[1][1]).toContain('%10%');
+      const [sql, params] = distinctCall();
+      expect(sql).toContain('IS NOT NULL');
+      expect(sql).toContain('ORDER BY country');
+      // La limite passe en paramètre lié, jamais interpolée
+      expect(params).toEqual([50]);
+    });
+
+    test('passe le terme de recherche en paramètre, insensible à la casse', async () => {
+      mockDeclaredField([{ value: "Côte-d'Or" }]);
+
+      const loader = createSelectOptionsLoader('main');
+      await loader.load({ fieldName: 'country', limit: 50, searchTerm: 'CÔTE' });
+
+      const [sql, params] = distinctCall();
+      expect(sql).toContain('LIKE ?');
+      expect(sql).toContain('LOWER(');
+      expect(params[0]).toBe('%côte%');
+    });
+
+    test('échappe les jokers LIKE du terme de recherche', async () => {
+      mockDeclaredField([]);
+
+      const loader = createSelectOptionsLoader('main');
+      await loader.load({ fieldName: 'country', limit: 50, searchTerm: '100%_x' });
+
+      const [sql, params] = distinctCall();
+      expect(sql).toContain("ESCAPE '\\'");
+      // Les jokers du terme deviennent littéraux
+      expect(params[0]).toBe('%100\\%\\_x%');
+    });
+
+    test('convertit toutes les valeurs en chaînes', async () => {
+      mockDeclaredField([{ value: 42 }]);
+
+      const loader = createSelectOptionsLoader('main');
+      const result = await loader.load({ fieldName: 'country', limit: 10, searchTerm: null });
+
+      expect(result![0]).toEqual({ value: '42', label: '42' });
     });
   });
 
   // ── Gestion des cas d'erreur ──────────────────────────────────────────────
 
   describe("loadSelectOptions - cas d'erreur", () => {
-    test('retourne un tableau vide si le champ est introuvable en metadata', async () => {
-      // is_categorical indéfini → traitement comme non catégoriel
+    test('champ inconnu de metadata → BAD_USER_INPUT', async () => {
+      // Aucune ligne de metadata pour cette colonne
       mockConnection.all.mockResolvedValueOnce([]);
 
       const loader = createSelectOptionsLoader('main');
-      const result = await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
+      await expect(
+        loader.load({ fieldName: 'unknown_field', limit: 50, searchTerm: null }),
+      ).rejects.toThrow(GraphQLError);
 
-      expect(Array.isArray(result)).toBe(true);
+      // La requête DISTINCT n'est jamais émise
+      expect(mockConnection.all).toHaveBeenCalledTimes(1);
     });
 
-    test("retourne un tableau vide en cas d'erreur SQL", async () => {
+    test('erreur SQL non masquée en tableau vide', async () => {
       mockConnection.all.mockRejectedValue(new Error('DB error'));
 
       const loader = createSelectOptionsLoader('main');
       const result = await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
 
-      expect(result).toEqual([]);
+      // L'ancien catch { return []; } présentait l'échec comme « aucune option ».
+      // Le loader n'avale plus rien : la politique commune de BaseQueryLoader
+      // (journalisation + null pour une erreur non métier) s'applique, et le
+      // champ non-nullable du SDL transforme ce null en erreur côté client.
+      expect(result).toBeNull();
     });
 
-    test('lève une erreur pour un nom de champ invalide', async () => {
+    test('nom de champ invalide rejeté avant toute requête', async () => {
       const loader = createSelectOptionsLoader('main');
-      // validateIdentifier lance une erreur → attrapée → tableau vide
-      const result = await loader.load({ fieldName: 'bad field!', limit: 50, searchTerm: null });
-      expect(result).toEqual([]);
-    });
-  });
+      await expect(
+        loader.load({ fieldName: 'bad field!', limit: 50, searchTerm: null }),
+      ).rejects.toThrow();
 
-  // ── Conversion des valeurs en chaînes ─────────────────────────────────────
-
-  describe('string conversion des valeurs', () => {
-    test('convertit toutes les valeurs en chaînes', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([{ is_categorical: 1 }])
-        .mockResolvedValueOnce([{ value: 42, label: 'Quarante-deux' }]);
-
-      const loader = createSelectOptionsLoader('main');
-      const result = await loader.load({ fieldName: 'rank', limit: 10, searchTerm: null });
-
-      expect(result![0].value).toBe('42');
+      expect(mockConnection.all).not.toHaveBeenCalled();
     });
   });
 });

@@ -9,7 +9,7 @@ import { validateIdentifier } from '../utils/utils.js';
 
 // ─── Interfaces de la connexion DuckDB ───────────────────────────────────────
 
-/** Metadata of a D3 query result (dimensions, extents, pagination). */
+/** Metadata of a D3 query result (columns, extents, pagination). */
 interface D3Metadata {
   count: number;
   extents: Record<string, [number, number]>;
@@ -153,7 +153,7 @@ class BaseQueryLoader {
    * bound to this loader (per-request), falling back to the catalog's configured
    * default schema when none was provided.
    *
-   * @param tableName - Bare table name (e.g. 'fact_table', 'dim_country').
+   * @param tableName - Bare table name (e.g. 'fact_table', 'metadata').
    * @returns Fully qualified table name string.
    */
   qualifyTable(tableName: string): string {
@@ -167,24 +167,41 @@ class BaseQueryLoader {
    * Loads data with optional Redis caching.
    *
    * On cache miss, calls loader(), stores the result, then returns it.
-   * Falls back to a direct loader call on any Redis error.
+   * Falls back to a direct loader call on a Redis error — but never on a
+   * loader error: those belong to the caller (a GraphQLError must reach the
+   * client, and retrying a failed query would only run it twice).
    *
    * @param key - Cache key (will be JSON-serialized).
    * @param loader - Async function that fetches the data on cache miss.
    * @returns Cached or freshly loaded data.
+   * @throws Whatever the loader throws, unchanged.
    */
   async loadWithCache<T>(key: unknown, loader: () => Promise<T>): Promise<T> {
     if (!this.cacheEnabled) {
       return await loader();
     }
+
+    // Distinction entre une panne du cache et une erreur du loader lui-même
+    let loaderFailed = false;
+    const guardedLoader = async (): Promise<T> => {
+      try {
+        return await loader();
+      } catch (error) {
+        loaderFailed = true;
+        throw error;
+      }
+    };
+
     try {
       // Le schéma fait partie de la clé : deux schémas d'un même catalogue ne
-      // doivent jamais partager une entrée de cache (modalités/IDs différents).
+      // doivent jamais partager une entrée de cache (colonnes et modalités différentes).
       // La variante sépare les loaders d'un même préfixe renvoyant des formes différentes.
       const variant = this.cacheVariant ? `${this.cacheVariant}:` : '';
       const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${variant}${JSON.stringify(key)}`;
-      return await withCache<T>(cacheKey, loader, this.cacheTimeout);
+      return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeout);
     } catch (error) {
+      // L'erreur vient du loader : elle appartient à l'appelant
+      if (loaderFailed) throw error;
       logger.error(`Cache error in ${this.cachePrefix} loader:`, error);
       // En cas d'erreur de cache, exécution directe du loader
       return await loader();

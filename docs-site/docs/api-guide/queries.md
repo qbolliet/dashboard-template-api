@@ -178,7 +178,7 @@ input SortInput {
 
 ### `getFactTable`
 
-Paginated fact rows with dimension labels.
+Paginated fact rows, each split into its coordinates and its measures.
 
 ```graphql
 getFactTable(
@@ -204,16 +204,20 @@ type PaginatedFacts {
 }
 
 type Fact {
-  value: Float
-  dimensionDetails: [DimensionDetail]
+  keys: [FieldValue!]! # every column with is_primary_key = true, NULL included
+  measures: [FieldValue!]! # every column with is_primary_key = false
 }
 
-type DimensionDetail {
+type FieldValue {
   name: String!
-  value: String!
-  label: String!
+  value: JSON # original type preserved; null when the column is NULL
 }
 ```
+
+The fact table stores labels directly, so a key needs no resolution:
+`country` already holds `"France"`. A NULL key is kept rather than omitted —
+a row whose `commune` level of a column hierarchy is absent still exposes
+`{ name: "commune", value: null }`, so every row has the same shape.
 
 ---
 
@@ -265,27 +269,6 @@ Same as `getAggregatedFacts` but includes D3-ready statistics (mean, median, std
 
 ---
 
-## Dimension queries
-
-### `getDimensionTable`
-
-Returns the full list of values and labels for a categorical dimension.
-
-```graphql
-getDimensionTable(
-  name: String!       # dimension field name
-  catalog: String
-  schema: String
-): [Dimension]
-
-type Dimension {
-  value: String
-  label: String
-}
-```
-
----
-
 ## Metadata queries
 
 ### `getMetaData`
@@ -302,7 +285,6 @@ getMetaData(
 type Metadata {
   name: String
   label: String
-  python_type: String
   sql_type: String
   is_categorical: Boolean
   is_primary_key: Boolean
@@ -316,11 +298,10 @@ type Metadata {
 ### `getCatalogs`
 
 Lists all registered catalogs with their default schema and the list of
-hosted schemas. Each schema is a `CatalogSchemaInfo` whose `fields` and
-`dimensionNames` sub-fields are **resolved lazily** — they only hit the
-database when the client selects them, so `schemas { name }` is just as
-cheap as the old string-list and `schemas { name fields { ... } }` fetches
-the whole cascade in one round-trip.
+hosted schemas. Each schema is a `CatalogSchemaInfo` whose `fields`
+sub-field is **resolved lazily** — it only hits the database when the client
+selects it, so `schemas { name }` is just as cheap as the old string-list and
+`schemas { name fields { ... } }` fetches the whole cascade in one round-trip.
 
 ```graphql
 getCatalogs: [Catalog!]!
@@ -334,7 +315,6 @@ type Catalog {
 type CatalogSchemaInfo {
   name: String!                # schema name (e.g., 'main', 'staging')
   fields: [Metadata!]!         # field metadata (lazy — fetched on selection)
-  dimensionNames: [String!]!   # categorical field names (lazy — fetched on selection)
 }
 ```
 
@@ -349,14 +329,16 @@ catalog's default schema.
 getCatalogSchema(catalog: String, schema: String): [Metadata!]!
 ```
 
-### `getSharedDimensions`
+### `getSharedFields`
 
-Returns the dimension names present in all specified targets. Each target
-is a `(catalog, schema)` pair; `schema` is optional and defaults to the
-catalog's default schema.
+Returns the field names present in all specified targets — the columns that
+are safe to use as `joinFields` in a cross-catalog comparison. Each target is
+a `(catalog, schema)` pair; `schema` is optional and defaults to the catalog's
+default schema. A field is shared when every target declares it **categorical**
+under the same name and with the same SQL type family.
 
 ```graphql
-getSharedDimensions(targets: [CatalogSchemaInput!]!): [String!]!
+getSharedFields(targets: [CatalogSchemaInput!]!): [String!]!
 
 input CatalogSchemaInput {
   catalog: String!  # required catalog identifier
@@ -405,7 +387,7 @@ type GroupedSelectOptions {
 
 ## Cross-catalog queries
 
-Categorical fields are matched on their `dim_*` labels (never the raw ID, which is local to each catalog/schema). Catalog A and B may be the same catalog with different schemas. `schemaA`/`schemaB` default to each catalog's configured schema.
+Join fields are matched directly on their stored values — the fact table carries the labels — cast to VARCHAR so two catalogs that type a column differently still align. Catalog A and B may be the same catalog with different schemas. `schemaA`/`schemaB` default to each catalog's configured schema.
 
 ### `compareFacts`
 

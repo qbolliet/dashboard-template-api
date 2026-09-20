@@ -20,16 +20,15 @@ CACHE:
             port: ${REDIS_NODE2_PORT:-6380}
     DB: ${REDIS_DB:-0} # Utile
     KEY_PREFIX: ${REDIS_KEY_PREFIX:-'graphql-api:'}
-  
-  TTL:  # En secondes
+
+  TTL: # En secondes
     DEFAULT: 300
-    METADATA: 600      
-    DIMENSIONS: 600    
-    FACTS: 300        
-    AGGREGATED_FACTS: 300   
+    METADATA: 600
+    FACTS: 300
+    AGGREGATED_FACTS: 300
     SELECT_OPTIONS: 600
     COUNT_QUERIES: 300
-  
+
   HTTP_CACHE:
     PUBLIC_PATHS: ['/graphql']
     VARY_BY_HEADERS: ['accept-encoding', 'accept']

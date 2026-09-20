@@ -252,11 +252,14 @@ describe('BaseQueryLoader', () => {
 
       const result = await loader.loadWithCache('mykey', loaderFn);
 
+      // Le loader est enveloppé pour distinguer une panne du cache d'une
+      // erreur du chargement lui-même : withCache reçoit ce garde, pas loaderFn.
       expect(mockWithCache).toHaveBeenCalledWith(
         'test:main:_:"mykey"',
-        loaderFn,
+        expect.any(Function),
         loader.cacheTimeout,
       );
+      expect(loaderFn).toHaveBeenCalledTimes(1);
       expect(result).toBe('result');
     });
 
@@ -282,6 +285,18 @@ describe('BaseQueryLoader', () => {
       expect(loaderFn).toHaveBeenCalled();
     });
 
+    test('une erreur du loader remonte sans second appel', async () => {
+      const loader = new BaseQueryLoader({ cache: true });
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
+      const loaderFn = jest.fn<() => Promise<string>>().mockRejectedValue(new Error('SQL error'));
+
+      // L'échec vient du chargement, pas du cache : pas de repli, pas de rejeu
+      await expect(loader.loadWithCache('key', loaderFn)).rejects.toThrow('SQL error');
+      expect(loaderFn).toHaveBeenCalledTimes(1);
+    });
+
     test('génère la clé cache correcte pour un objet complexe', async () => {
       const loader = new BaseQueryLoader({ cachePrefix: 'test', catalogId: 'main' });
       const complexKey = { field: 'value', nested: { prop: 123 } };
@@ -294,7 +309,7 @@ describe('BaseQueryLoader', () => {
 
       expect(mockWithCache).toHaveBeenCalledWith(
         `test:main:_:${JSON.stringify(complexKey)}`,
-        loaderFn,
+        expect.any(Function),
         loader.cacheTimeout,
       );
     });
@@ -308,7 +323,11 @@ describe('BaseQueryLoader', () => {
 
       await loader.loadWithCache('k', loaderFn);
 
-      expect(mockWithCache).toHaveBeenCalledWith('pre:default:_:"k"', loaderFn, expect.any(Number));
+      expect(mockWithCache).toHaveBeenCalledWith(
+        'pre:default:_:"k"',
+        expect.any(Function),
+        expect.any(Number),
+      );
     });
 
     test('fait le fallback si JSON.stringify échoue (référence circulaire)', async () => {

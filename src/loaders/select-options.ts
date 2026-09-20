@@ -1,4 +1,5 @@
 // Importation des modules
+import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { validateIdentifier } from '../utils/utils.js';
@@ -19,12 +20,29 @@ interface SelectOption {
   label: string;
 }
 
+// ─── Fonction utilitaire ─────────────────────────────────────────────────────
+
+/**
+ * Escapes the LIKE wildcards of a user-provided search term.
+ *
+ * The term is passed as a bound parameter, so this only neutralizes `%`, `_`
+ * and the escape character itself, which would otherwise widen the match.
+ *
+ * @param term - Raw search term.
+ * @returns Term safe to wrap in `%…%` for a LIKE … ESCAPE '\' predicate.
+ */
+// Échappement des jokers LIKE d'un terme de recherche
+function escapeLikeWildcards(term: string): string {
+  return term.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
 // Classe de chargement des options de sélection
 /**
  * Loader for select option queries (dropdown values).
  *
- * Automatically routes the query to a dimension table when the field is
- * categorical, or to the fact table for distinct value extraction otherwise.
+ * The fact table stores labels directly (no dim_* table exists), so every
+ * field resolves the same way: a DISTINCT scan of the column, with
+ * `label = value`.
  */
 class SelectOptionsLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux options de sélection
@@ -46,115 +64,56 @@ class SelectOptionsLoader extends BaseQueryLoader {
     });
   }
 
-  // Méthode de chargement des options de sélection selon le type du champ
+  // Méthode de chargement des valeurs distinctes d'une colonne
   /**
-   * Loads select options for a given field.
+   * Loads the distinct values of a fact table column as select options.
    *
-   * Checks the metadata table to determine whether the field is categorical,
-   * then delegates to loadFromDimension or loadFromFacts accordingly.
+   * NULL values are excluded — they carry no modality and terminate a branch
+   * of a column hierarchy. The search term is bound as a parameter and its
+   * LIKE wildcards are escaped.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Object with fieldName, limit, and optional searchTerm.
-   * @returns Array of SelectOption objects, or empty array on error.
+   * @returns Array of SelectOption where value and label are the column value.
+   * @throws {GraphQLError} BAD_USER_INPUT when the column does not exist in the
+   *   schema's metadata table.
    */
   async loadSelectOptions(
     connection: DuckDBConnection,
     { fieldName, limit, searchTerm }: SelectOptionsParams,
   ): Promise<SelectOption[]> {
-    try {
-      validateIdentifier(fieldName, 'fieldName');
+    validateIdentifier(fieldName, 'fieldName');
 
-      // Vérification si le champ est catégoriel via la table metadata
-      const metadataQuery = `SELECT is_categorical FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
-      const metadataResults = await connection.all(metadataQuery, [fieldName]);
-      const isCategorical = metadataResults.length > 0 && metadataResults[0].is_categorical;
-
-      if (isCategorical) {
-        // Chargement depuis la table de dimension associée
-        return await this.loadFromDimension(connection, fieldName, limit, searchTerm);
-      } else {
-        // Chargement des valeurs distinctes depuis la table des faits
-        return await this.loadFromFacts(connection, fieldName, limit, searchTerm);
-      }
-    } catch {
-      return [];
+    // La colonne doit être déclarée dans metadata : contrôle explicite pour
+    // renvoyer une erreur utilisable plutôt que de laisser fuiter DuckDB.
+    const declared = await connection.all(
+      `SELECT name FROM ${this.qualifyTable('metadata')} WHERE name = ?`,
+      [fieldName],
+    );
+    if (declared.length === 0) {
+      throw new GraphQLError(`Unknown field '${fieldName}'`, {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     }
-  }
 
-  // Méthode de chargement depuis la table des dimensions
-  /**
-   * Loads options from the dimension table for a categorical field.
-   *
-   * @param connection - Active DuckDB connection from the pool.
-   * @param fieldName - Name of the categorical field (table: dim_{fieldName}).
-   * @param limit - Maximum number of options to return.
-   * @param searchTerm - Optional substring filter applied to the label column.
-   * @returns Array of SelectOption with value and label from the dimension table.
-   */
-  private async loadFromDimension(
-    connection: DuckDBConnection,
-    fieldName: string,
-    limit: number,
-    searchTerm?: string | null,
-  ): Promise<SelectOption[]> {
-    // Construction de la requête avec filtre optionnel
-    let query = `SELECT value, label FROM ${this.qualifyTable(`dim_${fieldName}`)}`;
+    // Construction de la requête : valeurs distinctes, NULL exclus, triées
+    let query =
+      `SELECT DISTINCT ${fieldName} AS value FROM ${this.qualifyTable('fact_table')} ` +
+      `WHERE ${fieldName} IS NOT NULL`;
     const params: unknown[] = [];
 
-    // Ajout du terme de recherche si présent (insensible à la casse)
+    // Recherche insensible à la casse, jokers du terme neutralisés
     if (searchTerm) {
-      query += ' WHERE LOWER(label) LIKE LOWER(?)';
-      params.push(`%${searchTerm}%`);
+      query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
+      params.push(`%${escapeLikeWildcards(searchTerm.toLowerCase())}%`);
     }
 
-    // Application de la limite
-    query += ' LIMIT ?';
+    query += ` ORDER BY ${fieldName} LIMIT ?`;
     params.push(limit);
 
-    // Exécution de la requête
     const results = await connection.all(query, params);
 
-    // Normalisation des valeurs en chaînes de caractères
-    return results.map((row) => ({
-      value: String(row.value),
-      label: row.label as string,
-    }));
-  }
-
-  // Méthode de chargement depuis la table des faits
-  /**
-   * Loads distinct field values from the fact table for a non-categorical field.
-   *
-   * @param connection - Active DuckDB connection from the pool.
-   * @param fieldName - Name of the field to extract distinct values from.
-   * @param limit - Maximum number of options to return.
-   * @param searchTerm - Optional substring filter on the cast value string.
-   * @returns Array of SelectOption where value and label are both the raw value.
-   */
-  private async loadFromFacts(
-    connection: DuckDBConnection,
-    fieldName: string,
-    limit: number,
-    searchTerm?: string | null,
-  ): Promise<SelectOption[]> {
-    // Construction de la requête avec filtrage optionnel
-    let query = `SELECT DISTINCT ${fieldName} as value FROM ${this.qualifyTable('fact_table')}`;
-    const params: unknown[] = [];
-
-    // Ajout du terme de recherche si présent
-    if (searchTerm) {
-      query += ` WHERE CAST(${fieldName} AS VARCHAR) LIKE ?`;
-      params.push(`%${searchTerm}%`);
-    }
-
-    // Application de la limite
-    query += ' LIMIT ?';
-    params.push(limit);
-
-    // Exécution de la requête
-    const results = await connection.all(query, params);
-
-    // Valeur brute utilisée comme libellé pour les champs non catégoriels
+    // La fact table porte le libellé : label = value, toujours (spec bdd §2.4)
     return results.map((row) => ({
       value: String(row.value),
       label: String(row.value),
@@ -180,5 +139,5 @@ const createSelectOptionsLoader = (
   );
 };
 
-export { createSelectOptionsLoader };
+export { createSelectOptionsLoader, SelectOptionsLoader };
 export type { SelectOptionsParams, SelectOption };

@@ -14,7 +14,7 @@ The API uses two independent caching layers:
 
 ## DataLoader cache (request-scoped)
 
-Each incoming GraphQL request receives a fresh set of DataLoader instances (created in the Apollo context factory). Within that request, identical DB calls — for example, multiple fields requesting the same dimension value — are:
+Each incoming GraphQL request receives a fresh set of DataLoader instances (created in the Apollo context factory). Within that request, identical DB calls — for example, multiple fields requesting the same column metadata — are:
 
 1. **Batched** into a single SQL query
 2. **Deduplicated** so the same key is only fetched once per batch
@@ -26,7 +26,6 @@ Loader cache timeouts (in-memory, not Redis) are configured per data type in `co
 | Loader         | Default in-memory TTL |
 | -------------- | --------------------- |
 | Facts          | 300 s                 |
-| Dimensions     | 600 s                 |
 | Metadata       | 600 s                 |
 | Select options | 600 s                 |
 
@@ -40,7 +39,6 @@ TTL values per data type (`config/cache.yaml`):
 | ---------------- | ----------- |
 | Facts            | 300 s       |
 | Aggregated facts | 300 s       |
-| Dimensions       | 600 s       |
 | Metadata         | 600 s       |
 | Select options   | 600 s       |
 

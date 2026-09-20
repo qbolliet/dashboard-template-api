@@ -50,8 +50,6 @@ Cache isolation is per (catalog, schema): each (catalog, schema) pair has its ow
 
 ```
 metadata:<catalog>:<schema>:*
-dimension:<catalog>:<schema>:*
-dimension-value:<catalog>:<schema>:*
 facts:<catalog>:<schema>:*
 aggregated-facts:<catalog>:<schema>:*
 select-options:<catalog>:<schema>:*

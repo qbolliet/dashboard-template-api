@@ -51,7 +51,6 @@ CACHE:
   TTL:
     DEFAULT: 300
     METADATA: 600
-    DIMENSIONS: 600
     FACTS: 300
     AGGREGATED_FACTS: 300
     SELECT_OPTIONS: 600
@@ -61,7 +60,6 @@ CACHE:
 | Data type        | Default TTL    |
 | ---------------- | -------------- |
 | Metadata         | 600 s (10 min) |
-| Dimensions       | 600 s          |
 | Facts            | 300 s (5 min)  |
 | Aggregated facts | 300 s          |
 | Select options   | 600 s          |

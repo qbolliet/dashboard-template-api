@@ -190,9 +190,13 @@ describe('Comprehensive API Integration Tests', () => {
     test('should resolve dependencies', () => {
       container.register('config', () => ({ api: { port: 3000 } }));
       container.register('logger', () => ({ log: jest.fn() }));
-      container.register('server', (config, logger) => {
-        return { config, logger, start: jest.fn() };
-      }, { dependencies: ['config', 'logger'] });
+      container.register(
+        'server',
+        (config, logger) => {
+          return { config, logger, start: jest.fn() };
+        },
+        { dependencies: ['config', 'logger'] },
+      );
 
       const server = container.get<{
         config: { api: { port: number } };
@@ -258,18 +262,26 @@ describe('Comprehensive API Integration Tests', () => {
         DATABASE_ROUTING: {
           DEFAULT_DATABASE: 'main',
           ALLOWED_DATABASES: Object.keys(catalogs),
-          ALLOW_CROSS_DATABASE_QUERIES: true
+          ALLOW_CROSS_DATABASE_QUERIES: true,
         },
         CATALOGS: catalogs,
         DATABASE: {
-          POOL: { MAX_CONNECTIONS: 10, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 100 }
-        }
+          POOL: { MAX_CONNECTIONS: 10, ACQUIRE_TIMEOUT: 5000, POOL_RETRY_DELAY: 100 },
+        },
       });
 
       const config = createDatabaseConfig({
-        main:      { PATH: 'data/main.ducklake',      DATA_PATH: 'data/main_data/',      READ_ONLY: true },
-        analytics: { PATH: 'data/analytics.ducklake', DATA_PATH: 'data/analytics_data/', READ_ONLY: true },
-        archive:   { PATH: 'data/archive.ducklake',   DATA_PATH: 'data/archive_data/',   READ_ONLY: true }
+        main: { PATH: 'data/main.ducklake', DATA_PATH: 'data/main_data/', READ_ONLY: true },
+        analytics: {
+          PATH: 'data/analytics.ducklake',
+          DATA_PATH: 'data/analytics_data/',
+          READ_ONLY: true,
+        },
+        archive: {
+          PATH: 'data/archive.ducklake',
+          DATA_PATH: 'data/archive_data/',
+          READ_ONLY: true,
+        },
       });
 
       expect(config.DATABASE_ROUTING.ALLOWED_DATABASES).toHaveLength(3);
@@ -303,7 +315,7 @@ describe('Comprehensive API Integration Tests', () => {
           query: BaseQuery,
           databaseHint: string | null,
           userDatabase: string | null,
-          defaultDatabase: string
+          defaultDatabase: string,
         ): RoutedQuery => {
           const targetDb = query.database ?? databaseHint ?? userDatabase ?? defaultDatabase;
 
@@ -312,16 +324,23 @@ describe('Comprehensive API Integration Tests', () => {
           }
 
           return { ...query, targetDatabase: targetDb };
-        }
+        },
       };
 
       const baseQuery: BaseQuery = { operation: 'SELECT', table: 'facts' };
 
       expect(queryRouter.route(baseQuery, null, null, 'main').targetDatabase).toBe('main');
-      expect(queryRouter.route(baseQuery, 'analytics', null, 'main').targetDatabase).toBe('analytics');
-      expect(queryRouter.route({ ...baseQuery, database: 'archive' }, 'analytics', null, 'main').targetDatabase).toBe('archive');
+      expect(queryRouter.route(baseQuery, 'analytics', null, 'main').targetDatabase).toBe(
+        'analytics',
+      );
+      expect(
+        queryRouter.route({ ...baseQuery, database: 'archive' }, 'analytics', null, 'main')
+          .targetDatabase,
+      ).toBe('archive');
 
-      expect(() => queryRouter.route(baseQuery, 'invalid', null, 'main')).toThrow('Invalid database: invalid');
+      expect(() => queryRouter.route(baseQuery, 'invalid', null, 'main')).toThrow(
+        'Invalid database: invalid',
+      );
     });
 
     test('should prevent cross-database queries when disabled', () => {
@@ -342,7 +361,7 @@ describe('Comprehensive API Integration Tests', () => {
        */
       const validateCrossDbQuery = (
         query: BaseQuery,
-        cfg: { ALLOW_CROSS_DATABASE_QUERIES: boolean; DEFAULT_DATABASE: string }
+        cfg: { ALLOW_CROSS_DATABASE_QUERIES: boolean; DEFAULT_DATABASE: string },
       ): boolean => {
         if (!cfg.ALLOW_CROSS_DATABASE_QUERIES && query.databases && query.databases.length > 1) {
           throw new Error('Cross-database queries are disabled');
@@ -350,9 +369,15 @@ describe('Comprehensive API Integration Tests', () => {
         return true;
       };
 
-      expect(() => validateCrossDbQuery({ databases: ['main', 'analytics'], operation: 'SELECT', table: 'facts' }, config))
-        .toThrow('Cross-database queries are disabled');
-      expect(validateCrossDbQuery({ databases: ['main'], operation: 'SELECT', table: 'facts' }, config)).toBe(true);
+      expect(() =>
+        validateCrossDbQuery(
+          { databases: ['main', 'analytics'], operation: 'SELECT', table: 'facts' },
+          config,
+        ),
+      ).toThrow('Cross-database queries are disabled');
+      expect(
+        validateCrossDbQuery({ databases: ['main'], operation: 'SELECT', table: 'facts' }, config),
+      ).toBe(true);
     });
   });
 
@@ -362,7 +387,7 @@ describe('Comprehensive API Integration Tests', () => {
     test('should integrate all security components', async () => {
       // Composants du pipeline de sécurité — rate limiter, analyseur de complexité, sanitizer
       const rateLimiter = {
-        check: async (_clientId: string, _limit = 100): Promise<boolean> => true
+        check: async (_clientId: string, _limit = 100): Promise<boolean> => true,
       };
 
       const complexityAnalyzer = {
@@ -379,7 +404,7 @@ describe('Comprehensive API Integration Tests', () => {
           const baseComplexity = query.fields ? query.fields.length : 1;
           const depthMultiplier = query.depth ?? 1;
           return baseComplexity * depthMultiplier;
-        }
+        },
       };
 
       const inputSanitizer = {
@@ -399,7 +424,7 @@ describe('Comprehensive API Integration Tests', () => {
               .replace(/javascript:/gi, '');
           }
           return input;
-        }
+        },
       };
 
       /**
@@ -419,7 +444,7 @@ describe('Comprehensive API Integration Tests', () => {
       const securityPipeline = async (
         request: { clientId: string },
         query: GraphQLQuery,
-        variables: Record<string, string>
+        variables: Record<string, string>,
       ): Promise<SecurityPipelineResult> => {
         const rateLimitPassed = await rateLimiter.check(request.clientId);
         if (!rateLimitPassed) throw new Error('Rate limit exceeded');
@@ -439,7 +464,7 @@ describe('Comprehensive API Integration Tests', () => {
       const result = await securityPipeline(
         { clientId: 'user123' },
         { fields: ['name', 'email'], depth: 2 },
-        { search: 'john doe' }
+        { search: 'john doe' },
       );
       expect(result.complexity).toBe(4); // 2 champs × 2 profondeur
       expect(result.variables.search).toBe('john doe');
@@ -447,7 +472,7 @@ describe('Comprehensive API Integration Tests', () => {
       const sanitized = await securityPipeline(
         { clientId: 'user123' },
         { fields: ['name', 'email'], depth: 2 },
-        { search: '<script>alert("xss")</script>search term' }
+        { search: '<script>alert("xss")</script>search term' },
       );
       expect(sanitized.variables.search).not.toContain('<script>');
       expect(sanitized.variables.search).toContain('search term');
@@ -455,8 +480,7 @@ describe('Comprehensive API Integration Tests', () => {
 
     test('should block queries exceeding complexity threshold', async () => {
       const complexityAnalyzer = {
-        analyze: (query: GraphQLQuery): number =>
-          (query.fields?.length ?? 0) * (query.depth ?? 1)
+        analyze: (query: GraphQLQuery): number => (query.fields?.length ?? 0) * (query.depth ?? 1),
       };
 
       /**
@@ -477,10 +501,12 @@ describe('Comprehensive API Integration Tests', () => {
         return { complexity };
       };
 
-      await expect(pipeline({ fields: Array(101).fill('field'), depth: 11 }))
-        .rejects.toThrow('Query too complex');
-      await expect(pipeline({ fields: ['name', 'value'], depth: 3 }))
-        .resolves.toMatchObject({ complexity: 6 });
+      await expect(pipeline({ fields: Array(101).fill('field'), depth: 11 })).rejects.toThrow(
+        'Query too complex',
+      );
+      await expect(pipeline({ fields: ['name', 'value'], depth: 3 })).resolves.toMatchObject({
+        complexity: 6,
+      });
     });
 
     test('should sanitize all variable types', async () => {
@@ -495,12 +521,18 @@ describe('Comprehensive API Integration Tests', () => {
        */
       const sanitize = (value: SanitizableValue): SanitizableValue => {
         if (typeof value === 'string') {
-          return value.replace(/<[^>]*>/g, '').replace(/javascript:/gi, '').trim();
+          return value
+            .replace(/<[^>]*>/g, '')
+            .replace(/javascript:/gi, '')
+            .trim();
         }
         if (Array.isArray(value)) return value.map(sanitize);
         if (value && typeof value === 'object') {
           return Object.fromEntries(
-            Object.entries(value as Record<string, SanitizableValue>).map(([k, v]) => [k, sanitize(v)])
+            Object.entries(value as Record<string, SanitizableValue>).map(([k, v]) => [
+              k,
+              sanitize(v),
+            ]),
           );
         }
         return value;
@@ -545,10 +577,10 @@ describe('Comprehensive API Integration Tests', () => {
         // Invalidation par motif glob — 'prefix:db:*' converti en regex 'prefix:db:.*'
         invalidatePattern: async (pattern: string): Promise<number> => {
           const regex = new RegExp(pattern.replace('*', '.*'));
-          const keysToDelete = Array.from(cache.keys()).filter(key => regex.test(key));
-          keysToDelete.forEach(key => cache.delete(key));
+          const keysToDelete = Array.from(cache.keys()).filter((key) => regex.test(key));
+          keysToDelete.forEach((key) => cache.delete(key));
           return keysToDelete.length;
-        }
+        },
       };
 
       const key1 = cacheManager.generateKey('metadata', 'main', { field: 'country' });
@@ -578,23 +610,23 @@ describe('Comprehensive API Integration Tests', () => {
         'metadata:test:field1',
         'facts:main:query1',
         'facts:test:query1',
-        'dimension:main:country',
-        'dimension:analytics:country'
+        'metadata:main:country',
+        'metadata:analytics:country',
       ];
 
-      cacheKeys.forEach(key => multiDbCache.set(key, `value-${key}`));
+      cacheKeys.forEach((key) => multiDbCache.set(key, `value-${key}`));
       expect(multiDbCache.size).toBe(6);
 
       // Suppression de toutes les entrées appartenant à la base 'main'
       const mainPattern = /.*:main:.*/;
-      const mainKeys = Array.from(multiDbCache.keys()).filter(key => mainPattern.test(key));
-      mainKeys.forEach(key => multiDbCache.delete(key));
+      const mainKeys = Array.from(multiDbCache.keys()).filter((key) => mainPattern.test(key));
+      mainKeys.forEach((key) => multiDbCache.delete(key));
 
       expect(multiDbCache.size).toBe(3);
       expect(Array.from(multiDbCache.keys())).toEqual([
         'metadata:test:field1',
         'facts:test:query1',
-        'dimension:analytics:country'
+        'metadata:analytics:country',
       ]);
     });
 
@@ -614,7 +646,7 @@ describe('Comprehensive API Integration Tests', () => {
             return null;
           }
           return entry.value;
-        }
+        },
       };
 
       // Entrée avec TTL déjà écoulé — doit être évincée à l'accès
@@ -642,15 +674,27 @@ describe('Comprehensive API Integration Tests', () => {
        * Returns:
        *     Cached or freshly loaded value.
        */
-      const withCache = async (key: string, loaderFn: () => Promise<unknown>, _ttl = 300_000): Promise<unknown> => {
+      const withCache = async (
+        key: string,
+        loaderFn: () => Promise<unknown>,
+        _ttl = 300_000,
+      ): Promise<unknown> => {
         if (cache.has(key)) return cache.get(key);
         const result = await loaderFn();
         cache.set(key, result);
         return result;
       };
 
-      const result1 = await withCache('dimensions:main:country', dbLoader as () => Promise<unknown>, 300_000);
-      const result2 = await withCache('dimensions:main:country', dbLoader as () => Promise<unknown>, 300_000);
+      const result1 = await withCache(
+        'metadata:main:country',
+        dbLoader as () => Promise<unknown>,
+        300_000,
+      );
+      const result2 = await withCache(
+        'metadata:main:country',
+        dbLoader as () => Promise<unknown>,
+        300_000,
+      );
 
       expect(dbLoader).toHaveBeenCalledTimes(1); // Deuxième appel servi depuis le cache
       expect(result1).toBe(result2); // Même référence depuis le cache
@@ -671,8 +715,8 @@ describe('Comprehensive API Integration Tests', () => {
         metadata: new Map<string, FieldMetadata>([
           ['field1', { name: 'field1', type: 'string' }],
           ['field2', { name: 'field2', type: 'number' }],
-          ['field3', { name: 'field3', type: 'boolean' }]
-        ])
+          ['field3', { name: 'field3', type: 'boolean' }],
+        ]),
       };
 
       /**
@@ -685,7 +729,7 @@ describe('Comprehensive API Integration Tests', () => {
        *     DataLoader instance with load() method and internal cache.
        */
       const createDataLoader = <T>(
-        batchLoadFn: (keys: string[]) => Promise<(T | undefined)[]>
+        batchLoadFn: (keys: string[]) => Promise<(T | undefined)[]>,
       ): DataLoaderInstance<T | undefined> => {
         const loaderCache = new Map<string, T | undefined>();
         let batchQueue: BatchQueueItem<T | undefined>[] = [];
@@ -703,7 +747,7 @@ describe('Comprehensive API Integration Tests', () => {
                 batchQueue = [];
                 batchTimer = null;
 
-                const keys = currentBatch.map(item => item.key);
+                const keys = currentBatch.map((item) => item.key);
                 const results = await batchLoadFn(keys);
 
                 // Distribution des résultats et mise en cache
@@ -720,13 +764,13 @@ describe('Comprehensive API Integration Tests', () => {
       };
 
       const metadataLoader = createDataLoader<FieldMetadata>(async (keys) =>
-        keys.map(key => mockDatabase.metadata.get(key))
+        keys.map((key) => mockDatabase.metadata.get(key)),
       );
 
       const results = await Promise.all([
         metadataLoader.load('field1'),
         metadataLoader.load('field2'),
-        metadataLoader.load('field1') // Appui sur le cache — même référence attendue
+        metadataLoader.load('field1'), // Appui sur le cache — même référence attendue
       ]);
 
       expect(results[0]?.name).toBe('field1');
@@ -756,7 +800,7 @@ describe('Comprehensive API Integration Tests', () => {
       const [r1, r2, r3] = await Promise.all([
         deduplicatedFetch('key1'),
         deduplicatedFetch('key1'),
-        deduplicatedFetch('key1')
+        deduplicatedFetch('key1'),
       ]);
 
       expect(slowFetch).toHaveBeenCalledTimes(1);
@@ -769,60 +813,62 @@ describe('Comprehensive API Integration Tests', () => {
 
   describe('Resolver and DataLoader Pipeline Integration', () => {
     test('should resolve fields using DataLoader across multiple resolvers', async () => {
-      /** Dimension pays résolue par le loader. */
-      interface CountryDimension {
+      /** Métadonnées de la colonne pays, résolues par le loader. */
+      interface CountryMetadata {
         id: string;
         name: string;
         code: string;
       }
 
-      /** Ligne de faits avant résolution de la dimension. */
+      /** Ligne de faits avant résolution des métadonnées. */
       interface FactRow {
         id: number;
         countryId: string;
         value: number;
       }
 
-      /** Ligne de faits après résolution de la dimension. */
+      /** Ligne de faits après résolution des métadonnées. */
       interface ResolvedFactRow extends FactRow {
-        country: CountryDimension;
+        country: CountryMetadata;
       }
 
       const batchLoadFn = jest.fn(async (keys: string[]) =>
-        keys.map(id => ({ id, name: `Country-${id}`, code: id.toUpperCase() }))
+        keys.map((id) => ({ id, name: `Country-${id}`, code: id.toUpperCase() })),
       );
 
-      const loaderCache = new Map<string, CountryDimension>();
-      const inFlight = new Map<string, Promise<CountryDimension>>();
+      const loaderCache = new Map<string, CountryMetadata>();
+      const inFlight = new Map<string, Promise<CountryMetadata>>();
 
-      // Chargeur de dimension avec déduplication et cache interne
-      const dimensionLoader = {
-        load: (id: string): Promise<CountryDimension> => {
+      // Chargeur de métadonnées avec déduplication et cache interne
+      const metadataLoader = {
+        load: (id: string): Promise<CountryMetadata> => {
           if (loaderCache.has(id)) return Promise.resolve(loaderCache.get(id)!);
           if (inFlight.has(id)) return inFlight.get(id)!;
 
-          const promise = (batchLoadFn as (keys: string[]) => Promise<CountryDimension[]>)([id]).then(([result]) => {
+          const promise = (batchLoadFn as (keys: string[]) => Promise<CountryMetadata[]>)([
+            id,
+          ]).then(([result]) => {
             loaderCache.set(id, result);
             inFlight.delete(id);
             return result;
           });
           inFlight.set(id, promise);
           return promise;
-        }
+        },
       };
 
-      // Simulation de plusieurs résolveurs pour des lignes de faits — dimension partagée
+      // Simulation de plusieurs résolveurs pour des lignes de faits — métadonnée partagée
       const factRows: FactRow[] = [
         { id: 1, countryId: 'fr', value: 100 },
         { id: 2, countryId: 'de', value: 200 },
-        { id: 3, countryId: 'fr', value: 300 } // Même pays que la ligne 1 → cache hit
+        { id: 3, countryId: 'fr', value: 300 }, // Même pays que la ligne 1 → cache hit
       ];
 
       const resolved: ResolvedFactRow[] = await Promise.all(
         factRows.map(async (row) => ({
           ...row,
-          country: await dimensionLoader.load(row.countryId)
-        }))
+          country: await metadataLoader.load(row.countryId),
+        })),
       );
 
       expect(resolved[0].country.name).toBe('Country-fr');
@@ -842,13 +888,13 @@ describe('Comprehensive API Integration Tests', () => {
         databaseId: string;
         loaders: {
           metadata: ContextualLoader;
-          dimensions: ContextualLoader;
+          metadata: ContextualLoader;
         };
       }
 
       const createLoaderWithContext = (databaseId: string): ContextualLoader => ({
         databaseId,
-        load: jest.fn(async (key: string) => ({ key, source: databaseId }))
+        load: jest.fn(async (key: string) => ({ key, source: databaseId })),
       });
 
       /**
@@ -865,27 +911,31 @@ describe('Comprehensive API Integration Tests', () => {
       const createContext = (
         databaseHint: string,
         availableDatabases: string[],
-        defaultDatabase: string
+        defaultDatabase: string,
       ): ResolverContext => {
         const targetDb = availableDatabases.includes(databaseHint) ? databaseHint : defaultDatabase;
         return {
           databaseId: targetDb,
           loaders: {
             metadata: createLoaderWithContext(targetDb),
-            dimensions: createLoaderWithContext(targetDb)
-          }
+            metadata: createLoaderWithContext(targetDb),
+          },
         };
       };
 
-      const ctxMain      = createContext('main',    ['main', 'analytics'], 'main');
+      const ctxMain = createContext('main', ['main', 'analytics'], 'main');
       const ctxAnalytics = createContext('analytics', ['main', 'analytics'], 'main');
-      const ctxInvalid   = createContext('unknown',  ['main', 'analytics'], 'main');
+      const ctxInvalid = createContext('unknown', ['main', 'analytics'], 'main');
 
       expect(ctxMain.databaseId).toBe('main');
       expect(ctxAnalytics.databaseId).toBe('analytics');
       expect(ctxInvalid.databaseId).toBe('main'); // Retour sur la base par défaut
 
-      const result = await (ctxAnalytics.loaders.metadata.load as (key: string) => Promise<{ key: string; source: string }>)('field1');
+      const result = await (
+        ctxAnalytics.loaders.metadata.load as (
+          key: string,
+        ) => Promise<{ key: string; source: string }>
+      )('field1');
       expect(result.source).toBe('analytics');
     });
   });
@@ -916,24 +966,21 @@ describe('Comprehensive API Integration Tests', () => {
             throw new Error('Missing query');
           }
           securityLog.push({ event: 'validated', query: request.body.query });
-        }
+        },
       };
 
       const resolver = async (
         query: string,
-        context: { database: { query: (q: string) => Array<Record<string, unknown>> } }
+        context: { database: { query: (q: string) => Array<Record<string, unknown>> } },
       ): Promise<Array<Record<string, unknown>>> => {
         const data = context.database.query(query);
         resolverLog.push({ event: 'resolved', rows: data.length });
         return data;
       };
 
-      const formatResponse = (
-        data: unknown,
-        errors: Error[] = []
-      ): ApiResponse => ({
-        data: errors.length === 0 ? data as unknown[] : null,
-        errors: errors.length > 0 ? errors.map(e => ({ message: e.message })) : undefined
+      const formatResponse = (data: unknown, errors: Error[] = []): ApiResponse => ({
+        data: errors.length === 0 ? (data as unknown[]) : null,
+        errors: errors.length > 0 ? errors.map((e) => ({ message: e.message })) : undefined,
       });
 
       const handleRequest = async (request: HttpRequest, context: object): Promise<ApiResponse> => {
@@ -942,7 +989,7 @@ describe('Comprehensive API Integration Tests', () => {
           await security.validateRequest(request);
           const data = await resolver(
             request.body!.query!,
-            context as { database: { query: (q: string) => Array<Record<string, unknown>> } }
+            context as { database: { query: (q: string) => Array<Record<string, unknown>> } },
           );
           return formatResponse(data);
         } catch (err) {
@@ -958,12 +1005,17 @@ describe('Comprehensive API Integration Tests', () => {
       const { handleRequest, securityLog, resolverLog } = buildRequestPipeline();
 
       const context = {
-        database: { query: (_q: string) => [{ id: 1, value: 100 }, { id: 2, value: 200 }] }
+        database: {
+          query: (_q: string) => [
+            { id: 1, value: 100 },
+            { id: 2, value: 200 },
+          ],
+        },
       };
 
       const response = await handleRequest(
         { body: { query: 'query { facts { id value } }', operationType: 'query' } },
-        context
+        context,
       );
 
       expect(response.data).toHaveLength(2);
@@ -977,7 +1029,7 @@ describe('Comprehensive API Integration Tests', () => {
 
       const response = await handleRequest(
         { body: { query: 'mutation { createFact }', operationType: 'mutation' } },
-        {}
+        {},
       );
 
       expect(response.data).toBeNull();
@@ -1008,9 +1060,9 @@ describe('Comprehensive API Integration Tests', () => {
       }
 
       const databasePools: Record<string, DatabasePool> = {
-        main:    { healthy: false, error: 'Connection lost' },
-        backup:  { healthy: true, query: jest.fn().mockResolvedValue([{ id: 1 }]) },
-        archive: { healthy: true, query: jest.fn().mockResolvedValue([]) }
+        main: { healthy: false, error: 'Connection lost' },
+        backup: { healthy: true, query: jest.fn().mockResolvedValue([{ id: 1 }]) },
+        archive: { healthy: true, query: jest.fn().mockResolvedValue([]) },
       };
 
       /**
@@ -1029,7 +1081,7 @@ describe('Comprehensive API Integration Tests', () => {
       const queryWithFailover = async (sql: string, preferredDb = 'main'): Promise<unknown[]> => {
         // Ordre de tentative — préféré en premier, doublons supprimés
         const tryDatabases = [preferredDb, 'backup', 'archive'].filter(
-          (db, index, arr) => arr.indexOf(db) === index
+          (db, index, arr) => arr.indexOf(db) === index,
         );
 
         for (const dbName of tryDatabases) {
@@ -1053,13 +1105,14 @@ describe('Comprehensive API Integration Tests', () => {
 
     test('should throw when all databases are unavailable', async () => {
       const pools = {
-        main:   { healthy: false },
-        backup: { healthy: false }
+        main: { healthy: false },
+        backup: { healthy: false },
       };
 
       const query = async (): Promise<unknown> => {
         for (const db of Object.values(pools)) {
-          if (db.healthy) return await (db as { healthy: boolean; query?: () => Promise<unknown> }).query?.();
+          if (db.healthy)
+            return await (db as { healthy: boolean; query?: () => Promise<unknown> }).query?.();
         }
         throw new Error('All databases unavailable');
       };
@@ -1080,7 +1133,7 @@ describe('Comprehensive API Integration Tests', () => {
           if (request.suspicious) throw new Error('Suspicious activity detected');
           if (request.rateLimited) throw new Error('Rate limit exceeded');
           return true;
-        }
+        },
       };
 
       /**
@@ -1095,27 +1148,35 @@ describe('Comprehensive API Integration Tests', () => {
        */
       const safeExecute = async (
         request: SecurityRequest,
-        operation: () => Promise<SafeExecuteResult>
+        operation: () => Promise<SafeExecuteResult>,
       ): Promise<SafeExecuteResult> => {
         try {
           await securityCheck.validate(request);
           return await operation();
         } catch (error) {
           const message = (error as Error).message;
-          if (message.includes('Rate limit'))  return { error: 'RATE_LIMITED', retry: true };
-          if (message.includes('Suspicious'))  return { error: 'BLOCKED', retry: false };
+          if (message.includes('Rate limit')) return { error: 'RATE_LIMITED', retry: true };
+          if (message.includes('Suspicious')) return { error: 'BLOCKED', retry: false };
           return { error: 'UNKNOWN', retry: true };
         }
       };
 
-      const normalResult = await safeExecute({ userId: 'user123' }, async () => ({ data: 'success' }));
+      const normalResult = await safeExecute({ userId: 'user123' }, async () => ({
+        data: 'success',
+      }));
       expect(normalResult.data).toBe('success');
 
-      const rateLimitedResult = await safeExecute({ userId: 'user123', rateLimited: true }, async () => ({}));
+      const rateLimitedResult = await safeExecute(
+        { userId: 'user123', rateLimited: true },
+        async () => ({}),
+      );
       expect(rateLimitedResult.error).toBe('RATE_LIMITED');
       expect(rateLimitedResult.retry).toBe(true);
 
-      const suspiciousResult = await safeExecute({ userId: 'user123', suspicious: true }, async () => ({}));
+      const suspiciousResult = await safeExecute(
+        { userId: 'user123', suspicious: true },
+        async () => ({}),
+      );
       expect(suspiciousResult.error).toBe('BLOCKED');
       expect(suspiciousResult.retry).toBe(false);
     });
@@ -1133,15 +1194,33 @@ describe('Comprehensive API Integration Tests', () => {
       const formatError = (err: AppError): FormattedError => ({
         message: err.message,
         code: err.code ?? 'INTERNAL_SERVER_ERROR',
-        retryable: err.retryable ?? false
+        retryable: err.retryable ?? false,
       });
 
-      const dbError = Object.assign(new Error('Pool exhausted'), { code: 'DB_POOL_EXHAUSTED', retryable: true }) as AppError;
-      const authError = Object.assign(new Error('Forbidden'), { code: 'FORBIDDEN', retryable: false }) as AppError;
+      const dbError = Object.assign(new Error('Pool exhausted'), {
+        code: 'DB_POOL_EXHAUSTED',
+        retryable: true,
+      }) as AppError;
+      const authError = Object.assign(new Error('Forbidden'), {
+        code: 'FORBIDDEN',
+        retryable: false,
+      }) as AppError;
 
-      expect(formatError(dbError)).toEqual({ message: 'Pool exhausted', code: 'DB_POOL_EXHAUSTED', retryable: true });
-      expect(formatError(authError)).toEqual({ message: 'Forbidden', code: 'FORBIDDEN', retryable: false });
-      expect(formatError(new Error('Unexpected') as AppError)).toEqual({ message: 'Unexpected', code: 'INTERNAL_SERVER_ERROR', retryable: false });
+      expect(formatError(dbError)).toEqual({
+        message: 'Pool exhausted',
+        code: 'DB_POOL_EXHAUSTED',
+        retryable: true,
+      });
+      expect(formatError(authError)).toEqual({
+        message: 'Forbidden',
+        code: 'FORBIDDEN',
+        retryable: false,
+      });
+      expect(formatError(new Error('Unexpected') as AppError)).toEqual({
+        message: 'Unexpected',
+        code: 'INTERNAL_SERVER_ERROR',
+        retryable: false,
+      });
     });
   });
 
@@ -1152,23 +1231,23 @@ describe('Comprehensive API Integration Tests', () => {
       const baseConfig: AppConfig = {
         database: { host: 'localhost', port: 5432 },
         cache: { ttl: 300_000 },
-        security: { enabled: true }
+        security: { enabled: true },
       };
 
       const environmentOverrides: Record<string, Partial<AppConfig>> = {
         development: {
           database: { host: 'dev.db.local' },
-          security: { enabled: false }
+          security: { enabled: false },
         },
         production: {
           database: { host: 'prod.db.company.com', ssl: true },
-          cache: { ttl: 600_000 }
+          cache: { ttl: 600_000 },
         },
         test: {
           database: { host: 'memory' },
           cache: { ttl: 1000 },
-          security: { enabled: false }
-        }
+          security: { enabled: false },
+        },
       };
 
       /**
@@ -1188,7 +1267,10 @@ describe('Comprehensive API Integration Tests', () => {
         if (override) {
           for (const [key, value] of Object.entries(override) as [keyof AppConfig, unknown][]) {
             if (typeof value === 'object' && !Array.isArray(value)) {
-              result[key] = { ...(result[key] as object), ...(value as object) } as AppConfig[typeof key];
+              result[key] = {
+                ...(result[key] as object),
+                ...(value as object),
+              } as AppConfig[typeof key];
             } else {
               result[key] = value as AppConfig[typeof key];
             }
@@ -1228,11 +1310,14 @@ describe('Comprehensive API Integration Tests', () => {
       const resolveEnvVars = (value: unknown, env: Record<string, string> = {}): unknown => {
         if (typeof value !== 'string') return value;
 
-        return value.replace(/\$\{([^}:-]+)(?::-(.*?))?\}/g, (_match, varName: string, defaultValue: string | undefined) => {
-          const envValue = env[varName];
-          if (envValue !== undefined && envValue !== '') return envValue;
-          return defaultValue ?? '';
-        });
+        return value.replace(
+          /\$\{([^}:-]+)(?::-(.*?))?\}/g,
+          (_match, varName: string, defaultValue: string | undefined) => {
+            const envValue = env[varName];
+            if (envValue !== undefined && envValue !== '') return envValue;
+            return defaultValue ?? '';
+          },
+        );
       };
 
       const env: Record<string, string> = { DB_HOST: 'prod.db.com', PORT: '4000' };
@@ -1272,15 +1357,15 @@ describe('Comprehensive API Integration Tests', () => {
         return result;
       };
 
-      const base: DeepRecord    = { a: { b: { c: 1, d: 2 }, e: 3 }, f: 4 };
+      const base: DeepRecord = { a: { b: { c: 1, d: 2 }, e: 3 }, f: 4 };
       const override: DeepRecord = { a: { b: { c: 99 } }, g: 5 };
 
       const merged = deepMerge(base, override);
-      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).b.c).toBe(99);  // Écrasé par override
-      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).b.d).toBe(2);   // Préservé depuis base
-      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).e).toBe(3);     // Préservé depuis base
-      expect(merged.f).toBe(4);  // Préservé depuis base
-      expect(merged.g).toBe(5);  // Ajouté depuis override
+      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).b.c).toBe(99); // Écrasé par override
+      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).b.d).toBe(2); // Préservé depuis base
+      expect((merged.a as DeepRecord & { b: { c: number; d: number }; e: number }).e).toBe(3); // Préservé depuis base
+      expect(merged.f).toBe(4); // Préservé depuis base
+      expect(merged.g).toBe(5); // Ajouté depuis override
     });
   });
 });

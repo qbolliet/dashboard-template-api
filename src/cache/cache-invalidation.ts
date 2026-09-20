@@ -29,8 +29,6 @@ type KeyPatternFn = (catalog?: string | null, schema?: string | null) => string;
 /** Dictionary of Redis key-pattern generators indexed by cache type. */
 interface KeyPatterns {
   metadata: KeyPatternFn;
-  dimension: KeyPatternFn;
-  dimensionValue: KeyPatternFn;
   facts: KeyPatternFn;
   aggregatedFacts: KeyPatternFn;
   selectOptions: KeyPatternFn;
@@ -78,9 +76,6 @@ class CacheInvalidationManager {
     // Note : || (et non ??) — une chaîne vide doit également retomber sur le défaut.
     this.keyPatterns = {
       metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
-      dimension: (catalog, schema) => `dimension:${catalog || 'default'}:${schema || '*'}:*`,
-      dimensionValue: (catalog, schema) =>
-        `dimension-value:${catalog || 'default'}:${schema || '*'}:*`,
       facts: (catalog, schema) => `facts:${catalog || 'default'}:${schema || '*'}:*`,
       aggregatedFacts: (catalog, schema) =>
         `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,
@@ -169,7 +164,7 @@ class CacheInvalidationManager {
   /**
    * Invalidate a specific cache type for a given catalog (and optional schema).
    *
-   * @param cacheType - Cache type key (metadata, dimension, facts, etc.).
+   * @param cacheType - Cache type key (metadata, facts, selectOptions, etc.).
    * @param catalog - Catalog identifier. Defaults to 'default' when null.
    * @param schema - Optional schema name; null/omitted means "all schemas".
    * @throws {Error} When the cache type is unknown or the Redis operation fails.

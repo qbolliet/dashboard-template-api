@@ -1,9 +1,9 @@
 /**
  * Integration tests for the getCatalogs, getCatalogSchema, getFields,
- * and getSharedDimensions resolvers.
+ * and getSharedFields resolvers.
  *
  * Covers catalog listing (id + defaultSchema + schemas), schema field
- * metadata, SelectOption filtering, dimension intersection across
+ * metadata, SelectOption filtering, the field intersection across
  * (catalog, schema) targets, and error handling for invalid identifiers.
  */
 
@@ -85,16 +85,15 @@ describe('getCatalogs', () => {
     }
   });
 
-  // ── Cascade lazy : fields/dimensionNames ne sont chargés que si demandés ──
-  test('cascade — fields and dimensionNames load when requested', async () => {
+  // ── Cascade lazy : fields n'est chargé que s'il est demandé ──
+  test('cascade — fields load when requested', async () => {
     const query = `
       query {
         getCatalogs {
           id
           schemas {
             name
-            fields { name is_categorical }
-            dimensionNames
+            fields { name is_categorical is_primary_key }
           }
         }
       }
@@ -107,23 +106,18 @@ describe('getCatalogs', () => {
       id: string;
       schemas: Array<{
         name: string;
-        fields: Array<{ name: string; is_categorical: boolean }>;
-        dimensionNames: string[];
+        fields: Array<{ name: string; is_categorical: boolean; is_primary_key: boolean }>;
       }>;
     }>;
     expect(catalogs.length).toBeGreaterThan(0);
 
-    // Pour chaque schéma de chaque catalogue, fields et dimensionNames sont
-    // des tableaux et les noms de dimensions sont un sous-ensemble des champs
-    // catégoriels (cohérence loader/schema scoping correct).
+    // Chaque schéma déclare ses colonnes, dont au moins une clé primaire
+    // (cohérence loader / scoping de schéma correct).
     for (const cat of catalogs) {
       for (const s of cat.schemas) {
         expect(Array.isArray(s.fields)).toBe(true);
-        expect(Array.isArray(s.dimensionNames)).toBe(true);
-        const categoricalNames = s.fields.filter((f) => f.is_categorical).map((f) => f.name);
-        for (const dim of s.dimensionNames) {
-          expect(categoricalNames).toContain(dim);
-        }
+        expect(s.fields.length).toBeGreaterThan(0);
+        expect(s.fields.some((f) => f.is_primary_key)).toBe(true);
       }
     }
   });
@@ -143,7 +137,6 @@ describe('getCatalogs', () => {
     for (const cat of catalogs) {
       for (const s of cat.schemas) {
         expect(s).not.toHaveProperty('fields');
-        expect(s).not.toHaveProperty('dimensionNames');
       }
     }
   });
@@ -158,7 +151,6 @@ describe('getCatalogSchema', () => {
         getCatalogSchema {
           name
           label
-          python_type
           sql_type
           is_categorical
         }
@@ -170,7 +162,6 @@ describe('getCatalogSchema', () => {
     const fields = result.data!.getCatalogSchema as Array<{
       name: string;
       label: string;
-      python_type: string;
       sql_type: string;
       is_categorical: boolean;
     }>;
@@ -178,7 +169,6 @@ describe('getCatalogSchema', () => {
     expect(fields.length).toBeGreaterThan(0);
     expect(fields[0]).toHaveProperty('name');
     expect(fields[0]).toHaveProperty('label');
-    expect(fields[0]).toHaveProperty('python_type');
     expect(fields[0]).toHaveProperty('sql_type');
     expect(typeof fields[0].is_categorical).toBe('boolean');
   });
@@ -248,7 +238,7 @@ describe('getCatalogSchema', () => {
 
 describe('getFields', () => {
   // Helper local : récupère les noms des champs catégoriels du catalogue par défaut
-  // depuis getCatalogSchema, sans recourir à un éventuel champ dimensionNames retiré.
+  // depuis getCatalogSchema, le champ dimensionNames ayant été retiré.
   async function defaultCategoricalNames(): Promise<string[]> {
     const query = `query { getCatalogSchema { name is_categorical } }`;
     const result = await execute(server, { query });
@@ -299,7 +289,7 @@ describe('getFields', () => {
 
     expect(result.errors).toBeUndefined();
 
-    // Tous les champs catégoriels doivent figurer parmi les dimensions du catalogue
+    // Tous les champs catégoriels doivent figurer parmi les champs du catalogue
     const values = (result.data!.getFields as Array<{ value: string }>).map((f) => f.value);
     expect(values.length).toBeGreaterThan(0);
     for (const v of values) {
@@ -315,7 +305,7 @@ describe('getFields', () => {
 
     expect(result.errors).toBeUndefined();
 
-    // Aucun champ continu ne doit appartenir aux dimensions catégorielles
+    // Aucun champ continu ne doit être annoncé comme catégoriel
     const values = (result.data!.getFields as Array<{ value: string }>).map((f) => f.value);
     for (const v of values) {
       expect(categorical).not.toContain(v);
@@ -412,13 +402,23 @@ describe('getFields', () => {
   });
 });
 
-// ─── Tests getSharedDimensions ────────────────────────────────────────────────
+// ─── Tests getSharedFields ────────────────────────────────────────────────────
 
-describe('getSharedDimensions', () => {
-  // Helper local : récupère les dimensions du catalogue par défaut via
-  // getCatalogSchema (filtrage côté JS sur is_categorical).
-  async function defaultDimensionNames(catalog: string): Promise<string[]> {
-    const query = `query { getCatalogSchema(catalog: "${catalog}") { name is_categorical } }`;
+describe('getSharedFields', () => {
+  /**
+   * Lists the categorical column names of a (catalog, schema) pair.
+   *
+   * @param catalog - Catalog alias.
+   * @param schema - Schema name, or null for the catalog default.
+   * @returns Names of the columns flagged categorical.
+   */
+  // Colonnes catégorielles d'une cible, lues via getCatalogSchema
+  async function categoricalNames(
+    catalog: string,
+    schema: string | null = null,
+  ): Promise<string[]> {
+    const schemaArg = schema ? `, schema: "${schema}"` : '';
+    const query = `query { getCatalogSchema(catalog: "${catalog}"${schemaArg}) { name is_categorical } }`;
     const result = await execute(server, { query });
     if (result.errors) return [];
     const fields = result.data!.getCatalogSchema as Array<{
@@ -428,62 +428,74 @@ describe('getSharedDimensions', () => {
     return fields.filter((f) => f.is_categorical).map((f) => f.name);
   }
 
-  test('returns the dimensions of a single target', async () => {
-    const listQuery = `query { getCatalogs { id } }`;
-    const listResult = await execute(server, { query: listQuery });
-    const firstId = (listResult.data!.getCatalogs as Array<{ id: string }>)[0]?.id;
-    if (!firstId) return;
+  /**
+   * Runs getSharedFields over the given targets.
+   *
+   * @param targets - GraphQL literal of the targets argument.
+   * @returns The resolver result and its errors.
+   */
+  // Exécution de getSharedFields sur une liste de cibles
+  async function sharedFields(targets: string) {
+    return execute(server, { query: `query { getSharedFields(targets: ${targets}) }` });
+  }
 
-    const expected = await defaultDimensionNames(firstId);
+  test('une cible unique rend ses colonnes catégorielles', async () => {
+    const expected = await categoricalNames('default');
 
-    const query = `query { getSharedDimensions(targets: [{ catalog: "${firstId}" }]) }`;
-    const result = await execute(server, { query });
+    const result = await sharedFields('[{ catalog: "default" }]');
 
     expect(result.errors).toBeUndefined();
-
-    // Vérification que les dimensions partagées sont bien un sous-ensemble du catalogue
-    const shared = result.data!.getSharedDimensions as string[];
-    expect(Array.isArray(shared)).toBe(true);
+    const shared = result.data!.getSharedFields as string[];
     expect(shared.length).toBeGreaterThan(0);
-    for (const dim of shared) {
-      expect(expected).toContain(dim);
-    }
+    // Seules les colonnes catégorielles sont retournées (comportement documenté
+    // dans le SDL) : date et horizon, clés non catégorielles, sont exclues.
+    expect([...shared].sort()).toEqual([...expected].sort());
+    expect(shared).not.toContain('date');
+    expect(shared).not.toContain('value');
   });
 
-  test('returns common dimensions across two identical targets (deduplication)', async () => {
-    const listQuery = `query { getCatalogs { id } }`;
-    const listResult = await execute(server, { query: listQuery });
-    const firstId = (listResult.data!.getCatalogs as Array<{ id: string }>)[0]?.id;
-    if (!firstId) return;
+  test('deux catalogues au même format partagent toutes leurs catégorielles', async () => {
+    const expected = await categoricalNames('default');
 
-    const query = `query {
-      getSharedDimensions(targets: [{ catalog: "${firstId}" }, { catalog: "${firstId}" }])
-    }`;
-    const result = await execute(server, { query });
+    const result = await sharedFields('[{ catalog: "default" }, { catalog: "macroeconomics" }]');
 
     expect(result.errors).toBeUndefined();
-    expect(Array.isArray(result.data!.getSharedDimensions)).toBe(true);
+    const shared = result.data!.getSharedFields as string[];
+    expect([...shared].sort()).toEqual([...expected].sort());
+  });
+
+  test('deux schémas de formats différents n’ont aucune colonne commune', async () => {
+    // main porte country/indicator/…, geography porte region/departement/commune
+    const result = await sharedFields(
+      '[{ catalog: "default", schema: "main" }, { catalog: "default", schema: "geography" }]',
+    );
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data!.getSharedFields).toEqual([]);
+  });
+
+  test('la cible répétée est idempotente', async () => {
+    const once = await sharedFields('[{ catalog: "default" }]');
+    const twice = await sharedFields('[{ catalog: "default" }, { catalog: "default" }]');
+
+    expect(twice.errors).toBeUndefined();
+    expect(twice.data!.getSharedFields).toEqual(once.data!.getSharedFields);
   });
 
   test('rejects an empty targets list', async () => {
-    const query = `query { getSharedDimensions(targets: []) }`;
-    const result = await execute(server, { query });
+    const result = await sharedFields('[]');
 
     expect(result.errors).toBeDefined();
   });
 
   test('rejects an unknown catalog name', async () => {
-    const query = `query { getSharedDimensions(targets: [{ catalog: "nonexistent_db" }]) }`;
-    const result = await execute(server, { query });
+    const result = await sharedFields('[{ catalog: "nonexistent_db" }]');
 
     expect(result.errors).toBeDefined();
   });
 
   test('rejects an unknown schema in a target', async () => {
-    const query = `query {
-      getSharedDimensions(targets: [{ catalog: "default", schema: "totally_unknown_schema" }])
-    }`;
-    const result = await execute(server, { query });
+    const result = await sharedFields('[{ catalog: "default", schema: "totally_unknown_schema" }]');
 
     expect(result.errors).toBeDefined();
     expect(result.errors![0].message).toMatch(/Schema 'totally_unknown_schema' is not available/);

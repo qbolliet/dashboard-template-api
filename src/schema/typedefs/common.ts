@@ -10,7 +10,7 @@ import type { DocumentNode } from 'graphql';
  * Declares reusable enums (SortOrder, Aggregation), composite types
  * (AggregatedFact, SelectOption), the filter tree inputs (FilterNode,
  * FilterCriterion with FilterConnector / FilterOperation) and SortInput
- * consumed by fact, dimension, and catalog queries.
+ * consumed by fact, select, and catalog queries.
  */
 const commonTypeDefs: DocumentNode = gql`
   enum SortOrder {
@@ -32,7 +32,6 @@ const commonTypeDefs: DocumentNode = gql`
     key: String!
     aggregatedValue: Float!
     count: Int!
-    keyLabel: String
   }
 
   "Logical connector between a filter node and the PREVIOUS node of the same group. AND, OR, AND_NOT and OR_NOT follow SQL precedence (NOT, then AND, then OR); XOR, XNOR, NAND and NOR take everything on their left as a single operand. A NULL operand yields NULL (row not selected), except NOR which is true only when both sides are false."

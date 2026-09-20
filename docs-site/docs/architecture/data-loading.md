@@ -22,7 +22,7 @@ GraphQL resolvers use [DataLoader](https://github.com/graphql/dataloader) to bat
 
 ### Why DataLoader?
 
-Consider a query that requests 50 fact rows, each with `dimensionDetails`. Naively, this would execute 50 individual `getDimensionTable` calls. With DataLoader:
+Consider a query that requests 50 fact rows, each needing the metadata of its columns. Naively, this would execute one `getMetaData` call per column per row. With DataLoader:
 
 1. All 50 calls are collected into a single batch
 2. The batch function executes one SQL query for all requested keys at once
@@ -36,7 +36,6 @@ This reduces N+1 queries to a fixed number of SQL statements per request.
 src/loaders/
 ├── base-loader.ts          # Abstract base: batch fn, cache logic, error handling
 ├── fact.ts                 # Batch fact table queries
-├── dimension.ts            # Batch dimension lookups
 ├── metadata.ts             # Batch field metadata
 ├── select-options.ts       # Batch select option lists
 ├── aggregated-facts.ts     # Batch aggregation queries
@@ -76,12 +75,17 @@ Validation:
 
 An invalid catalog or schema produces a structured `GraphQLError` listing the available values.
 
-## Dimension enrichment
+## Key / measure partition
 
-Fact rows contain raw dimension values (e.g. `country: "FRA"`). The `dimensionDetails` field resolver (`src/utils/dimension-enrichment.ts`) enriches these with human-readable labels by:
+The fact table stores labels directly, so a row needs no lookup to be readable:
+`country` already holds `"France"`. What a row does need is to be split into its
+coordinates and its measurements. `partitionFacts` (`src/utils/fact-partition.ts`)
+does this in one bulk pass:
 
-1. Detecting which fields in the row are categorical (via metadata)
-2. Batching a `getDimensionTable` call for each dimension through the DataLoader
-3. Joining labels onto the fact row before returning it to the client
+1. Loading the metadata of every column present, through the DataLoader
+2. Classifying each column — a measure iff `is_primary_key` is `false`, a key otherwise
+3. Returning `Fact { keys, measures }`, both preserving NULL values
 
-This enrichment is lazy — it only runs when the client requests `dimensionDetails` in the query.
+Keeping NULL keys matters for column hierarchies: a row whose `commune` level is
+absent still exposes `{ name: "commune", value: null }`, so every row of a result
+set has the same shape.

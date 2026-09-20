@@ -7,36 +7,26 @@ import type { DocumentNode } from 'graphql';
 /**
  * GraphQL type definitions for fact table queries.
  *
- * Declares all types used by fact queries: Fact, Measure, DimensionDetail,
+ * Declares all types used by fact queries: Fact, FieldValue,
  * pagination wrappers (PaginatedFacts), D3-optimized dataset types
  * (DatasetWithMetadata, AggregatedFactsWithMetadata), the JSON scalar,
  * the DataFormat enum, and four Query entry points.
  */
 const factTypeDefs: DocumentNode = gql`
-  "Details about a dimension including its label"
-  type DimensionDetail {
-    "Name of the dimension"
+  "A single named column value of a fact row. The value preserves its original type (Float, Int, String, Boolean…) via the JSON scalar."
+  type FieldValue {
+    "Name of the column (e.g. country, date, value, lower_bound)"
     name: String!
-    "Value of the dimension"
-    value: String!
-    "Human-readable label for the dimension value"
-    label: String!
-  }
-
-  "A single measure of a fact row. The value preserves its original type (Float, Int, String…) via the JSON scalar."
-  type Measure {
-    "Name of the measure column (e.g. value, lower_bound, notes)"
-    name: String!
-    "Raw measure value, original type preserved"
+    "Raw column value, original type preserved. NULL is returned as null."
     value: JSON
   }
 
-  "A single fact record from the fact table"
+  "A single fact record from the fact table, split into its coordinates and its measures"
   type Fact {
-    "All measures of the row (every column with is_primary_key = false)"
-    measures: [Measure!]!
-    "Detailed dimension information including labels"
-    dimensionDetails: [DimensionDetail]
+    "Coordinates of the row — every column with is_primary_key = true, NULL levels of a column hierarchy included"
+    keys: [FieldValue!]!
+    "Measures of the row — every column with is_primary_key = false"
+    measures: [FieldValue!]!
   }
 
   "An aggregated fact record with key and value"

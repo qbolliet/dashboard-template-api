@@ -35,45 +35,44 @@ Express (HTTP middleware)
 
 ## Entry points
 
-| File | Role |
-|------|------|
-| `src/index.ts` | Process entry — loads `.env`, calls `startServer()`, handles uncaught errors |
+| File            | Role                                                                              |
+| --------------- | --------------------------------------------------------------------------------- |
+| `src/index.ts`  | Process entry — loads `.env`, calls `startServer()`, handles uncaught errors      |
 | `src/server.ts` | Wires Express middleware, Apollo Server, health/metrics routes, graceful shutdown |
 
 ## Key modules
 
 ### Database layer (`src/db/`)
 
-| File | Role |
-|------|------|
-| `connection.ts` | Opens and closes a DuckDB connection to a catalog |
-| `pool.ts` | Connection pool — limits concurrent connections per catalog |
+| File                  | Role                                                                 |
+| --------------------- | -------------------------------------------------------------------- |
+| `connection.ts`       | Opens and closes a DuckDB connection to a catalog                    |
+| `pool.ts`             | Connection pool — limits concurrent connections per catalog          |
 | `database-manager.ts` | High-level API: acquires a pooled connection, runs a query, releases |
-| `index.ts` | Re-exports the shared DatabaseManager singleton |
+| `index.ts`            | Re-exports the shared DatabaseManager singleton                      |
 
 ### GraphQL schema (`src/schema/`)
 
-| File | Role |
-|------|------|
-| `typedefs/index.ts` | Merges all type definition modules |
-| `typedefs/*.ts` | One file per domain: `fact`, `dimension`, `metadata`, `select`, `catalog`, `cross-database` |
-| `resolvers/index.ts` | Merges all resolver modules |
-| `resolvers/*.ts` | One file per domain, mirrors typedefs |
-| `index.ts` | Builds the executable schema via `makeExecutableSchema` |
+| File                 | Role                                                                           |
+| -------------------- | ------------------------------------------------------------------------------ |
+| `typedefs/index.ts`  | Merges all type definition modules                                             |
+| `typedefs/*.ts`      | One file per domain: `fact`, `metadata`, `select`, `catalog`, `cross-database` |
+| `resolvers/index.ts` | Merges all resolver modules                                                    |
+| `resolvers/*.ts`     | One file per domain, mirrors typedefs                                          |
+| `index.ts`           | Builds the executable schema via `makeExecutableSchema`                        |
 
 ### Data loaders (`src/loaders/`)
 
 DataLoaders batch and deduplicate DB calls within a single GraphQL request. Each loader has a per-type TTL in the DataLoader cache (in-memory, request-scoped) that complements the Redis cache.
 
-| Loader | Batches |
-|--------|---------|
-| `fact.ts` | Fact table queries |
-| `dimension.ts` | Dimension table lookups |
-| `metadata.ts` | Field metadata |
-| `select-options.ts` | Select option lists |
-| `aggregated-facts.ts` | Aggregation queries |
-| `catalog.ts` | Catalog/database listing |
-| `cross-database.ts` | Cross-catalog operations |
+| Loader                | Batches                  |
+| --------------------- | ------------------------ |
+| `fact.ts`             | Fact table queries       |
+| `metadata.ts`         | Field metadata           |
+| `select-options.ts`   | Select option lists      |
+| `aggregated-facts.ts` | Aggregation queries      |
+| `catalog.ts`          | Catalog/database listing |
+| `cross-database.ts`   | Cross-catalog operations |
 
 ### Security (`src/security/`)
 
@@ -85,14 +84,14 @@ See [Caching](./caching).
 
 ### Utils (`src/utils/`)
 
-| File | Role |
-|------|------|
-| `config-loader.ts` | Loads and deep-merges all YAML config files; handles env var substitution |
-| `logger.ts` | Winston logger factory (console + rotating file transports) |
-| `cache.ts` | Redis cache helpers (get, set, invalidate) |
-| `timeout.ts` | Complexity-based query timeout computation |
-| `dimension-enrichment.ts` | Joins dimension labels onto fact rows |
-| `utils.ts` | Shared utility functions |
+| File                | Role                                                                      |
+| ------------------- | ------------------------------------------------------------------------- |
+| `config-loader.ts`  | Loads and deep-merges all YAML config files; handles env var substitution |
+| `logger.ts`         | Winston logger factory (console + rotating file transports)               |
+| `cache.ts`          | Redis cache helpers (get, set, invalidate)                                |
+| `timeout.ts`        | Complexity-based query timeout computation                                |
+| `fact-partition.ts` | Splits a fact row into its keys and its measures                          |
+| `utils.ts`          | Shared utility functions                                                  |
 
 ## Request lifecycle
 
@@ -109,6 +108,7 @@ See [Caching](./caching).
 ## Graceful shutdown
 
 `SIGTERM` and `SIGINT` trigger a coordinated shutdown:
+
 1. Stop accepting new HTTP requests
 2. Wait for in-flight requests to complete
 3. Close all DuckDB connections in the pool

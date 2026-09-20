@@ -8,12 +8,11 @@ import type { DocumentNode } from 'graphql';
  * GraphQL type definitions for DuckLake catalog introspection.
  *
  * Declares the Catalog descriptor (id + per-schema details), the
- * CatalogSchemaInfo nested type that exposes fields and dimension names
- * on demand (lazy through GraphQL selection sets), the CatalogSchemaInput
- * value used to address a specific (catalog, schema) pair, and the Query
- * entry points for listing catalogs, fetching a schema's field metadata,
- * filtering fields, and resolving dimensions shared across multiple
- * (catalog, schema) targets.
+ * CatalogSchemaInfo nested type that exposes fields on demand (lazy through
+ * GraphQL selection sets), the CatalogSchemaInput value used to address a
+ * specific (catalog, schema) pair, and the Query entry points for listing
+ * catalogs, fetching a schema's field metadata, filtering fields, and
+ * resolving the fields shared across multiple (catalog, schema) targets.
  */
 const catalogTypeDefs: DocumentNode = gql`
   "Informations sur un schéma au sein d'un catalogue (chargement à la demande)"
@@ -22,8 +21,6 @@ const catalogTypeDefs: DocumentNode = gql`
     name: String!
     "Liste des champs et leurs métadonnées (chargé seulement si demandé)"
     fields: [Metadata!]!
-    "Noms des dimensions catégorielles (chargé seulement si demandé)"
-    dimensionNames: [String!]!
   }
 
   "Informations sur un catalogue DuckLake disponible"
@@ -32,7 +29,7 @@ const catalogTypeDefs: DocumentNode = gql`
     id: String!
     "Schéma utilisé par défaut quand aucun schéma n'est précisé (1er élément de schemas)"
     defaultSchema: String!
-    "Schémas DuckLake hébergés par ce catalogue (1er = schéma par défaut). Les sous-champs fields/dimensionNames sont chargés à la demande."
+    "Schémas DuckLake hébergés par ce catalogue (1er = schéma par défaut). Le sous-champ fields est chargé à la demande."
     schemas: [CatalogSchemaInfo!]!
   }
 
@@ -61,8 +58,8 @@ const catalogTypeDefs: DocumentNode = gql`
       namePattern: String
     ): [SelectOption!]!
 
-    "Retourne les dimensions communes à plusieurs paires (catalogue, schéma) — utile pour les requêtes cross-catalog"
-    getSharedDimensions(targets: [CatalogSchemaInput!]!): [String!]!
+    "Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées."
+    getSharedFields(targets: [CatalogSchemaInput!]!): [String!]!
   }
 `;
 
