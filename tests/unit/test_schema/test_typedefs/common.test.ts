@@ -109,6 +109,8 @@ describe('Input types — common', () => {
     const fields = assertInputObjectType(schema.getType('FilterNode')).getFields();
 
     expect(String(fields.connector.type)).toBe('FilterConnector');
+    expect(String(fields.negate.type)).toBe('Boolean');
+    expect(fields.negate.defaultValue).toBe(false);
     expect(String(fields.criterion.type)).toBe('FilterCriterion');
     expect(String(fields.children.type)).toBe('[FilterNode!]');
   });
@@ -133,14 +135,30 @@ describe('Input types — common', () => {
       'LT',
       'LTE',
       'BETWEEN',
+      'NOT_BETWEEN',
       'IN',
       'NOT_IN',
       'BEFORE',
       'AFTER',
+      'ON_OR_BEFORE',
+      'ON_OR_AFTER',
       'CONTAINS',
+      'NOT_CONTAINS',
       'STARTS',
+      'NOT_STARTS',
+      'ENDS',
+      'NOT_ENDS',
+      'IEQ',
+      'ICONTAINS',
+      'ISTARTS',
+      'IENDS',
+      'MATCHES',
       'IS_NULL',
       'IS_NOT_NULL',
+      'IS_TRUE',
+      'IS_FALSE',
+      'IS_NOT_TRUE',
+      'IS_NOT_FALSE',
     ]);
   });
 

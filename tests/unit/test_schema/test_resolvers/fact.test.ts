@@ -167,6 +167,38 @@ describe('getFactTable', () => {
     expect(grouped.total!).toBeLessThanOrEqual(viaIn.total!);
   });
 
+  test('negate on a leaf and on a group is the SQL complement', async () => {
+    const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });
+    const negatedLeaf = await countWith({
+      children: [{ negate: true, ...leaf('country', 'IN', [1, 2]) }],
+    });
+    const negatedGroup = await countWith({
+      children: [
+        { negate: true, children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')] },
+      ],
+    });
+    const all = await countWith(null);
+
+    expect(negatedLeaf.errors).toBeUndefined();
+    expect(negatedGroup.errors).toBeUndefined();
+    expect(negatedLeaf.total).toBe(negatedGroup.total);
+    expect(inSet.total! + negatedLeaf.total!).toBe(all.total);
+  });
+
+  test('case-insensitive and regex operations work on a text column', async () => {
+    const eq = await countWith({ children: [leaf('notes', 'EQ', 'actual')] });
+    const ieq = await countWith({ children: [leaf('notes', 'IEQ', 'AcTuAl')] });
+    const matches = await countWith({
+      children: [leaf('notes', 'MATCHES', '^(actual|forecast)$')],
+    });
+
+    expect(ieq.errors).toBeUndefined();
+    expect(matches.errors).toBeUndefined();
+    expect(ieq.total).toBe(eq.total);
+    expect(matches.total).toBeGreaterThanOrEqual(eq.total!);
+    expect(matches.total).toBeGreaterThan(0);
+  });
+
   test('NOT_IN is the complement of IN', async () => {
     const all = await countWith(null);
     const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });

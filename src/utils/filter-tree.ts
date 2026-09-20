@@ -14,14 +14,30 @@ const FILTER_OPERATIONS = [
   'LT',
   'LTE',
   'BETWEEN',
+  'NOT_BETWEEN',
   'IN',
   'NOT_IN',
   'BEFORE',
   'AFTER',
+  'ON_OR_BEFORE',
+  'ON_OR_AFTER',
   'CONTAINS',
+  'NOT_CONTAINS',
   'STARTS',
+  'NOT_STARTS',
+  'ENDS',
+  'NOT_ENDS',
+  'IEQ',
+  'ICONTAINS',
+  'ISTARTS',
+  'IENDS',
+  'MATCHES',
   'IS_NULL',
   'IS_NOT_NULL',
+  'IS_TRUE',
+  'IS_FALSE',
+  'IS_NOT_TRUE',
+  'IS_NOT_FALSE',
 ] as const;
 
 /** Filter operation (GraphQL FilterOperation enum value). */
@@ -43,6 +59,8 @@ interface FilterCriterionInput {
 /** A node of the filter tree (GraphQL FilterNode input): leaf or group. */
 interface FilterNodeInput {
   connector?: FilterConnector | null;
+  /** Negates this node (leaf or whole group): `NOT (…)`. */
+  negate?: boolean | null;
   criterion?: FilterCriterionInput | null;
   children?: FilterNodeInput[] | null;
 }
@@ -110,14 +128,87 @@ const ALLOWED_OPERATIONS: Record<SqlTypeFamily, readonly FilterOperation[]> = {
     'LT',
     'LTE',
     'BETWEEN',
+    'NOT_BETWEEN',
     'IN',
     'NOT_IN',
     'IS_NULL',
     'IS_NOT_NULL',
   ],
-  date: ['EQ', 'NEQ', 'BEFORE', 'AFTER', 'BETWEEN', 'IS_NULL', 'IS_NOT_NULL'],
-  text: ['EQ', 'NEQ', 'CONTAINS', 'STARTS', 'IN', 'NOT_IN', 'IS_NULL', 'IS_NOT_NULL'],
-  boolean: ['EQ', 'NEQ', 'IS_NULL', 'IS_NOT_NULL'],
+  date: [
+    'EQ',
+    'NEQ',
+    'BEFORE',
+    'AFTER',
+    'ON_OR_BEFORE',
+    'ON_OR_AFTER',
+    'BETWEEN',
+    'NOT_BETWEEN',
+    'IN',
+    'NOT_IN',
+    'IS_NULL',
+    'IS_NOT_NULL',
+  ],
+  text: [
+    'EQ',
+    'NEQ',
+    'IEQ',
+    'CONTAINS',
+    'NOT_CONTAINS',
+    'ICONTAINS',
+    'STARTS',
+    'NOT_STARTS',
+    'ISTARTS',
+    'ENDS',
+    'NOT_ENDS',
+    'IENDS',
+    'MATCHES',
+    'IN',
+    'NOT_IN',
+    'IS_NULL',
+    'IS_NOT_NULL',
+  ],
+  boolean: [
+    'EQ',
+    'NEQ',
+    'IS_TRUE',
+    'IS_FALSE',
+    'IS_NOT_TRUE',
+    'IS_NOT_FALSE',
+    'IS_NULL',
+    'IS_NOT_NULL',
+  ],
+};
+
+/**
+ * LIKE-family operations: SQL operator and how the value becomes a pattern.
+ *
+ * ILIKE variants are case-insensitive; `exact` builds no wildcard at all
+ * (case-insensitive equality). Wildcards inside the value are always escaped,
+ * so a `%` or `_` typed by the user matches literally.
+ */
+const LIKE_OPERATIONS: Partial<
+  Record<FilterOperation, { sql: string; pattern: 'contains' | 'starts' | 'ends' | 'exact' }>
+> = {
+  CONTAINS: { sql: 'LIKE', pattern: 'contains' },
+  NOT_CONTAINS: { sql: 'NOT LIKE', pattern: 'contains' },
+  ICONTAINS: { sql: 'ILIKE', pattern: 'contains' },
+  STARTS: { sql: 'LIKE', pattern: 'starts' },
+  NOT_STARTS: { sql: 'NOT LIKE', pattern: 'starts' },
+  ISTARTS: { sql: 'ILIKE', pattern: 'starts' },
+  ENDS: { sql: 'LIKE', pattern: 'ends' },
+  NOT_ENDS: { sql: 'NOT LIKE', pattern: 'ends' },
+  IENDS: { sql: 'ILIKE', pattern: 'ends' },
+  IEQ: { sql: 'ILIKE', pattern: 'exact' },
+};
+
+/** Value-less operations and their SQL predicate. */
+const VALUELESS_SQL: Partial<Record<FilterOperation, string>> = {
+  IS_NULL: 'IS NULL',
+  IS_NOT_NULL: 'IS NOT NULL',
+  IS_TRUE: 'IS TRUE',
+  IS_FALSE: 'IS FALSE',
+  IS_NOT_TRUE: 'IS NOT TRUE',
+  IS_NOT_FALSE: 'IS NOT FALSE',
 };
 
 // Correspondance des opérations de comparaison vers les opérateurs SQL
@@ -130,12 +221,15 @@ const COMPARISON_SQL: Partial<Record<FilterOperation, string>> = {
   LTE: '<=',
   BEFORE: '<',
   AFTER: '>',
+  ON_OR_BEFORE: '<=',
+  ON_OR_AFTER: '>=',
 };
 
 // Valeurs par défaut des bornes anti-abus
 const DEFAULT_MAX_DEPTH = 5;
 const DEFAULT_MAX_CRITERIA = 50;
 const DEFAULT_MAX_IN_VALUES = 1000;
+const DEFAULT_MAX_PATTERN_LENGTH = 200;
 
 // Motifs de validation des valeurs
 const NUMERIC_STRING_PATTERN = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
@@ -162,12 +256,18 @@ const badInput = (message: string): GraphQLError =>
  * @returns Maximum group depth, criteria count and IN list length.
  */
 // Lecture des bornes configurées (valeurs par défaut si absentes)
-const getLimits = (): { maxDepth: number; maxCriteria: number; maxInValues: number } => {
+const getLimits = (): {
+  maxDepth: number;
+  maxCriteria: number;
+  maxInValues: number;
+  maxPatternLength: number;
+} => {
   const limits = config?.SECURITY?.FILTER_TREE;
   return {
     maxDepth: limits?.MAX_DEPTH ?? DEFAULT_MAX_DEPTH,
     maxCriteria: limits?.MAX_CRITERIA ?? DEFAULT_MAX_CRITERIA,
     maxInValues: limits?.MAX_IN_VALUES ?? DEFAULT_MAX_IN_VALUES,
+    maxPatternLength: limits?.MAX_PATTERN_LENGTH ?? DEFAULT_MAX_PATTERN_LENGTH,
   };
 };
 
@@ -381,6 +481,9 @@ function collectFilterVariables(root: FilterNodeInput): string[] {
     ) {
       throw badInput(`Invalid filter connector "${String(node.connector)}": expected AND or OR.`);
     }
+    if (node.negate !== undefined && node.negate !== null && typeof node.negate !== 'boolean') {
+      throw badInput(`Invalid "negate" value "${String(node.negate)}": expected a boolean.`);
+    }
     if (isRoot && !hasChildren) {
       throw badInput('Invalid filter tree: the root node must be a group (set "children").');
     }
@@ -464,7 +567,7 @@ const compileCriterion = (
   }
 
   const quoted = `"${column}"`;
-  const { maxInValues } = getLimits();
+  const { maxInValues, maxPatternLength } = getLimits();
 
   // Ajout d'une valeur aux paramètres et retour du placeholder adapté au type
   const bind = (raw: unknown): string => {
@@ -473,15 +576,57 @@ const compileCriterion = (
   };
   const isScalar = (v: unknown): boolean => v !== undefined && v !== null && typeof v !== 'object';
 
-  switch (operation) {
-    case 'IS_NULL':
-    case 'IS_NOT_NULL':
-      if (value !== undefined && value !== null) {
-        throw badInput(`Operation ${operation} on column "${column}" does not take a value.`);
-      }
-      return `${quoted} ${operation === 'IS_NULL' ? 'IS NULL' : 'IS NOT NULL'}`;
+  // Opérations sans valeur (IS NULL, IS TRUE…)
+  const valueless = VALUELESS_SQL[operation];
+  if (valueless) {
+    if (value !== undefined && value !== null) {
+      throw badInput(`Operation ${operation} on column "${column}" does not take a value.`);
+    }
+    return `${quoted} ${valueless}`;
+  }
 
-    case 'BETWEEN': {
+  // Opérations de la famille LIKE / ILIKE (jokers échappés dans la valeur)
+  const likeOperation = LIKE_OPERATIONS[operation];
+  if (likeOperation) {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw badInput(`Operation ${operation} on column "${column}" requires a non-empty string.`);
+    }
+    const escaped = escapeLike(value);
+    const patterns = {
+      contains: `%${escaped}%`,
+      starts: `${escaped}%`,
+      ends: `%${escaped}`,
+      exact: escaped,
+    };
+    params.push(patterns[likeOperation.pattern]);
+    return `${quoted} ${likeOperation.sql} ? ESCAPE '\\'`;
+  }
+
+  switch (operation) {
+    case 'MATCHES': {
+      // Expression régulière RE2 (DuckDB) : pas de backtracking catastrophique,
+      // mais la longueur reste bornée et la syntaxe pré-validée.
+      if (typeof value !== 'string' || value.length === 0) {
+        throw badInput(`Operation MATCHES on column "${column}" requires a non-empty pattern.`);
+      }
+      if (value.length > maxPatternLength) {
+        throw badInput(
+          `Operation MATCHES on column "${column}" accepts patterns of at most ${maxPatternLength} characters.`,
+        );
+      }
+      try {
+        new RegExp(value);
+      } catch {
+        throw badInput(
+          `Operation MATCHES on column "${column}" requires a valid regular expression.`,
+        );
+      }
+      params.push(value);
+      return `regexp_matches(${quoted}, ?)`;
+    }
+
+    case 'BETWEEN':
+    case 'NOT_BETWEEN': {
       const range = value as Record<string, unknown> | null | undefined;
       const keys =
         range && typeof range === 'object' && !Array.isArray(range) ? Object.keys(range) : [];
@@ -492,9 +637,10 @@ const compileCriterion = (
         !isScalar(range!.min) ||
         !isScalar(range!.max)
       ) {
-        throw badInput(`Operation BETWEEN on column "${column}" requires a value {min, max}.`);
+        throw badInput(`Operation ${operation} on column "${column}" requires a value {min, max}.`);
       }
-      return `${quoted} BETWEEN ${bind(range!.min)} AND ${bind(range!.max)}`;
+      const keyword = operation === 'BETWEEN' ? 'BETWEEN' : 'NOT BETWEEN';
+      return `${quoted} ${keyword} ${bind(range!.min)} AND ${bind(range!.max)}`;
     }
 
     case 'IN':
@@ -514,16 +660,6 @@ const compileCriterion = (
       }
       const placeholders = value.map(bind).join(', ');
       return `${quoted} ${operation === 'IN' ? 'IN' : 'NOT IN'} (${placeholders})`;
-    }
-
-    case 'CONTAINS':
-    case 'STARTS': {
-      if (typeof value !== 'string' || value.length === 0) {
-        throw badInput(`Operation ${operation} on column "${column}" requires a non-empty string.`);
-      }
-      const escaped = escapeLike(value);
-      params.push(operation === 'CONTAINS' ? `%${escaped}%` : `${escaped}%`);
-      return `${quoted} LIKE ? ESCAPE '\\'`;
     }
 
     default: {
@@ -560,7 +696,12 @@ function treeToSQL(
 
   const params: unknown[] = [];
   const compileNode = (node: FilterNodeInput, isRoot: boolean): string => {
-    if (node.criterion) return compileCriterion(node.criterion, metadataByName, params);
+    // Feuille : prédicat du critère, éventuellement nié
+    if (node.criterion) {
+      const predicate = compileCriterion(node.criterion, metadataByName, params);
+      return node.negate ? `NOT (${predicate})` : predicate;
+    }
+
     const sql = (node.children as FilterNodeInput[])
       .map((child, index) => {
         const fragment = compileNode(child, false);
@@ -568,7 +709,10 @@ function treeToSQL(
         return ` ${child.connector === 'OR' ? 'OR' : 'AND'} ${fragment}`;
       })
       .join('');
-    // La racine n'est jamais parenthésée ; les sous-groupes le sont
+
+    // Un groupe nié est toujours parenthésé, racine comprise ; sinon seule la
+    // racine échappe aux parenthèses.
+    if (node.negate) return `NOT (${sql})`;
     return isRoot ? sql : `(${sql})`;
   };
 

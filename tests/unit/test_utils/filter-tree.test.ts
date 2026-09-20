@@ -265,6 +265,108 @@ describe('treeToSQL — SQL generation', () => {
     });
   });
 
+  test.each<[string, FilterNodeInput, string, unknown[]]>([
+    [
+      'NOT_BETWEEN',
+      leaf('value', 'NOT_BETWEEN', { min: 1, max: 2 }),
+      '"value" NOT BETWEEN CAST(? AS DOUBLE) AND CAST(? AS DOUBLE)',
+      [1, 2],
+    ],
+    [
+      'ON_OR_BEFORE',
+      leaf('day', 'ON_OR_BEFORE', '2024-01-01'),
+      '"day" <= CAST(? AS DATE)',
+      ['2024-01-01'],
+    ],
+    [
+      'ON_OR_AFTER',
+      leaf('ts', 'ON_OR_AFTER', '2024-01-01T06:00:00'),
+      '"ts" >= CAST(? AS TIMESTAMP)',
+      ['2024-01-01T06:00:00'],
+    ],
+    [
+      'date IN',
+      leaf('day', 'IN', ['2024-01-01', '2024-02-01']),
+      '"day" IN (CAST(? AS DATE), CAST(? AS DATE))',
+      ['2024-01-01', '2024-02-01'],
+    ],
+    ['ENDS', leaf('label', 'ENDS', 'ce'), `"label" LIKE ? ESCAPE '\\'`, ['%ce']],
+    [
+      'NOT_CONTAINS',
+      leaf('label', 'NOT_CONTAINS', 'ce'),
+      `"label" NOT LIKE ? ESCAPE '\\'`,
+      ['%ce%'],
+    ],
+    ['NOT_STARTS', leaf('label', 'NOT_STARTS', 'Fr'), `"label" NOT LIKE ? ESCAPE '\\'`, ['Fr%']],
+    ['NOT_ENDS', leaf('label', 'NOT_ENDS', 'ce'), `"label" NOT LIKE ? ESCAPE '\\'`, ['%ce']],
+    ['ICONTAINS', leaf('label', 'ICONTAINS', 'fr'), `"label" ILIKE ? ESCAPE '\\'`, ['%fr%']],
+    ['ISTARTS', leaf('label', 'ISTARTS', 'fr'), `"label" ILIKE ? ESCAPE '\\'`, ['fr%']],
+    ['IENDS', leaf('label', 'IENDS', 'CE'), `"label" ILIKE ? ESCAPE '\\'`, ['%CE']],
+    [
+      'IEQ (no wildcard added)',
+      leaf('label', 'IEQ', 'france'),
+      `"label" ILIKE ? ESCAPE '\\'`,
+      ['france'],
+    ],
+    [
+      'MATCHES',
+      leaf('label', 'MATCHES', '^Fr[ae]nce$'),
+      'regexp_matches("label", ?)',
+      ['^Fr[ae]nce$'],
+    ],
+    ['IS_TRUE', leaf('flag', 'IS_TRUE'), '"flag" IS TRUE', []],
+    ['IS_FALSE', leaf('flag', 'IS_FALSE'), '"flag" IS FALSE', []],
+    ['IS_NOT_TRUE', leaf('flag', 'IS_NOT_TRUE'), '"flag" IS NOT TRUE', []],
+    ['IS_NOT_FALSE', leaf('flag', 'IS_NOT_FALSE'), '"flag" IS NOT FALSE', []],
+  ])('%s produces its SQL and parameters', (_label, node, sql, params) => {
+    expect(one(node)).toEqual({ sql, params });
+  });
+
+  test('IEQ / ICONTAINS escape wildcards like their case-sensitive twins', () => {
+    expect(one(leaf('label', 'IEQ', '100%_net')).params).toEqual(['100\\%\\_net']);
+    expect(one(leaf('label', 'ICONTAINS', '100%')).params).toEqual(['%100\\%%']);
+  });
+
+  test('negate wraps a leaf predicate in NOT (…)', () => {
+    expect(
+      treeToSQL(group([{ ...leaf('country', 'EQ', 1), negate: true }]), metadataByName),
+    ).toEqual({
+      sql: 'NOT ("country" = CAST(? AS BIGINT))',
+      params: [1],
+    });
+  });
+
+  test('negate wraps a whole group, including the root', () => {
+    const negatedGroup = treeToSQL(
+      group([
+        leaf('flag', 'IS_TRUE'),
+        {
+          connector: 'AND',
+          negate: true,
+          children: [leaf('country', 'EQ', 1), leaf('country', 'EQ', 2, 'OR')],
+        },
+      ]),
+      metadataByName,
+    );
+    expect(negatedGroup.sql).toBe(
+      '"flag" IS TRUE AND NOT ("country" = CAST(? AS BIGINT) OR "country" = CAST(? AS BIGINT))',
+    );
+
+    // Racine niée : parenthésée bien qu'elle ne le soit jamais autrement
+    const negatedRoot = treeToSQL(
+      { negate: true, children: [leaf('value', 'GT', 1), leaf('label', 'EQ', 'a', 'OR')] },
+      metadataByName,
+    );
+    expect(negatedRoot.sql).toBe('NOT ("value" > CAST(? AS DOUBLE) OR "label" = ?)');
+  });
+
+  test('negate: false and an absent negate behave identically', () => {
+    const plain = one(leaf('value', 'GT', 1));
+    expect(
+      treeToSQL(group([{ ...leaf('value', 'GT', 1), negate: false }]), metadataByName),
+    ).toEqual(plain);
+  });
+
   test('buildWhere prefixes WHERE or returns an empty string', () => {
     expect(buildWhere({ sql: '"a" = ?', params: [1] })).toBe('WHERE "a" = ?');
     expect(buildWhere(null)).toBe('');
@@ -278,14 +380,20 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
   test('operation incompatible with the type names column, type and allowed operations', () => {
     expectBadInput(
       () => one(leaf('country', 'CONTAINS', 'x')),
-      'Operation CONTAINS is not allowed on column "country" of type BIGINT (numeric). Allowed operations: EQ, NEQ, GT, GTE, LT, LTE, BETWEEN, IN, NOT_IN, IS_NULL, IS_NOT_NULL.',
+      'Operation CONTAINS is not allowed on column "country" of type BIGINT (numeric). Allowed operations: EQ, NEQ, GT, GTE, LT, LTE, BETWEEN, NOT_BETWEEN, IN, NOT_IN, IS_NULL, IS_NOT_NULL.',
     );
     expectBadInput(
       () => one(leaf('flag', 'GT', true)),
-      'Allowed operations: EQ, NEQ, IS_NULL, IS_NOT_NULL',
+      'Allowed operations: EQ, NEQ, IS_TRUE, IS_FALSE, IS_NOT_TRUE, IS_NOT_FALSE, IS_NULL, IS_NOT_NULL',
     );
-    expectBadInput(() => one(leaf('day', 'GT', '2024-01-01')), 'BEFORE, AFTER');
-    expectBadInput(() => one(leaf('label', 'BETWEEN', { min: 'a', max: 'b' })), 'CONTAINS, STARTS');
+    expectBadInput(
+      () => one(leaf('day', 'GT', '2024-01-01')),
+      'BEFORE, AFTER, ON_OR_BEFORE, ON_OR_AFTER',
+    );
+    expectBadInput(
+      () => one(leaf('label', 'BETWEEN', { min: 'a', max: 'b' })),
+      'CONTAINS, NOT_CONTAINS, ICONTAINS',
+    );
   });
 
   test('unknown SQL type in metadata', () => {
@@ -319,8 +427,46 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
     ['DATE with time part', leaf('day', 'EQ', '2024-01-01T10:00:00')],
     ['offset on naive TIMESTAMP', leaf('ts', 'AFTER', '2024-01-01T10:00:00+02:00')],
     ['TIMESTAMP_NS out of range', leaf('ts_ns', 'BEFORE', '2999-01-01')],
+    ['NOT_BETWEEN without min', leaf('value', 'NOT_BETWEEN', { max: 2 })],
+    ['ENDS with empty string', leaf('label', 'ENDS', '')],
+    ['ICONTAINS with a number', leaf('label', 'ICONTAINS', 3)],
+    ['IS_TRUE with a value', leaf('flag', 'IS_TRUE', true)],
+    ['MATCHES with an invalid regex', leaf('label', 'MATCHES', '([a-z')],
+    ['MATCHES with an empty pattern', leaf('label', 'MATCHES', '')],
+    ['MATCHES with a non-string', leaf('label', 'MATCHES', 5)],
   ])('incomplete or malformed criterion: %s', (_label, node) => {
     expectBadInput(() => one(node));
+  });
+
+  test('a regex longer than MAX_PATTERN_LENGTH is rejected', () => {
+    const maxPattern = config.SECURITY.FILTER_TREE?.MAX_PATTERN_LENGTH ?? 200;
+    expectBadInput(
+      () => one(leaf('label', 'MATCHES', 'a'.repeat(maxPattern + 1))),
+      `at most ${maxPattern} characters`,
+    );
+    expect(() => one(leaf('label', 'MATCHES', 'a'.repeat(maxPattern)))).not.toThrow();
+  });
+
+  test('case-insensitive and regex operations stay text-only', () => {
+    expectBadInput(() => one(leaf('country', 'ICONTAINS', 'x')), 'Allowed operations');
+    expectBadInput(() => one(leaf('value', 'MATCHES', '^1$')), 'Allowed operations');
+    expectBadInput(() => one(leaf('day', 'IEQ', 'x')), 'Allowed operations');
+  });
+
+  test('boolean shortcuts stay boolean-only, date bounds stay date-only', () => {
+    expectBadInput(() => one(leaf('label', 'IS_TRUE')), 'Allowed operations');
+    expectBadInput(() => one(leaf('label', 'ON_OR_AFTER', 'x')), 'Allowed operations');
+  });
+
+  test('a non-boolean negate is rejected', () => {
+    expectBadInput(
+      () =>
+        treeToSQL(
+          group([{ ...leaf('value', 'GT', 1), negate: 'yes' as unknown as boolean }]),
+          metadataByName,
+        ),
+      'Invalid "negate" value',
+    );
   });
 
   test('empty group (root or nested) is rejected', () => {

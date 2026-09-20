@@ -30,14 +30,30 @@ enum FilterOperation {
   LT
   LTE
   BETWEEN
+  NOT_BETWEEN
   IN
   NOT_IN
   BEFORE
   AFTER
+  ON_OR_BEFORE
+  ON_OR_AFTER
   CONTAINS
+  NOT_CONTAINS
   STARTS
+  NOT_STARTS
+  ENDS
+  NOT_ENDS
+  IEQ
+  ICONTAINS
+  ISTARTS
+  IENDS
+  MATCHES
   IS_NULL
   IS_NOT_NULL
+  IS_TRUE
+  IS_FALSE
+  IS_NOT_TRUE
+  IS_NOT_FALSE
 }
 
 input FilterCriterion {
@@ -48,6 +64,7 @@ input FilterCriterion {
 
 input FilterNode {
   connector: FilterConnector # connector with the PREVIOUS node of the group (ignored for the first, default AND)
+  negate: Boolean = false # NOT on this node: the leaf predicate, or the whole group
   criterion: FilterCriterion # leaf …
   children: [FilterNode!] # … or group — exactly one of the two
 }
@@ -60,18 +77,28 @@ Rules:
 - Each node sets **exactly one** of `criterion` / `children`; groups cannot be empty.
 - Children are joined left to right with their connector; sub-groups are
   parenthesized (standard SQL precedence applies inside a group: `AND` before `OR`).
+- `negate: true` wraps the node in `NOT (…)`: on a leaf it negates that predicate,
+  on a group the whole parenthesized group. Combined with `AND` / `OR` this covers
+  « AND NOT », « OR NOT » and `NOT (… OR …)`, so no extra connector is needed.
 - Bounds (`config/security.yaml`, `SECURITY.FILTER_TREE`): group nesting depth
   ≤ `MAX_DEPTH` (5, root = 0), criteria ≤ `MAX_CRITERIA` (50), IN list ≤
-  `MAX_IN_VALUES` (1000).
+  `MAX_IN_VALUES` (1000), regex length ≤ `MAX_PATTERN_LENGTH` (200).
 
 Allowed operations per column type family:
 
-| Family  | SQL types                                                                                           | Operations                                                   |
-| ------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| numeric | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `U*INT` `UBIGINT` `FLOAT` `DOUBLE` `DECIMAL(p,s)` | `EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL` |
-| date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                             | `EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL`            |
-| text    | `VARCHAR`                                                                                           | `EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL`       |
-| boolean | `BOOLEAN`                                                                                           | `EQ NEQ IS_NULL IS_NOT_NULL`                                 |
+| Family  | SQL types                                                                                           | Operations                                                                                                                       |
+| ------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| numeric | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `U*INT` `UBIGINT` `FLOAT` `DOUBLE` `DECIMAL(p,s)` | `EQ NEQ GT GTE LT LTE BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                                         |
+| date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                             | `EQ NEQ BEFORE AFTER ON_OR_BEFORE ON_OR_AFTER BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                 |
+| text    | `VARCHAR`                                                                                           | `EQ NEQ IEQ CONTAINS NOT_CONTAINS ICONTAINS STARTS NOT_STARTS ISTARTS ENDS NOT_ENDS IENDS MATCHES IN NOT_IN IS_NULL IS_NOT_NULL` |
+| boolean | `BOOLEAN`                                                                                           | `EQ NEQ IS_TRUE IS_FALSE IS_NOT_TRUE IS_NOT_FALSE IS_NULL IS_NOT_NULL`                                                           |
+
+The `I*` operations (`IEQ`, `ICONTAINS`, `ISTARTS`, `IENDS`) are the case-insensitive
+twins of their `LIKE` counterparts (SQL `ILIKE`); `IEQ` adds no wildcard, so it is a
+case-insensitive equality. `MATCHES` compiles to DuckDB's `regexp_matches` (RE2
+syntax: no backreferences, no lookaround); patterns are capped at
+`MAX_PATTERN_LENGTH` (200 characters) and must be syntactically valid. On a nullable
+column, `IS_NOT_TRUE` / `IS_NOT_FALSE` also match `NULL`, unlike `NEQ`.
 
 Value shapes:
 
@@ -79,15 +106,15 @@ Value shapes:
   string for integers beyond 2^53), ISO 8601 string for dates (`YYYY-MM-DD` for
   `DATE`), string for text, `true`/`false` for booleans;
 - `IN` / `NOT_IN`: a non-empty array of scalars;
-- `BETWEEN`: `{ "min": …, "max": … }` (bounds included);
-- `IS_NULL` / `IS_NOT_NULL`: no value.
+- `BETWEEN` / `NOT_BETWEEN`: `{ "min": …, "max": … }` (bounds included);
+- `IS_NULL`, `IS_NOT_NULL`, `IS_TRUE`, `IS_FALSE`, `IS_NOT_TRUE`, `IS_NOT_FALSE`: no value.
 
-`CONTAINS` / `STARTS` match the value literally (`%` and `_` are escaped).
+All `LIKE` / `ILIKE` operations match the value literally (`%` and `_` are escaped).
 Any invalid tree, unknown column, incompatible operation or malformed value is
 rejected with a `BAD_USER_INPUT` error naming the column, its type and the
 allowed operations.
 
-Example — `kind = 1 AND (country = 1 OR country = 2)`:
+Example — `kind = 1 AND NOT (country = 1 OR country = 2)`:
 
 ```graphql
 structuredFilters: {
@@ -95,6 +122,7 @@ structuredFilters: {
     { criterion: { variable: "kind", operation: EQ, value: 1 } }
     {
       connector: AND
+      negate: true
       children: [
         { criterion: { variable: "country", operation: EQ, value: 1 } }
         { connector: OR, criterion: { variable: "country", operation: EQ, value: 2 } }

@@ -81,6 +81,7 @@ interface FilterTreeConfig {
   MAX_DEPTH: number;
   MAX_CRITERIA: number;
   MAX_IN_VALUES?: number;
+  MAX_PATTERN_LENGTH?: number;
 }
 
 /** Full security configuration (SECURITY section of the YAML). */

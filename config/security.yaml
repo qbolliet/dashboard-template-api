@@ -53,6 +53,8 @@ SECURITY:
     MAX_CRITERIA: 50
     # Nombre maximal de valeurs d'une liste IN / NOT_IN
     MAX_IN_VALUES: 1000
+    # Longueur maximale d'un motif d'expression régulière (opération MATCHES)
+    MAX_PATTERN_LENGTH: 200
 
   # Configuration du monitoring
   MONITORING:

@@ -26,6 +26,7 @@ const metadataByName = new Map<string, ColumnMetadata>([
   ['amount', { sql_type: 'DECIMAL(18,3)' }],
   ['ts', { sql_type: 'TIMESTAMP_NS' }],
   ['label', { sql_type: 'VARCHAR' }],
+  ['flag', { sql_type: 'BOOLEAN' }],
 ]);
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
@@ -62,12 +63,12 @@ beforeAll(async () => {
   instance = await DuckDBInstance.create(':memory:');
   connection = await instance.connect();
   await connection.run(`
-    CREATE TABLE t (id UBIGINT, n BIGINT, amount DECIMAL(18,3), ts TIMESTAMP_NS, label VARCHAR);
+    CREATE TABLE t (id UBIGINT, n BIGINT, amount DECIMAL(18,3), ts TIMESTAMP_NS, label VARCHAR, flag BOOLEAN);
     INSERT INTO t VALUES
-      (1, 1, 1.250, '2024-01-01 00:00:00', '50% off'),
-      (3000000000, 3000000000, 2.500, '2024-06-01 12:00:00', '50 off'),
-      (9007199254740991, 9007199254740991, 3.750, '2025-01-01 00:00:00', 'a_b'),
-      (18446744073709551615, -5, 4.000, '2030-01-01 00:00:00', 'axb');
+      (1, 1, 1.250, '2024-01-01 00:00:00', '50% off', true),
+      (3000000000, 3000000000, 2.500, '2024-06-01 12:00:00', '50 off', false),
+      (9007199254740991, 9007199254740991, 3.750, '2025-01-01 00:00:00', 'a_b', NULL),
+      (18446744073709551615, -5, 4.000, '2030-01-01 00:00:00', 'AXB', true);
   `);
 });
 
@@ -165,6 +166,115 @@ describe('treeToSQL comparisons on a real table', () => {
     expect(underscore).toEqual(['9007199254740991']);
   });
 
+  test('case-insensitive operations (ILIKE) match regardless of case', async () => {
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'ICONTAINS', value: 'axb' } }],
+      }),
+    ).toEqual(['18446744073709551615']);
+
+    // IEQ n'ajoute aucun joker : égalité insensible à la casse
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'IEQ', value: 'axb' } }],
+      }),
+    ).toEqual(['18446744073709551615']);
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'IEQ', value: 'ax' } }],
+      }),
+    ).toEqual([]);
+  });
+
+  test('ENDS / NOT_CONTAINS (LIKE and NOT LIKE) with escaped wildcards', async () => {
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'ENDS', value: 'off' } }],
+      }),
+    ).toEqual(['1', '3000000000']);
+
+    // Le % de « 50% off » est un caractère littéral, pas un joker : seule cette
+    // ligne est exclue. Sans échappement, « 50 off » le serait aussi (LIKE '%50%%').
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'NOT_CONTAINS', value: '50%' } }],
+      }),
+    ).toEqual(['3000000000', '9007199254740991', '18446744073709551615']);
+  });
+
+  test('MATCHES compiles to regexp_matches (RE2)', async () => {
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'label', operation: 'MATCHES', value: '^a.b$' } }],
+      }),
+    ).toEqual(['9007199254740991']);
+  });
+
+  test('NOT_BETWEEN excludes the closed range', async () => {
+    expect(
+      await idsMatching({
+        children: [
+          {
+            criterion: {
+              variable: 'amount',
+              operation: 'NOT_BETWEEN',
+              value: { min: 2, max: '3.75' },
+            },
+          },
+        ],
+      }),
+    ).toEqual(['1', '18446744073709551615']);
+  });
+
+  test('boolean shortcuts: IS_TRUE / IS_FALSE / IS_NOT_TRUE handle NULL as SQL does', async () => {
+    expect(
+      await idsMatching({ children: [{ criterion: { variable: 'flag', operation: 'IS_TRUE' } }] }),
+    ).toEqual(['1', '18446744073709551615']);
+    expect(
+      await idsMatching({ children: [{ criterion: { variable: 'flag', operation: 'IS_FALSE' } }] }),
+    ).toEqual(['3000000000']);
+
+    // IS_NOT_TRUE inclut le NULL, contrairement à NEQ true
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'flag', operation: 'IS_NOT_TRUE' } }],
+      }),
+    ).toEqual(['3000000000', '9007199254740991']);
+    expect(
+      await idsMatching({
+        children: [{ criterion: { variable: 'flag', operation: 'NEQ', value: true } }],
+      }),
+    ).toEqual(['3000000000']);
+  });
+
+  test('negate on a leaf and on a group matches the SQL complement', async () => {
+    const inSet = await idsMatching({
+      children: [{ criterion: { variable: 'n', operation: 'IN', value: [1, -5] } }],
+    });
+    const negatedLeaf = await idsMatching({
+      children: [{ negate: true, criterion: { variable: 'n', operation: 'IN', value: [1, -5] } }],
+    });
+    const notIn = await idsMatching({
+      children: [{ criterion: { variable: 'n', operation: 'NOT_IN', value: [1, -5] } }],
+    });
+    expect(negatedLeaf).toEqual(notIn);
+    expect(negatedLeaf.some((id) => inSet.includes(id))).toBe(false);
+
+    // NOT (n = 1 OR n = -5) sur un groupe entier
+    const negatedGroup = await idsMatching({
+      children: [
+        {
+          negate: true,
+          children: [
+            { criterion: { variable: 'n', operation: 'EQ', value: 1 } },
+            { connector: 'OR', criterion: { variable: 'n', operation: 'EQ', value: -5 } },
+          ],
+        },
+      ],
+    });
+    expect(negatedGroup).toEqual(notIn);
+  });
+
   test('mixed AND/OR group keeps SQL precedence identical to the frontend', async () => {
     // id = 1 OR (n = -5 AND label STARTS 'ax')
     const ids = await idsMatching({
@@ -176,7 +286,7 @@ describe('treeToSQL comparisons on a real table', () => {
             { criterion: { variable: 'n', operation: 'EQ', value: -5 } },
             {
               connector: 'AND',
-              criterion: { variable: 'label', operation: 'STARTS', value: 'ax' },
+              criterion: { variable: 'label', operation: 'ISTARTS', value: 'ax' },
             },
           ],
         },
