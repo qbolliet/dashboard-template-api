@@ -299,12 +299,23 @@ async function startServer(): Promise<void> {
 
       return {
         // Validation de sécurité avant l'exécution de l'opération
-        async didResolveOperation({ operation, request: opRequest }): Promise<void> {
+        async didResolveOperation({ document, operation, request: opRequest }): Promise<void> {
           await securityManager.validateRequest(
             operation as { name?: { value?: string }; operation?: string },
             opRequest as { query?: string },
             contextValue,
           );
+
+          // Rejet avant exécution des requêtes trop coûteuses
+          // (scores par champ : SECURITY.COMPLEXITY de config/security.yaml)
+          if (operation) {
+            securityManager.validateComplexity(
+              document,
+              operation,
+              (opRequest.variables ?? {}) as Record<string, unknown>,
+              contextValue,
+            );
+          }
         },
 
         // Logging de la complétion de la requête et formatage en production
@@ -412,6 +423,13 @@ async function startServer(): Promise<void> {
 
   // Démarrage du serveur Apollo
   await server.start();
+
+  // Limitation de taux par IP — montée AVANT le middleware Apollo : une requête
+  // refusée ne coûte ni parsing GraphQL, ni resolver, ni accès à la base.
+  // Portée volontairement limitée à /graphql : les sondes /health, /ready et
+  // /metrics ne sont jamais limitées. Le futur /api/export réutilisera la même
+  // fabrique, donc le même budget par client.
+  app.use('/graphql', securityManager.createRateLimitMiddleware());
 
   // Application du middleware Apollo via Express
   app.use(

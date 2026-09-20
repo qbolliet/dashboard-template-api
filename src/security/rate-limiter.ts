@@ -1,5 +1,4 @@
-// Importation des modules Node.js et GraphQL
-import { GraphQLError } from 'graphql';
+// Importation des modules Node.js
 import crypto from 'crypto';
 import { createContextLogger } from '../utils/logger.js';
 import type { ContextLogger } from '../utils/logger.js';
@@ -45,6 +44,16 @@ interface RateLimitInfo {
   skip?: boolean;
 }
 
+/** Outcome of a rate-limit check for a single request. */
+interface RateLimitDecision {
+  /** Whether the request may proceed. */
+  allowed: boolean;
+  /** Milliseconds to wait before retrying; 0 when the request is allowed. */
+  retryAfterMs: number;
+  /** Current counters and reset timestamps for the client. */
+  info: RateLimitInfo;
+}
+
 // ─── Classe de limitation de taux ───────────────────────────────────────────
 
 /**
@@ -87,19 +96,23 @@ class RateLimiter {
     this.logger = createContextLogger({ component: 'security', module: 'rate-limiter' });
     // Démarrage du nettoyage périodique des entrées expirées
     this.cleanupInterval = setInterval(() => this._removeExpiredEntries(), this.config.windowMs);
+    // Timer non bloquant pour l'event loop — il ne doit pas retenir le processus
+    this.cleanupInterval.unref?.();
   }
 
   /**
    * Checks and updates rate-limit counters for a given HTTP request.
    *
+   * Never throws on limit exhaustion: the caller decides how to reject the
+   * request (HTTP 429 for the Express middleware).
+   *
    * @param req - Incoming HTTP request to evaluate.
-   * @returns RateLimitInfo with current counters and ISO reset timestamps.
-   * @throws {GraphQLError} When the sustained or burst limit is exceeded.
+   * @returns Decision carrying the allowance, the retry delay and the counters.
    */
-  async checkLimit(req: HttpRequest): Promise<RateLimitInfo> {
+  async checkLimit(req: HttpRequest): Promise<RateLimitDecision> {
     // Court-circuit si la requête doit être ignorée
     if (this.config.skip(req)) {
-      return { skip: true } as RateLimitInfo;
+      return { allowed: true, retryAfterMs: 0, info: { skip: true } as RateLimitInfo };
     }
 
     const key = this.config.keyGenerator(req);
@@ -158,29 +171,26 @@ class RateLimiter {
         violations: clientData.violations,
       });
 
-      // Calcul du délai avant nouvelle tentative autorisée
-      const oldestRequest = clientData.requests[0] ?? now;
-      const retryAfter = Math.ceil(
-        Math.min(
-          this.config.windowMs - (now - oldestRequest),
-          this.config.burstWindowMs - (now - clientData.lastBurstReset),
-        ) / 1000,
-      );
+      // Délai avant nouvelle tentative : attente de la plus contraignante des
+      // limites effectivement dépassées (fenêtre longue et/ou rafale).
+      const delays: number[] = [];
+      if (totalRequests >= this.config.maxRequests) {
+        const oldestRequest = clientData.requests[0] ?? now;
+        delays.push(this.config.windowMs - (now - oldestRequest));
+      }
+      if (clientData.burstCount >= this.config.maxBurstRequests) {
+        delays.push(this.config.burstWindowMs - (now - clientData.lastBurstReset));
+      }
+      const retryAfterMs = Math.max(0, ...delays);
 
-      throw new GraphQLError('Too many requests', {
-        extensions: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          retryAfter,
-          ...rateLimitInfo,
-        },
-      });
+      return { allowed: false, retryAfterMs, info: rateLimitInfo };
     }
 
     // Enregistrement de la requête courante dans la fenêtre
     clientData.requests.push(now);
     clientData.burstCount++;
 
-    return rateLimitInfo;
+    return { allowed: true, retryAfterMs: 0, info: rateLimitInfo };
   }
 
   /**
@@ -252,4 +262,4 @@ class RateLimiter {
 }
 
 export { RateLimiter };
-export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo };
+export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo, RateLimitDecision };

@@ -15,35 +15,37 @@ SECURITY:
     BURST_WINDOW_MS: 60000
     # Ignorer les requêtes échouées dans le comptage
     SKIP_FAILED_REQUESTS: false
+    # Activation de la limitation (false = passe-plat, réservé aux tests)
+    ENABLED: ${RATE_LIMIT_ENABLED:-true}
     # IPs de proxy de confiance autorisées à transmettre x-forwarded-for
     # Ex: ['127.0.0.1'] pour un reverse-proxy local, ['*'] pour faire confiance à tous (déconseillé)
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
 
-  # Configuration de la complexité
+  # Configuration de la complexité — évaluée avant exécution (didResolveOperation)
   COMPLEXITY:
-    # Complexité maximale autorisée
-    MAX_ALLOWED: 100
+    # Complexité maximale autorisée pour une opération
+    # Calibré sur les requêtes réelles du dashboard : la page la plus lourde
+    # (tableau + graphique + menus + métadonnées) score ~50, soit une marge de 4x.
+    # Marge verrouillée par tests/integration/complexity-guard.test.ts.
+    MAX_ALLOWED: 200
     # Coûts par type d'opération
     SCALAR_COST: 0
     OBJECT_COST: 1
     LIST_FACTOR: 10
     DEPTH_FACTOR: 1.5
     INTROSPECTION_COST: 1000
-    # Scores personnalisés par opération
+    # Scores personnalisés par champ — s'appliquent à n'importe quel champ, à
+    # n'importe quelle profondeur. Pondérer une nouvelle query se fait ici, par
+    # l'ajout d'une seule entrée.
     CUSTOM_SCORES:
       getFactTable: 5
       getAggregatedFacts: 10
       getFactTableWithMetadata: 8
 
-  # Configuration de la sanitization
-  SANITIZATION:
-    ENABLE_XSS: true
-    ENABLE_SQL: true
-    MAX_STRING_LENGTH: 1000
-    # Tags HTML autorisés (vide = aucun)
-    ALLOWED_TAGS: []
-    # Sanitizers personnalisés par champ
-    CUSTOM_SANITIZERS: {}
+  # Pas de section SANITIZATION : la sanitization XSS/SQL des valeurs n'a pas
+  # d'objet sur ce chemin (SQL paramétré via treeToSQL, identifiants validés par
+  # validateIdentifier, motifs interdits rejetés par PatternValidator) et
+  # corromprait des libellés légitimes (« Côte-d'Or »). Cf. src/security/manager.ts.
 
   # Bornes anti-abus de l'arbre de filtres (structuredFilters)
   FILTER_TREE:

@@ -1,14 +1,13 @@
 // Importation des types GraphQL nécessaires à l'analyse AST
 import type {
-  GraphQLResolveInfo,
   FieldNode,
   FragmentDefinitionNode,
   InlineFragmentNode,
+  OperationDefinitionNode,
   ArgumentNode,
   ValueNode,
   IntValueNode,
   FloatValueNode,
-  GraphQLSchema,
 } from 'graphql';
 import { createContextLogger } from '../utils/logger.js';
 import { config } from '../utils/config-loader.js';
@@ -64,31 +63,40 @@ class QueryComplexityAnalyzer {
   }
 
   /**
-   * Calculates the complexity score for a GraphQL field resolver.
+   * Calculates the complexity score of a whole GraphQL operation.
    *
-   * @param info - GraphQL resolve info for the current field.
-   * @returns Numeric complexity score, or 0 when resolve info is unavailable.
+   * Every root field of the operation is scored from depth 0 and the scores
+   * are summed, so that a document requesting several expensive queries pays
+   * for all of them.
+   *
+   * @param operation - Operation definition resolved by Apollo before execution.
+   * @param fragments - Named fragment definitions declared in the document.
+   * @param variables - Resolved variable values for the operation.
+   * @returns Cumulative complexity score for the operation.
    */
-  calculate(info: GraphQLResolveInfo): number {
-    if (!info?.fieldNodes?.[0]) {
-      return 0;
+  calculateForOperation(
+    operation: OperationDefinitionNode,
+    fragments: Record<string, FragmentDefinitionNode> = {},
+    variables: Record<string, unknown> = {},
+  ): number {
+    // Initialisation du score cumulé de l'opération
+    let complexity = 0;
+
+    // Parcours des sélections racine (champs, fragments en ligne ou nommés)
+    for (const selection of operation.selectionSet?.selections ?? []) {
+      if (selection.kind === 'Field' || selection.kind === 'InlineFragment') {
+        complexity += this.calculateFieldComplexity(selection, fragments, variables, 0);
+      } else if (selection.kind === 'FragmentSpread') {
+        const fragment = fragments[selection.name.value];
+        if (fragment) {
+          complexity += this.calculateFieldComplexity(fragment, fragments, variables, 0);
+        }
+      }
     }
-
-    // Extraction du premier nœud de champ à analyser
-    const fieldNode = info.fieldNodes[0];
-
-    // Calcul récursif depuis la racine
-    const complexity = this.calculateFieldComplexity(
-      fieldNode,
-      info.schema,
-      info.fragments as Record<string, FragmentDefinitionNode>,
-      info.variableValues as Record<string, unknown>,
-      0,
-    );
 
     // Journalisation du score calculé
     this.logger.operation('Query complexity calculated', {
-      field: info.fieldName,
+      operationName: operation.name?.value ?? 'anonymous',
       complexity,
       maxAllowed: this.config.maxAllowed,
     });
@@ -97,10 +105,18 @@ class QueryComplexityAnalyzer {
   }
 
   /**
+   * Returns the configured complexity ceiling.
+   *
+   * @returns Maximum complexity score allowed for a single operation.
+   */
+  get maxAllowed(): number {
+    return this.config.maxAllowed;
+  }
+
+  /**
    * Recursively computes the complexity contribution of an AST node.
    *
    * @param node - AST node to analyze (field, inline fragment, or named fragment).
-   * @param schema - Current GraphQL schema instance.
    * @param fragments - Named fragment definitions available in the document.
    * @param variables - Resolved variable values for the operation.
    * @param depth - Current recursion depth used for the depth cost factor.
@@ -108,7 +124,6 @@ class QueryComplexityAnalyzer {
    */
   private calculateFieldComplexity(
     node: ComplexityNode,
-    schema: GraphQLSchema,
     fragments: Record<string, FragmentDefinitionNode>,
     variables: Record<string, unknown>,
     depth: number,
@@ -117,16 +132,22 @@ class QueryComplexityAnalyzer {
     let complexity = 0;
     const nodeName = 'name' in node ? node.name?.value : undefined;
 
-    // Coût de base selon le type de champ
-    if (nodeName?.startsWith('__')) {
-      // Champ d'introspection — coût intentionnellement élevé
-      complexity += this.config.introspectionCost;
-    } else if (nodeName && this.config.customScores[nodeName]) {
-      // Score personnalisé configuré pour ce champ
-      complexity += this.config.customScores[nodeName];
-    } else {
-      // Coût d'objet par défaut
-      complexity += this.config.objectCost;
+    // Coût de base du champ — un fragment (nommé ou en ligne) est un conteneur et
+    // non un champ : il ne coûte rien par lui-même, seulement par ses sélections.
+    if (node.kind === 'Field') {
+      if (nodeName?.startsWith('__')) {
+        // Champ d'introspection — coût intentionnellement élevé
+        complexity += this.config.introspectionCost;
+      } else if (nodeName && this.config.customScores[nodeName]) {
+        // Score personnalisé configuré pour ce champ
+        complexity += this.config.customScores[nodeName];
+      } else if (node.selectionSet) {
+        // Coût d'objet — champ portant un sous-ensemble de sélection
+        complexity += this.config.objectCost;
+      } else {
+        // Coût de feuille (scalaire) — le volume est porté par le champ parent
+        complexity += this.config.scalarCost;
+      }
     }
 
     // Application du facteur de profondeur (exponentiel)
@@ -142,31 +163,13 @@ class QueryComplexityAnalyzer {
     if (node.selectionSet) {
       for (const selection of node.selectionSet.selections) {
         if (selection.kind === 'Field') {
-          complexity += this.calculateFieldComplexity(
-            selection,
-            schema,
-            fragments,
-            variables,
-            depth + 1,
-          );
+          complexity += this.calculateFieldComplexity(selection, fragments, variables, depth + 1);
         } else if (selection.kind === 'InlineFragment') {
-          complexity += this.calculateFieldComplexity(
-            selection,
-            schema,
-            fragments,
-            variables,
-            depth,
-          );
+          complexity += this.calculateFieldComplexity(selection, fragments, variables, depth);
         } else if (selection.kind === 'FragmentSpread') {
           const fragment = fragments[selection.name.value];
           if (fragment) {
-            complexity += this.calculateFieldComplexity(
-              fragment,
-              schema,
-              fragments,
-              variables,
-              depth,
-            );
+            complexity += this.calculateFieldComplexity(fragment, fragments, variables, depth);
           }
         }
       }

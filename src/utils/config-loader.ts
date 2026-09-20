@@ -42,6 +42,8 @@ interface SecurityPatternEntry {
 
 /** Rate limiter configuration. */
 interface RateLimitConfig {
+  /** Set to false to disable enforcement entirely (test configurations). */
+  ENABLED?: boolean;
   MAX_REQUESTS: number;
   WINDOW_MS: number;
   MAX_BURST_REQUESTS: number;
@@ -59,15 +61,6 @@ interface ComplexityConfig {
   DEPTH_FACTOR: number;
   INTROSPECTION_COST: number;
   CUSTOM_SCORES: Record<string, number>;
-}
-
-/** User input sanitization configuration. */
-interface SanitizationConfig {
-  ENABLE_XSS: boolean;
-  ENABLE_SQL: boolean;
-  MAX_STRING_LENGTH: number;
-  ALLOWED_TAGS: string[];
-  CUSTOM_SANITIZERS: Record<string, (value: unknown) => unknown>;
 }
 
 /** Security monitoring configuration. */
@@ -89,7 +82,6 @@ interface SecurityConfig {
   MAX_QUERY_DEPTH: number;
   RATE_LIMIT: RateLimitConfig;
   COMPLEXITY: ComplexityConfig;
-  SANITIZATION: SanitizationConfig;
   MONITORING: SecurityMonitoringConfig;
   FILTER_TREE?: FilterTreeConfig;
 }
@@ -690,7 +682,6 @@ export type {
   SecurityThresholdsConfig,
   RateLimitConfig,
   ComplexityConfig,
-  SanitizationConfig,
   SecurityMonitoringConfig,
   CorsConfig,
   RequestLimitsConfig,
