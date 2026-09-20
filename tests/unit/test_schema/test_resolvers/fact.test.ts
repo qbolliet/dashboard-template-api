@@ -199,6 +199,30 @@ describe('getFactTable', () => {
     expect(matches.total).toBeGreaterThan(0);
   });
 
+  test('derived connectors: XOR, NAND and NOR agree with their definitions', async () => {
+    // A = country = 1, B = kind = 1
+    const withConnector = async (connector: string) =>
+      (
+        await countWith({
+          children: [leaf('country', 'EQ', 1), { ...leaf('kind', 'EQ', 1), connector }],
+        })
+      ).total;
+
+    const [and, or, xor, nand, nor, all] = await Promise.all([
+      withConnector('AND'),
+      withConnector('OR'),
+      withConnector('XOR'),
+      withConnector('NAND'),
+      withConnector('NOR'),
+      countWith(null).then((r) => r.total),
+    ]);
+
+    // XOR = OR - AND, NAND = total - AND, NOR = total - OR
+    expect(xor).toBe(or! - and!);
+    expect(nand).toBe(all! - and!);
+    expect(nor).toBe(all! - or!);
+  });
+
   test('NOT_IN is the complement of IN', async () => {
     const all = await countWith(null);
     const inSet = await countWith({ children: [leaf('country', 'IN', [1, 2])] });

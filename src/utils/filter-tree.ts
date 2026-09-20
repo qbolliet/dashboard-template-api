@@ -43,8 +43,11 @@ const FILTER_OPERATIONS = [
 /** Filter operation (GraphQL FilterOperation enum value). */
 type FilterOperation = (typeof FILTER_OPERATIONS)[number];
 
+/** Logical connectors exposed by the GraphQL FilterConnector enum. */
+const FILTER_CONNECTORS = ['AND', 'OR', 'AND_NOT', 'OR_NOT', 'XOR', 'XNOR', 'NAND', 'NOR'] as const;
+
 /** Logical connector (GraphQL FilterConnector enum value). */
-type FilterConnector = 'AND' | 'OR';
+type FilterConnector = (typeof FILTER_CONNECTORS)[number];
 
 /** Family of a SQL column type, which determines the allowed operations. */
 type SqlTypeFamily = 'numeric' | 'date' | 'text' | 'boolean';
@@ -199,6 +202,34 @@ const LIKE_OPERATIONS: Partial<
   NOT_ENDS: { sql: 'NOT LIKE', pattern: 'ends' },
   IENDS: { sql: 'ILIKE', pattern: 'ends' },
   IEQ: { sql: 'ILIKE', pattern: 'exact' },
+};
+
+/**
+ * Combines the expression built so far with the next node's predicate.
+ *
+ * AND / OR / AND_NOT / OR_NOT are appended flat, so ordinary SQL precedence
+ * applies within a run (NOT binds tightest, then AND, then OR) — the semantics
+ * of the frontend's treeToSQL. The derived connectors have no SQL keyword in
+ * DuckDB and are built from NOT / AND / OR or from boolean (in)equality; they
+ * take everything on their left as a single operand, which is why the left side
+ * is parenthesized. Wrapping a complete expression in parentheses never changes
+ * its meaning, so a preceding AND / OR run keeps its precedence semantics.
+ *
+ * All of them follow SQL three-valued logic: a NULL operand yields NULL, so the
+ * row is not selected (NOR is the one exception, being true only when both
+ * operands are false).
+ */
+const CONNECTOR_COMBINERS: Record<FilterConnector, (left: string, right: string) => string> = {
+  AND: (left, right) => `${left} AND ${right}`,
+  OR: (left, right) => `${left} OR ${right}`,
+  AND_NOT: (left, right) => `${left} AND NOT (${right})`,
+  OR_NOT: (left, right) => `${left} OR NOT (${right})`,
+  // Ou exclusif : inégalité booléenne (DuckDB n'a pas de mot-clé XOR)
+  XOR: (left, right) => `(${left}) <> (${right})`,
+  // Équivalence : les deux prédicats ont la même valeur de vérité
+  XNOR: (left, right) => `(${left}) = (${right})`,
+  NAND: (left, right) => `NOT ((${left}) AND (${right}))`,
+  NOR: (left, right) => `NOT ((${left}) OR (${right}))`,
 };
 
 /** Value-less operations and their SQL predicate. */
@@ -476,10 +507,11 @@ function collectFilterVariables(root: FilterNodeInput): string[] {
     if (
       node.connector !== undefined &&
       node.connector !== null &&
-      node.connector !== 'AND' &&
-      node.connector !== 'OR'
+      !FILTER_CONNECTORS.includes(node.connector)
     ) {
-      throw badInput(`Invalid filter connector "${String(node.connector)}": expected AND or OR.`);
+      throw badInput(
+        `Invalid filter connector "${String(node.connector)}": expected one of ${FILTER_CONNECTORS.join(', ')}.`,
+      );
     }
     if (node.negate !== undefined && node.negate !== null && typeof node.negate !== 'boolean') {
       throw badInput(`Invalid "negate" value "${String(node.negate)}": expected a boolean.`);
@@ -677,8 +709,9 @@ const compileCriterion = (
  * Only validated identifiers, recognized SQL types and keywords from the
  * internal operation mapping are interpolated; every value becomes a `?`
  * placeholder appended to params in reading order. Children of a group are
- * joined with their connector (the first child's connector is ignored) and
- * sub-groups are parenthesized; the root group is not.
+ * combined left to right with their connector (the first child's connector is
+ * ignored, and an absent connector means AND); sub-groups are parenthesized,
+ * the root group is not. See CONNECTOR_COMBINERS for how each connector binds.
  *
  * @param root - Root node of the filter tree (must be a non-empty group).
  * @param metadataByName - Column metadata (sql_type) keyed by column name.
@@ -702,13 +735,14 @@ function treeToSQL(
       return node.negate ? `NOT (${predicate})` : predicate;
     }
 
-    const sql = (node.children as FilterNodeInput[])
-      .map((child, index) => {
-        const fragment = compileNode(child, false);
-        if (index === 0) return fragment;
-        return ` ${child.connector === 'OR' ? 'OR' : 'AND'} ${fragment}`;
-      })
-      .join('');
+    // Combinaison de gauche à droite : le connecteur d'un enfant le relie à
+    // l'expression déjà construite (celui du premier enfant est ignoré).
+    const sql = (node.children as FilterNodeInput[]).reduce((accumulated, child, index) => {
+      const fragment = compileNode(child, false);
+      if (index === 0) return fragment;
+      const combine = CONNECTOR_COMBINERS[child.connector ?? 'AND'];
+      return combine(accumulated, fragment);
+    }, '');
 
     // Un groupe nié est toujours parenthésé, racine comprise ; sinon seule la
     // racine échappe aux parenthèses.
@@ -765,6 +799,7 @@ async function compileFilterTree(
 
 export {
   FILTER_OPERATIONS,
+  FILTER_CONNECTORS,
   ALLOWED_OPERATIONS,
   sqlTypeFamily,
   collectFilterVariables,

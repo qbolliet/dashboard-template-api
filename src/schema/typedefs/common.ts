@@ -35,10 +35,24 @@ const commonTypeDefs: DocumentNode = gql`
     keyLabel: String
   }
 
-  "Logical connector between a filter node and the PREVIOUS node of the same group"
+  "Logical connector between a filter node and the PREVIOUS node of the same group. AND, OR, AND_NOT and OR_NOT follow SQL precedence (NOT, then AND, then OR); XOR, XNOR, NAND and NOR take everything on their left as a single operand. A NULL operand yields NULL (row not selected), except NOR which is true only when both sides are false."
   enum FilterConnector {
+    "a AND b"
     AND
+    "a OR b"
     OR
+    "a AND NOT b"
+    AND_NOT
+    "a OR NOT b"
+    OR_NOT
+    "Exclusive or: exactly one of the two holds"
+    XOR
+    "Equivalence: both hold, or neither does"
+    XNOR
+    "Not both: NOT (a AND b)"
+    NAND
+    "Neither: NOT (a OR b)"
+    NOR
   }
 
   "Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sql_type: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL)"

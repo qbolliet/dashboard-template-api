@@ -327,6 +327,57 @@ describe('treeToSQL — SQL generation', () => {
     expect(one(leaf('label', 'ICONTAINS', '100%')).params).toEqual(['%100\\%%']);
   });
 
+  test.each<[FilterNodeInput['connector'], string]>([
+    ['AND', '"value" > CAST(? AS DOUBLE) AND "label" = ?'],
+    ['OR', '"value" > CAST(? AS DOUBLE) OR "label" = ?'],
+    ['AND_NOT', '"value" > CAST(? AS DOUBLE) AND NOT ("label" = ?)'],
+    ['OR_NOT', '"value" > CAST(? AS DOUBLE) OR NOT ("label" = ?)'],
+    ['XOR', '("value" > CAST(? AS DOUBLE)) <> ("label" = ?)'],
+    ['XNOR', '("value" > CAST(? AS DOUBLE)) = ("label" = ?)'],
+    ['NAND', 'NOT (("value" > CAST(? AS DOUBLE)) AND ("label" = ?))'],
+    ['NOR', 'NOT (("value" > CAST(? AS DOUBLE)) OR ("label" = ?))'],
+  ])('connector %s builds its SQL', (connector, expected) => {
+    const compiled = treeToSQL(
+      group([leaf('value', 'GT', 1), { ...leaf('label', 'EQ', 'a'), connector }]),
+      metadataByName,
+    );
+    expect(compiled.sql).toBe(expected);
+    expect(compiled.params).toEqual([1, 'a']);
+  });
+
+  test('a derived connector takes everything on its left as one operand', () => {
+    // a AND b, puis XOR c : le run AND/OR devient l'opérande gauche parenthésé
+    const compiled = treeToSQL(
+      group([
+        leaf('value', 'GT', 1),
+        leaf('country', 'EQ', 2, 'AND'),
+        { ...leaf('flag', 'IS_TRUE'), connector: 'XOR' },
+        { ...leaf('label', 'EQ', 'z'), connector: 'OR' },
+      ]),
+      metadataByName,
+    );
+    expect(compiled.sql).toBe(
+      '("value" > CAST(? AS DOUBLE) AND "country" = CAST(? AS BIGINT)) <> ("flag" IS TRUE)' +
+        ' OR "label" = ?',
+    );
+    expect(compiled.params).toEqual([1, 2, 'z']);
+  });
+
+  test('AND_NOT is equivalent to AND on a negated node', () => {
+    const viaConnector = treeToSQL(
+      group([leaf('value', 'GT', 1), { ...leaf('label', 'EQ', 'a'), connector: 'AND_NOT' }]),
+      metadataByName,
+    );
+    const viaNegate = treeToSQL(
+      group([
+        leaf('value', 'GT', 1),
+        { ...leaf('label', 'EQ', 'a'), connector: 'AND', negate: true },
+      ]),
+      metadataByName,
+    );
+    expect(viaConnector).toEqual(viaNegate);
+  });
+
   test('negate wraps a leaf predicate in NOT (…)', () => {
     expect(
       treeToSQL(group([{ ...leaf('country', 'EQ', 1), negate: true }]), metadataByName),
@@ -497,7 +548,10 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
     expectBadInput(
       () =>
         treeToSQL(
-          group([leaf('value', 'GT', 1), { ...leaf('value', 'LT', 5), connector: 'XOR' as 'AND' }]),
+          group([
+            leaf('value', 'GT', 1),
+            { ...leaf('value', 'LT', 5), connector: 'NOPE' as 'AND' },
+          ]),
           metadataByName,
         ),
       'Invalid filter connector',

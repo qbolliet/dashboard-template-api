@@ -247,6 +247,50 @@ describe('treeToSQL comparisons on a real table', () => {
     ).toEqual(['3000000000']);
   });
 
+  test.each<[string, string[]]>([
+    // Prédicats : A = n > 0, B = label ENDS 'off'
+    // (T,T) id 1 · (T,T) id 3000000000 · (T,F) id 9007199254740991 · (F,F) id 18446744073709551615
+    ['AND', ['1', '3000000000']],
+    ['OR', ['1', '3000000000', '9007199254740991']],
+    ['AND_NOT', ['9007199254740991']],
+    ['OR_NOT', ['1', '3000000000', '9007199254740991', '18446744073709551615']],
+    ['XOR', ['9007199254740991']],
+    ['XNOR', ['1', '3000000000', '18446744073709551615']],
+    ['NAND', ['9007199254740991', '18446744073709551615']],
+    ['NOR', ['18446744073709551615']],
+  ])('connector %s matches its truth table on real rows', async (connector, expected) => {
+    const ids = await idsMatching({
+      children: [
+        { criterion: { variable: 'n', operation: 'GT', value: 0 } },
+        {
+          connector: connector as 'AND',
+          criterion: { variable: 'label', operation: 'ENDS', value: 'off' },
+        },
+      ],
+    });
+    expect(ids).toEqual(expected);
+  });
+
+  test('a derived connector groups everything on its left', async () => {
+    // (n > 0 AND amount > 1.3) XOR (label ENDS 'off')
+    const ids = await idsMatching({
+      children: [
+        { criterion: { variable: 'n', operation: 'GT', value: 0 } },
+        {
+          connector: 'AND',
+          criterion: { variable: 'amount', operation: 'GT', value: '1.3' },
+        },
+        {
+          connector: 'XOR',
+          criterion: { variable: 'label', operation: 'ENDS', value: 'off' },
+        },
+      ],
+    });
+    // id 1 : (true AND false) XOR true = true · id 3000000000 : (T AND T) XOR T = false
+    // id 9007… : (T AND T) XOR F = true · id 1844… : (F AND T) XOR F = false
+    expect(ids).toEqual(['1', '9007199254740991']);
+  });
+
   test('negate on a leaf and on a group matches the SQL complement', async () => {
     const inSet = await idsMatching({
       children: [{ criterion: { variable: 'n', operation: 'IN', value: [1, -5] } }],

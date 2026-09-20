@@ -122,7 +122,7 @@ describe('Input types — common', () => {
     const connectors = assertEnumType(schema.getType('FilterConnector'))
       .getValues()
       .map((v) => v.name);
-    expect(connectors).toEqual(['AND', 'OR']);
+    expect(connectors).toEqual(['AND', 'OR', 'AND_NOT', 'OR_NOT', 'XOR', 'XNOR', 'NAND', 'NOR']);
 
     const operations = assertEnumType(schema.getType('FilterOperation'))
       .getValues()

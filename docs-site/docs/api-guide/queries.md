@@ -20,6 +20,12 @@ types are read from the `metadata` table (`sql_type`), never from the client.
 enum FilterConnector {
   AND
   OR
+  AND_NOT
+  OR_NOT
+  XOR
+  XNOR
+  NAND
+  NOR
 }
 
 enum FilterOperation {
@@ -75,14 +81,35 @@ Rules:
 - The root node is a **non-empty group** (`children`). To apply no filter, omit
   `structuredFilters` (an empty group is rejected).
 - Each node sets **exactly one** of `criterion` / `children`; groups cannot be empty.
-- Children are joined left to right with their connector; sub-groups are
-  parenthesized (standard SQL precedence applies inside a group: `AND` before `OR`).
+- Children are combined left to right with their connector; sub-groups are
+  parenthesized (standard SQL precedence applies inside a group: `NOT`, then
+  `AND`, then `OR`). `AND`, `OR`, `AND_NOT` and `OR_NOT` are appended flat and
+  keep that precedence; `XOR`, `XNOR`, `NAND` and `NOR` have no SQL keyword in
+  DuckDB, so they are built from `NOT` / `AND` / `OR` (or boolean (in)equality)
+  and take **everything on their left** as a single, parenthesized operand.
 - `negate: true` wraps the node in `NOT (…)`: on a leaf it negates that predicate,
   on a group the whole parenthesized group. Combined with `AND` / `OR` this covers
   « AND NOT », « OR NOT » and `NOT (… OR …)`, so no extra connector is needed.
 - Bounds (`config/security.yaml`, `SECURITY.FILTER_TREE`): group nesting depth
   ≤ `MAX_DEPTH` (5, root = 0), criteria ≤ `MAX_CRITERIA` (50), IN list ≤
   `MAX_IN_VALUES` (1000), regex length ≤ `MAX_PATTERN_LENGTH` (200).
+
+Connectors:
+
+| Connector | SQL built           | Binding                                    |
+| --------- | ------------------- | ------------------------------------------ |
+| `AND`     | `a AND b`           | flat, SQL precedence                       |
+| `OR`      | `a OR b`            | flat, SQL precedence                       |
+| `AND_NOT` | `a AND NOT (b)`     | flat, SQL precedence                       |
+| `OR_NOT`  | `a OR NOT (b)`      | flat, SQL precedence                       |
+| `XOR`     | `(a) <> (b)`        | everything on the left is the left operand |
+| `XNOR`    | `(a) = (b)`         | everything on the left is the left operand |
+| `NAND`    | `NOT ((a) AND (b))` | everything on the left is the left operand |
+| `NOR`     | `NOT ((a) OR (b))`  | everything on the left is the left operand |
+
+All of them follow SQL three-valued logic: a `NULL` operand yields `NULL` and the
+row is not selected — except `NOR`, which is true as soon as both sides are false.
+`AND_NOT` / `OR_NOT` are exactly `AND` / `OR` on a node carrying `negate: true`.
 
 Allowed operations per column type family:
 
