@@ -14,7 +14,7 @@ export interface FactParent extends Record<string, unknown> {
  * Field resolvers for fact records.
  *
  * The fact table stores labels directly, so a row needs no lookup: its columns
- * are split once, in bulk, by partitionFacts (driven by metadata.is_primary_key)
+ * are split once, in bulk, by partitionFacts (driven by metadata.isPrimaryKey)
  * and these resolvers only expose the result.
  */
 const fieldResolvers = {

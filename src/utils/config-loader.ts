@@ -301,6 +301,8 @@ interface AppConfig {
     ALLOWED_CATALOGS: string[] | string;
     ALLOW_CROSS_CATALOG_QUERIES: boolean;
   };
+  /** Versions de dataset_metadata.schema_version acceptées (JSON en variable d'env). */
+  SUPPORTED_SCHEMA_VERSIONS: number[] | string;
   S3?: S3Config;
   CACHE: CacheConfig;
   CATALOGS: Record<string, CatalogConfig>;

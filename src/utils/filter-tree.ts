@@ -70,8 +70,7 @@ interface FilterNodeInput {
 
 /** Metadata of a filterable column, as read from the metadata table. */
 interface ColumnMetadata {
-  sql_type?: unknown;
-  [key: string]: unknown;
+  sqlType?: unknown;
 }
 
 /** Parameterized SQL predicate produced from a filter tree. */
@@ -322,7 +321,7 @@ const normalizeSqlType = (sqlType: string): string =>
  * The recognition is a strict allow-list: a recognized type is therefore safe
  * to interpolate in a CAST expression.
  *
- * @param sqlType - SQL type name as stored in metadata.sql_type.
+ * @param sqlType - SQL type name as stored in metadata.sqlType.
  * @returns The type family ('numeric', 'date', 'text' or 'boolean').
  * @throws {Error} When the type is not recognized (no default family).
  */
@@ -578,7 +577,7 @@ const compileCriterion = (
   }
 
   // Famille de type relue côté serveur (jamais fournie par le client)
-  const rawType = typeof meta.sql_type === 'string' ? meta.sql_type : '';
+  const rawType = typeof meta.sqlType === 'string' ? meta.sqlType : '';
   const sqlType = normalizeSqlType(rawType);
   let family: SqlTypeFamily;
   try {
@@ -714,7 +713,7 @@ const compileCriterion = (
  * the root group is not. See CONNECTOR_COMBINERS for how each connector binds.
  *
  * @param root - Root node of the filter tree (must be a non-empty group).
- * @param metadataByName - Column metadata (sql_type) keyed by column name.
+ * @param metadataByName - Column metadata (sqlType) keyed by column name.
  * @returns SQL predicate (without WHERE) and its ordered parameters.
  * @throws {GraphQLError} BAD_USER_INPUT when the tree, a column, an operation
  *   or a value is invalid, or when a bound is exceeded.

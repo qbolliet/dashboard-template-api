@@ -4,6 +4,8 @@ import { partitionFacts } from '../../utils/fact-partition.js';
 import { config } from '../../utils/config-loader.js';
 import { GraphQLError } from 'graphql';
 import { compileFilterTree } from '../../utils/filter-tree.js';
+import { resolveEffectiveSort } from '../../utils/default-sort.js';
+import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
 import type { FactQueryParams } from '../../loaders/fact.js';
 import type { LoadersCollection } from '../../loaders/index.js';
@@ -25,9 +27,10 @@ export interface FactTableArgs extends Omit<FactQueryParams, 'where' | 'format'>
  * Builds the fact loader parameters from the GraphQL arguments.
  *
  * The filter tree is validated and compiled into a parameterized predicate
- * using the metadata of the target catalog/schema. Only the compiled filter
- * reaches the loader, so the DataLoader/Redis cache key derives from a
- * deterministic SQL string and parameter list.
+ * using the metadata of the target catalog/schema, and the effective sort is
+ * resolved from dataset_metadata.cluster_by when the client gave none. Only
+ * concrete values reach the loader, so the DataLoader/Redis cache key derives
+ * from a deterministic SQL string, parameter list and ordering.
  *
  * @param args - GraphQL arguments of the fact query.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
@@ -42,12 +45,18 @@ async function buildFactParams(
   const where = await compileFilterTree(args.structuredFilters, (names) =>
     activeLoaders.metadata.loadMany(names),
   );
+
+  // Tri effectif résolu ici, donc présent dans les paramètres du loader et
+  // dans la clé de cache : deux pages ne peuvent pas partager une entrée.
+  const targetCatalog = databaseManager.validateCatalogRouting(args.catalog ?? null);
+  const sort = await resolveEffectiveSort(args.sort, activeLoaders, targetCatalog, args.schema);
+
   return {
     fields: args.fields,
     where,
     limit: args.limit,
     offset: args.offset,
-    sort: args.sort,
+    sort,
   };
 }
 

@@ -2,7 +2,7 @@
  * Integration tests for the getMetaData resolver.
  *
  * Covers field metadata retrieval for categorical and numeric fields,
- * the is_primary_key flag, null return for unknown fields, multi-field
+ * the isPrimaryKey flag, null return for unknown fields, multi-field
  * queries, and DataLoader cache performance.
  */
 
@@ -23,7 +23,7 @@ beforeAll(async () => {
 
 describe('getMetaData', () => {
   test('returns metadata for a categorical field', async () => {
-    const query = `query { getMetaData(name: "country") { name label sql_type is_categorical } }`;
+    const query = `query { getMetaData(name: "country") { name label sqlType isCategorical } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
@@ -31,38 +31,38 @@ describe('getMetaData', () => {
     // Vérification de la cohérence des métadonnées pour un champ catégoriel
     const meta = result.data!.getMetaData as {
       name: string;
-      is_categorical: boolean;
+      isCategorical: boolean;
       label: unknown;
-      sql_type: unknown;
+      sqlType: unknown;
     };
     expect(meta.name).toBe('country');
-    expect(meta.is_categorical).toBe(true);
+    expect(meta.isCategorical).toBe(true);
     expect(meta.label).toBeDefined();
     // La fact table porte le libellé : la colonne est un VARCHAR
-    expect(meta.sql_type).toBe('VARCHAR');
+    expect(meta.sqlType).toBe('VARCHAR');
   });
 
   test('returns metadata for a numeric field', async () => {
-    const query = `query { getMetaData(name: "value") { name label sql_type is_categorical } }`;
+    const query = `query { getMetaData(name: "value") { name label sqlType isCategorical } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
-    const meta = result.data!.getMetaData as { name: string; is_categorical: boolean };
+    const meta = result.data!.getMetaData as { name: string; isCategorical: boolean };
     expect(meta.name).toBe('value');
-    expect(meta.is_categorical).toBe(false);
+    expect(meta.isCategorical).toBe(false);
   });
 
-  test('returns is_primary_key field', async () => {
-    const query = `query { getMetaData(name: "country") { name is_categorical is_primary_key } }`;
+  test('returns isPrimaryKey field', async () => {
+    const query = `query { getMetaData(name: "country") { name isCategorical isPrimaryKey } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
 
     // Vérification du typage booléen et de la valeur de clé primaire pour "country"
-    const meta = result.data!.getMetaData as { is_primary_key: boolean };
+    const meta = result.data!.getMetaData as { isPrimaryKey: boolean };
     expect(meta).toBeDefined();
-    expect(typeof meta.is_primary_key).toBe('boolean');
-    expect(meta.is_primary_key).toBe(true);
+    expect(typeof meta.isPrimaryKey).toBe('boolean');
+    expect(meta.isPrimaryKey).toBe(true);
   });
 
   test('returns null for a non-existent field', async () => {
@@ -76,9 +76,9 @@ describe('getMetaData', () => {
   test('handles multiple fields in a single query', async () => {
     const query = `
       query {
-        indicator: getMetaData(name: "indicator") { name label is_categorical }
-        value: getMetaData(name: "value") { name label is_categorical }
-        date: getMetaData(name: "date") { name sql_type is_categorical }
+        indicator: getMetaData(name: "indicator") { name label isCategorical }
+        value: getMetaData(name: "value") { name label isCategorical }
+        date: getMetaData(name: "date") { name sqlType isCategorical }
       }
     `;
     const result = await execute(server, { query });
@@ -92,7 +92,7 @@ describe('getMetaData', () => {
   });
 
   test('caches repeated queries (second call significantly faster)', async () => {
-    const query = `query { getMetaData(name: "country") { name label is_categorical } }`;
+    const query = `query { getMetaData(name: "country") { name label isCategorical } }`;
 
     // Première exécution — peut être lente (cache froid)
     const t1 = performance.now();

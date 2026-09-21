@@ -364,7 +364,7 @@ describe('getAggregatedFactsWithMetadata', () => {
             keyExtent
             valueExtent
             statistics { mean median stdDev quartiles }
-            groupByFieldInfo { name label is_categorical }
+            groupByFieldInfo { name label isCategorical }
           }
         }
       }

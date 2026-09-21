@@ -4,6 +4,7 @@ import { GraphQLError } from 'graphql';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
 import type { GraphQLContext } from './types.js';
+import type { LoadersCollection } from '../../loaders/index.js';
 import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
 
@@ -29,7 +30,8 @@ export interface AggregatedFactsArgs {
   structuredFilters?: FilterNodeInput | null;
   groupBy: string;
   measure: string;
-  aggregation?: AggregationType;
+  /** Absente, l'agrégation vient de metadata.defaultAggregation puis de SUM. */
+  aggregation?: AggregationType | null;
   limit?: number;
   offset?: number;
   sort?: AggregatedSortItem[];
@@ -127,6 +129,38 @@ function validateAggregatedArgs(
   });
 }
 
+/**
+ * Resolves the aggregation actually applied to a measure.
+ *
+ * The argument wins when the client supplies one; otherwise the measure's
+ * `defaultAggregation` metadata applies, and SUM closes the chain. The
+ * resolution happens here rather than in the loader on purpose: the effective
+ * value is then part of the loader parameters, hence part of the cache key —
+ * two requests differing only by their implicit aggregation must not share a
+ * cache entry.
+ *
+ * @param explicit - Aggregation passed by the client, if any.
+ * @param measure - Measure column being aggregated.
+ * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @returns The aggregation to apply.
+ */
+// Agrégation effective : argument, puis defaultAggregation de la mesure, puis SUM
+async function resolveAggregation(
+  explicit: AggregationType | null | undefined,
+  measure: string | undefined,
+  activeLoaders: LoadersCollection,
+): Promise<AggregationType> {
+  if (explicit) return explicit;
+  if (!measure) return 'SUM';
+
+  const meta = await activeLoaders.metadata.load(measure);
+  const declared = meta?.defaultAggregation;
+  if (declared && VALID_AGGREGATIONS.includes(declared as AggregationType)) {
+    return declared as AggregationType;
+  }
+  return 'SUM';
+}
+
 // Resolver pour les données agrégées
 /**
  * Resolvers for aggregated fact queries.
@@ -155,7 +189,7 @@ const aggregatedFactsResolvers = {
         structuredFilters,
         groupBy,
         measure,
-        aggregation = 'SUM',
+        aggregation,
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
@@ -164,12 +198,16 @@ const aggregatedFactsResolvers = {
       }: AggregatedFactsArgs,
       { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
+      const activeLoaders = targetLoaders ?? loaders;
+
+      // Agrégation effective, résolue avant validation et avant la clé de cache
+      const effectiveAggregation = await resolveAggregation(aggregation, measure, activeLoaders);
+
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(aggregation, groupBy, measure, offset, limit, sort);
+      validateAggregatedArgs(effectiveAggregation, groupBy, measure, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForCatalog(catalog, schema);
-        const activeLoaders = targetLoaders ?? loaders;
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
         const where = await compileFilterTree(structuredFilters, (names) =>
           activeLoaders.metadata.loadMany(names),
@@ -181,7 +219,7 @@ const aggregatedFactsResolvers = {
             where,
             groupBy,
             measure,
-            aggregation,
+            aggregation: effectiveAggregation,
             limit,
             offset,
             sort,
@@ -221,7 +259,7 @@ const aggregatedFactsResolvers = {
         structuredFilters,
         groupBy,
         measure,
-        aggregation = 'SUM',
+        aggregation,
         limit = config.API.PAGINATION.DEFAULT_LIMIT,
         offset = 0,
         sort = [],
@@ -230,12 +268,16 @@ const aggregatedFactsResolvers = {
       }: AggregatedFactsArgs,
       { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
+      const targetLoaders = getLoadersForCatalog(catalog, schema);
+      const activeLoaders = targetLoaders ?? loaders;
+
+      // Agrégation effective, résolue avant validation et avant la clé de cache
+      const effectiveAggregation = await resolveAggregation(aggregation, measure, activeLoaders);
+
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(aggregation, groupBy, measure, offset, limit, sort);
+      validateAggregatedArgs(effectiveAggregation, groupBy, measure, offset, limit, sort);
 
       try {
-        const targetLoaders = getLoadersForCatalog(catalog, schema);
-        const activeLoaders = targetLoaders ?? loaders;
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
         const where = await compileFilterTree(structuredFilters, (names) =>
           activeLoaders.metadata.loadMany(names),
@@ -247,7 +289,7 @@ const aggregatedFactsResolvers = {
             where,
             groupBy,
             measure,
-            aggregation,
+            aggregation: effectiveAggregation,
             limit,
             offset,
             sort,

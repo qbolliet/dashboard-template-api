@@ -29,6 +29,8 @@ type KeyPatternFn = (catalog?: string | null, schema?: string | null) => string;
 /** Dictionary of Redis key-pattern generators indexed by cache type. */
 interface KeyPatterns {
   metadata: KeyPatternFn;
+  catalogMetadata: KeyPatternFn;
+  datasetInfo: KeyPatternFn;
   facts: KeyPatternFn;
   aggregatedFacts: KeyPatternFn;
   selectOptions: KeyPatternFn;
@@ -76,6 +78,9 @@ class CacheInvalidationManager {
     // Note : || (et non ??) — une chaîne vide doit également retomber sur le défaut.
     this.keyPatterns = {
       metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
+      catalogMetadata: (catalog, schema) =>
+        `catalog-metadata:${catalog || 'default'}:${schema || '*'}:*`,
+      datasetInfo: (catalog, schema) => `dataset-info:${catalog || 'default'}:${schema || '*'}:*`,
       facts: (catalog, schema) => `facts:${catalog || 'default'}:${schema || '*'}:*`,
       aggregatedFacts: (catalog, schema) =>
         `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,

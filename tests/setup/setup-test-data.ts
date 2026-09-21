@@ -516,6 +516,8 @@ async function insertFactRows(
  * @param schema - Schema name to create inside the catalog.
  * @param columns - Fact table column definitions.
  * @param spec - Metadata, dataset metadata, and fact rows of the schema.
+ * @param withDatasetMetadata - False to omit dataset_metadata entirely, which
+ *   reproduces a catalog written in the legacy format (version guard fixture).
  */
 // Création des trois tables du schéma (spec §2) : aucune table dim_*
 async function createSchema(
@@ -524,6 +526,7 @@ async function createSchema(
   schema: string,
   columns: string,
   spec: SchemaSpec,
+  withDatasetMetadata: boolean = true,
 ): Promise<void> {
   const qualify = (table: string): string => `"${alias}".${schema}.${table}`;
 
@@ -548,8 +551,10 @@ async function createSchema(
     )
   `);
 
-  // Table dataset_metadata — exactement une ligne par schéma (spec §2.3)
-  await conn.run(`
+  // Table dataset_metadata — exactement une ligne par schéma (spec §2.3).
+  // Son absence est volontaire dans la fixture de l'ancien format.
+  if (withDatasetMetadata) {
+    await conn.run(`
     CREATE TABLE ${qualify('dataset_metadata')} (
       label          VARCHAR,
       description    VARCHAR,
@@ -559,6 +564,7 @@ async function createSchema(
       cluster_by     VARCHAR
     )
   `);
+  }
 
   await conn.run(`CREATE TABLE ${qualify('fact_table')} (${columns})`);
 
@@ -585,19 +591,21 @@ async function createSchema(
   }
 
   const info = spec.datasetMetadata;
-  await conn.run(
-    `INSERT INTO ${qualify('dataset_metadata')}
-       (label, description, source, updated_at, schema_version, cluster_by)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      info.label,
-      info.description,
-      info.source,
-      info.updatedAt,
-      info.schemaVersion,
-      JSON.stringify(info.clusterBy),
-    ],
-  );
+  if (withDatasetMetadata) {
+    await conn.run(
+      `INSERT INTO ${qualify('dataset_metadata')}
+         (label, description, source, updated_at, schema_version, cluster_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        info.label,
+        info.description,
+        info.source,
+        info.updatedAt,
+        info.schemaVersion,
+        JSON.stringify(info.clusterBy),
+      ],
+    );
+  }
 
   await insertFactRows(conn, qualify('fact_table'), spec.rows, info.clusterBy);
 
@@ -760,6 +768,39 @@ async function setupTestData(): Promise<void> {
       },
       rows: buildGeographyRows(),
     });
+
+    // Deux schémas VOLONTAIREMENT non conformes, réservés au test de la garde
+    // de version. Ils ne décrivent aucun format réel : le premier annonce une
+    // version que l'API ne supporte pas, le second reproduit un catalogue
+    // écrit avant l'existence de dataset_metadata.
+    const guardRows = buildMainRows(
+      COUNTRIES.slice(0, 2),
+      INDICATORS.slice(0, 1),
+      new Date('2024-01-01'),
+      new Date('2024-02-01'),
+      1.0,
+    );
+
+    await createSchema(conn, 'default', 'unsupported_version', MAIN_COLUMNS, {
+      ...mainSpec('Version non supportée', 'test-fixture:guard', guardRows),
+      datasetMetadata: {
+        label: 'Version non supportée',
+        description: 'Fixture de la garde de version — schema_version hors liste',
+        source: 'test-fixture:guard',
+        updatedAt: '2026-09-01 04:40:00',
+        schemaVersion: 99,
+        clusterBy: MAIN_CLUSTER_BY,
+      },
+    });
+
+    await createSchema(
+      conn,
+      'default',
+      'missing_dataset_metadata',
+      MAIN_COLUMNS,
+      mainSpec('Ancien format', 'test-fixture:guard', guardRows),
+      false,
+    );
 
     // Catalogue macroéconomie
     await createCatalog(

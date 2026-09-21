@@ -27,6 +27,15 @@ const TEST_SCHEMAS: Array<[catalog: string, catalogFile: string, schemas: string
   ['public_finance', 'test-public-finance.ducklake', ['main']],
 ];
 
+// Fixtures VOLONTAIREMENT non conformes : elles alimentent le test de la garde
+// de version et sont donc exclues des assertions de conformité ci-dessous. Leur
+// conformité attendue — celle d'un catalogue que l'API doit refuser — est
+// vérifiée par le describe « fixtures de la garde de version » en fin de fichier.
+const NONCONFORMANT: Array<[catalog: string, schema: string]> = [
+  ['default', 'unsupported_version'],
+  ['default', 'missing_dataset_metadata'],
+];
+
 // Les trois tables d'un schéma — et rien d'autre (spec §2)
 const EXPECTED_TABLES = ['dataset_metadata', 'fact_table', 'metadata'];
 
@@ -298,5 +307,33 @@ describe('table dataset_metadata', () => {
     for (const column of clusterBy) {
       expect(factColumns).toContain(column);
     }
+  });
+});
+
+// ─── Fixtures non conformes de la garde de version ────────────────────────────
+
+describe('fixtures de la garde de version', () => {
+  test.each(NONCONFORMANT)('%s.%s existe', async (catalog, schema) => {
+    const rows = await query(
+      `SELECT table_name FROM duckdb_tables() WHERE database_name = '${catalog}' AND schema_name = '${schema}'`,
+    );
+    // Sans ces fixtures, les tests de la garde passeraient à vide
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  test('default.unsupported_version annonce une version hors liste', async () => {
+    const rows = await query(
+      'SELECT schema_version FROM "default".unsupported_version.dataset_metadata',
+    );
+    expect(Number(rows[0].schema_version)).toBe(99);
+  });
+
+  test('default.missing_dataset_metadata n’a pas de table dataset_metadata', async () => {
+    const rows = await query(
+      `SELECT table_name FROM duckdb_tables() WHERE database_name = 'default' AND schema_name = 'missing_dataset_metadata'`,
+    );
+    const tables = rows.map((row) => String(row.table_name));
+    expect(tables).not.toContain('dataset_metadata');
+    expect(tables).toContain('fact_table');
   });
 });

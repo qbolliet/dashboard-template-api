@@ -21,6 +21,24 @@ const catalogTypeDefs: DocumentNode = gql`
     name: String!
     "Liste des champs et leurs métadonnées (chargé seulement si demandé)"
     fields: [Metadata!]!
+    "Méta-données du jeu de résultats (chargé seulement si demandé)"
+    info: DatasetInfo!
+  }
+
+  "Méta-données d'un jeu de résultats — une ligne de dataset_metadata par schéma"
+  type DatasetInfo {
+    "Titre du jeu de résultats"
+    label: String
+    "Sous-titre / description"
+    description: String
+    "Provenance (modèle, pipeline)"
+    source: String
+    "Horodatage ISO 8601 de la dernière écriture réussie"
+    updatedAt: String!
+    "Version du format de schéma de la base"
+    schemaVersion: Int!
+    "Colonnes de tri physique (cluster_by décodé) — ordre de pagination par défaut"
+    clusterBy: [String!]!
   }
 
   "Informations sur un catalogue DuckLake disponible"
@@ -48,7 +66,10 @@ const catalogTypeDefs: DocumentNode = gql`
     "Retourne tous les champs (métadonnées) d'un catalogue/schéma"
     getCatalogSchema(catalog: String, schema: String): [Metadata!]!
 
-    "Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire ou sous-chaîne du nom (pour alimenter des menus select)"
+    "Retourne les méta-données du jeu de résultats d'un catalogue/schéma (titre, fraîcheur, tri physique)"
+    getDatasetInfo(catalog: String, schema: String): DatasetInfo!
+
+    "Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire, famille thématique ou sous-chaîne du nom (pour alimenter des menus select)"
     getFields(
       catalog: String
       schema: String
@@ -56,6 +77,7 @@ const catalogTypeDefs: DocumentNode = gql`
       isCategorical: Boolean
       isPrimaryKey: Boolean
       namePattern: String
+      family: String
     ): [SelectOption!]!
 
     "Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées."

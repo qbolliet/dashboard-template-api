@@ -89,6 +89,14 @@ jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: mockLogger,
+  // La garde de version (db/schema-version.js) crée son propre logger contextuel
+  createContextLogger: () => ({
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+    database: jest.fn(),
+  }),
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({

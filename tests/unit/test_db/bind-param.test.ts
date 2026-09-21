@@ -4,7 +4,7 @@
  * Unlike pool.test.ts, @duckdb/node-api is NOT mocked here: the goal is to
  * verify the actual binding of large integers (> 2^31, up to 2^53 - 1) and the
  * comparisons emitted by treeToSQL on UBIGINT / DECIMAL / TIMESTAMP columns
- * (CAST(? AS <sql_type>)), including values beyond 2^53 sent as strings.
+ * (CAST(? AS <sqlType>)), including values beyond 2^53 sent as strings.
  */
 
 import { DuckDBInstance } from '@duckdb/node-api';
@@ -19,14 +19,14 @@ import type { ColumnMetadata, FilterNodeInput } from '../../../src/utils/filter-
 let instance: DuckDBInstance;
 let connection: DuckDBConnection;
 
-// Métadonnées de la table de test (sql_type relu comme depuis la table metadata)
+// Métadonnées de la table de test (sqlType relu comme depuis la table metadata)
 const metadataByName = new Map<string, ColumnMetadata>([
-  ['id', { sql_type: 'UBIGINT' }],
-  ['n', { sql_type: 'BIGINT' }],
-  ['amount', { sql_type: 'DECIMAL(18,3)' }],
-  ['ts', { sql_type: 'TIMESTAMP_NS' }],
-  ['label', { sql_type: 'VARCHAR' }],
-  ['flag', { sql_type: 'BOOLEAN' }],
+  ['id', { sqlType: 'UBIGINT' }],
+  ['n', { sqlType: 'BIGINT' }],
+  ['amount', { sqlType: 'DECIMAL(18,3)' }],
+  ['ts', { sqlType: 'TIMESTAMP_NS' }],
+  ['label', { sqlType: 'VARCHAR' }],
+  ['flag', { sqlType: 'BOOLEAN' }],
 ]);
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────

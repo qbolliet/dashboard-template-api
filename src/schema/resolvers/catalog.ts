@@ -3,7 +3,8 @@ import { GraphQLError } from 'graphql';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
 import { sqlTypeFamily } from '../../utils/filter-tree.js';
-import type { CatalogMetadataRow } from '../../loaders/catalog.js';
+import type { FieldMetadata } from '../../utils/metadata-mapping.js';
+import type { DatasetInfo } from '../../loaders/dataset-info.js';
 import type { SelectOption } from '../../loaders/select-options.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
@@ -22,6 +23,7 @@ export interface FieldsArgs {
   isCategorical?: boolean | null;
   isPrimaryKey?: boolean | null;
   namePattern?: string | null;
+  family?: string | null;
 }
 
 /** A single (catalog, schema) target as accepted by getSharedFields. */
@@ -89,9 +91,9 @@ function validateSchemaForCatalog(catalog: string, schema?: string | null): void
  * @returns The type family, or null when the SQL type is unsupported.
  */
 // Famille de type SQL d'une colonne, null si le type n'est pas reconnu
-function typeFamilyOf(row: CatalogMetadataRow): string | null {
+function typeFamilyOf(row: FieldMetadata): string | null {
   try {
-    return sqlTypeFamily(String(row.sql_type ?? ''));
+    return sqlTypeFamily(row.sqlType);
   } catch {
     return null;
   }
@@ -125,8 +127,27 @@ const catalogResolvers = {
       parent: CatalogSchemaInfoSource,
       _: Record<string, never>,
       { loaders }: GraphQLContext,
-    ): Promise<CatalogMetadataRow[]> => {
+    ): Promise<FieldMetadata[]> => {
       return loaders.catalogMetadata.load({ catalog: parent.catalogId, schema: parent.name });
+    },
+
+    /**
+     * Loads the dataset_metadata row of the schema this source describes.
+     *
+     * Same lazy mechanism as `fields`: a query that only asks for
+     * `schemas { name }` never touches the dataset_metadata table.
+     *
+     * @param parent - Source object {catalogId, name} carried from Catalog.schemas.
+     * @param _ - Field arguments (none).
+     * @param context - GraphQL context with loaders.
+     * @returns Dataset information of this schema.
+     */
+    info: async (
+      parent: CatalogSchemaInfoSource,
+      _: Record<string, never>,
+      { loaders }: GraphQLContext,
+    ): Promise<DatasetInfo> => {
+      return loaders.datasetInfo.load({ catalog: parent.catalogId, schema: parent.name });
     },
   },
 
@@ -168,10 +189,32 @@ const catalogResolvers = {
       _: unknown,
       { catalog, schema }: CatalogSchemaArgs,
       { loaders }: GraphQLContext,
-    ): Promise<CatalogMetadataRow[]> => {
+    ): Promise<FieldMetadata[]> => {
       const targetCatalog = databaseManager.validateCatalogRouting(catalog);
       validateSchemaForCatalog(targetCatalog, schema);
       return loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+    },
+
+    /**
+     * Fetches the dataset information of a specific catalog/schema.
+     *
+     * Same data as the lazy `info` field of CatalogSchemaInfo, addressable
+     * directly when the client already knows which schema it wants.
+     *
+     * @param _ - Parent resolver result (unused at root).
+     * @param args - Catalog alias and optional schema to query.
+     * @param context - GraphQL context with loaders.
+     * @returns Dataset information of the target schema.
+     */
+    // Récupération des méta-données de jeu de résultats d'un catalogue/schéma
+    getDatasetInfo: async (
+      _: unknown,
+      { catalog, schema }: CatalogSchemaArgs,
+      { loaders }: GraphQLContext,
+    ): Promise<DatasetInfo> => {
+      const targetCatalog = databaseManager.validateCatalogRouting(catalog);
+      validateSchemaForCatalog(targetCatalog, schema);
+      return loaders.datasetInfo.load({ catalog: targetCatalog, schema });
     },
 
     /**
@@ -182,14 +225,14 @@ const catalogResolvers = {
      * is optional; when several are provided they are combined with AND.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern.
+     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family.
      * @param context - GraphQL context with loaders.
      * @returns Array of SelectOption where value is the field name and label is the field label (fallback: name).
      */
     // Récupération des noms de champs au format SelectOption avec filtrage en mémoire
     getFields: async (
       _: unknown,
-      { catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern }: FieldsArgs,
+      { catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family }: FieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<SelectOption[]> => {
       const targetCatalog = databaseManager.validateCatalogRouting(catalog ?? null);
@@ -203,21 +246,19 @@ const catalogResolvers = {
       return fields
         .filter((field) => {
           // Filtre par type SQL (comparaison insensible à la casse)
-          if (
-            normalizedSqlType &&
-            String(field.sql_type ?? '').toLowerCase() !== normalizedSqlType
-          ) {
+          if (normalizedSqlType && field.sqlType.toLowerCase() !== normalizedSqlType) {
             return false;
           }
           // Filtre par caractère catégoriel
-          if (
-            typeof isCategorical === 'boolean' &&
-            Boolean(field.is_categorical) !== isCategorical
-          ) {
+          if (typeof isCategorical === 'boolean' && field.isCategorical !== isCategorical) {
             return false;
           }
           // Filtre par caractère clé primaire
-          if (typeof isPrimaryKey === 'boolean' && Boolean(field.is_primary_key) !== isPrimaryKey) {
+          if (typeof isPrimaryKey === 'boolean' && field.isPrimaryKey !== isPrimaryKey) {
+            return false;
+          }
+          // Filtre par famille thématique (égalité stricte, colonne metadata.family)
+          if (family && field.family !== family) {
             return false;
           }
           // Filtre par sous-chaîne dans le nom (insensible à la casse)
@@ -227,9 +268,9 @@ const catalogResolvers = {
           return true;
         })
         .map((field) => ({
-          value: String(field.name),
-          // Repli sur le nom lorsque le label est absent ou vide
-          label: (field.label as string | undefined) || String(field.name),
+          value: field.name,
+          // Repli sur le nom lorsque le label est vide
+          label: field.label || field.name,
         }));
     },
 
@@ -280,7 +321,7 @@ const catalogResolvers = {
       const indexed = metadataSets.map((rows) => {
         const families = new Map<string, string | null>();
         rows
-          .filter((row) => Boolean(row.is_categorical))
+          .filter((row) => row.isCategorical)
           .forEach((row) => families.set(String(row.name), typeFamilyOf(row)));
         return families;
       });

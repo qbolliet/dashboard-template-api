@@ -1,9 +1,8 @@
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
 /** Field metadata returned by the metadata loader. */
-export interface FieldMetadata {
-  is_primary_key?: boolean;
-  [key: string]: unknown;
+export interface PartitionMetadata {
+  isPrimaryKey?: boolean;
 }
 
 /** A single named column value of a fact row (type preserved as loaded). */
@@ -15,7 +14,7 @@ export interface FieldValueEntry {
 /** Set of DataLoader instances required to partition facts. */
 export interface Loaders {
   metadata: {
-    load: (fieldName: string) => Promise<FieldMetadata | null>;
+    load: (fieldName: string) => Promise<PartitionMetadata | null>;
   };
 }
 
@@ -36,8 +35,8 @@ const INTERNAL_FIELDS = ['_groupByField', 'keys', 'measures'];
 /**
  * Partitions the columns of each fact into coordinates and measures.
  *
- * Classification is driven solely by `metadata.is_primary_key`: a column with
- * `is_primary_key === false` is a measure, every other column (coordinate, or
+ * Classification is driven solely by `metadata.isPrimaryKey`: a column with
+ * `isPrimaryKey === false` is a measure, every other column (coordinate, or
  * one without a metadata row) is a key. Both arrays keep NULL values so that
  * every row of a result set has the same shape — in particular the levels left
  * NULL by an irregular column hierarchy.
@@ -49,7 +48,7 @@ const INTERNAL_FIELDS = ['_groupByField', 'keys', 'measures'];
  * @param loaders - GraphQL DataLoader collection (metadata only).
  * @returns Facts carrying `keys` and `measures` arrays.
  */
-// Partition des colonnes : clés (is_primary_key) contre mesures
+// Partition des colonnes : clés (isPrimaryKey) contre mesures
 export async function partitionFacts(facts: Fact[], loaders: Loaders): Promise<PartitionedFact[]> {
   if (!facts || facts.length === 0) {
     return facts as PartitionedFact[];
@@ -73,12 +72,12 @@ export async function partitionFacts(facts: Fact[], loaders: Loaders): Promise<P
   // Chargement des métadonnées de chaque colonne pour la classification
   const metadataResults = await Promise.all(columns.map((name) => loaders.metadata.load(name)));
 
-  // Une colonne est une mesure ssi sa metadata existe et is_primary_key === false.
+  // Une colonne est une mesure ssi sa metadata existe et isPrimaryKey === false.
   // Toute autre colonne (coordonnée, ou metadata absente) est une clé.
   const measureColumns = new Set<string>();
   columns.forEach((name, index) => {
     const metadata = metadataResults[index];
-    if (metadata && metadata.is_primary_key === false) measureColumns.add(name);
+    if (metadata && metadata.isPrimaryKey === false) measureColumns.add(name);
   });
 
   // Répartition de chaque fait, valeurs nulles comprises de part et d'autre

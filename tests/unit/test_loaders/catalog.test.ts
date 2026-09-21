@@ -16,18 +16,18 @@ import {
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
-/** Ligne de métadonnée retournée par la base de données (avant coercion). */
+/** Ligne brute de la table metadata, en snake_case. */
 interface MetadataRow {
   name: string;
-  type?: string;
+  sql_type?: string;
   is_categorical: number | boolean;
 }
 
-/** Métadonnée traitée — booléen converti. */
+/** Métadonnée exposée par le loader — camelCase, booléen converti. */
 interface MetadataResult {
   name: string;
-  type?: string;
-  is_categorical: boolean;
+  sqlType: string;
+  isCategorical: boolean;
 }
 
 /** Instance d'un loader DataLoader — interface minimale. */
@@ -60,6 +60,14 @@ jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  // La garde de version (db/schema-version.js) crée son propre logger contextuel
+  createContextLogger: () => ({
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+    database: jest.fn(),
+  }),
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -101,19 +109,20 @@ describe('CatalogMetadataLoader', () => {
   describe('loadAllMetadata', () => {
     test('charge toutes les métadonnées pour un catalogue', async () => {
       mockConnection.all.mockResolvedValue([
-        { name: 'age', type: 'integer', is_categorical: 0 },
-        { name: 'country', type: 'string', is_categorical: 1 },
+        { name: 'age', sql_type: 'INTEGER', is_categorical: 0 },
+        { name: 'country', sql_type: 'VARCHAR', is_categorical: 1 },
       ]);
 
       const loader = createCatalogMetadataLoader();
       const result = (await loader.load({ catalog: 'catalog1' })) as MetadataResult[];
 
       expect(result).toHaveLength(2);
-      expect(result[0].is_categorical).toBe(false);
-      expect(result[1].is_categorical).toBe(true);
+      expect(result[0].isCategorical).toBe(false);
+      expect(result[0].sqlType).toBe('INTEGER');
+      expect(result[1].isCategorical).toBe(true);
     });
 
-    test('convertit is_categorical en booléen', async () => {
+    test('convertit is_categorical en isCategorical booléen', async () => {
       mockConnection.all.mockResolvedValue([
         { name: 'status', is_categorical: 1 },
         { name: 'score', is_categorical: 0 },
@@ -122,8 +131,8 @@ describe('CatalogMetadataLoader', () => {
       const loader = createCatalogMetadataLoader();
       const result = (await loader.load({ catalog: 'mydb' })) as MetadataResult[];
 
-      expect(result[0].is_categorical).toBe(true);
-      expect(result[1].is_categorical).toBe(false);
+      expect(result[0].isCategorical).toBe(true);
+      expect(result[1].isCategorical).toBe(false);
     });
 
     test('utilise le bon catalogue dans la requête SQL', async () => {

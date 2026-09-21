@@ -2,6 +2,7 @@
 import DataLoader from 'dataloader';
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
+import { assertSchemaSupported } from '../db/schema-version.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
@@ -122,6 +123,13 @@ class BaseQueryLoader {
     let connection: DuckDBConnection | undefined;
     let pool: DuckDBPool | undefined;
     try {
+      // Garde de version : un schéma non conforme est refusé avant toute requête.
+      // Les loaders cross-catalog (catalogId null, catalogues passés en arguments)
+      // appliquent la garde eux-mêmes sur chacune de leurs cibles.
+      if (this.catalogId) {
+        assertSchemaSupported(this.catalogId, this.resolvedSchema());
+      }
+
       // Récupération du pool associé à l'identifiant de catalogue
       pool = (databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }).getPool(
         this.catalogId,
@@ -158,8 +166,37 @@ class BaseQueryLoader {
    */
   qualifyTable(tableName: string): string {
     const catalog = this.catalogId || databaseManager.getDefaultCatalog();
-    const schema = this.schema || databaseManager.getDefaultSchema(catalog);
-    return `"${catalog}".${schema}.${tableName}`;
+    return `"${catalog}".${this.resolvedSchema()}.${tableName}`;
+  }
+
+  // Point d'extension : contrôle d'une clé avant toute lecture, cache compris
+  /**
+   * Validates one DataLoader key before any cache lookup or query.
+   *
+   * The base implementation accepts every key. Loaders whose catalog/schema
+   * travels in the key — rather than being bound to the instance — override
+   * this to apply the schema version guard. It must run BEFORE the cache is
+   * consulted: a warm Redis entry would otherwise serve a schema the API has
+   * declared unreadable.
+   *
+   * @param _key - The DataLoader key about to be loaded.
+   */
+  assertKeyAllowed(_key: unknown): void {
+    // Aucun contrôle par défaut
+  }
+
+  // Méthode de résolution du schéma effectif du loader
+  /**
+   * Returns the schema this loader actually reads.
+   *
+   * Falls back to the configured default schema of the loader's catalog when
+   * the request did not pin one.
+   *
+   * @returns Effective DuckLake schema name.
+   */
+  resolvedSchema(): string {
+    const catalog = this.catalogId || databaseManager.getDefaultCatalog();
+    return this.schema || databaseManager.getDefaultSchema(catalog);
   }
 
   // Méthode de chargement de données avec mise en cache Redis
@@ -230,6 +267,8 @@ class BaseQueryLoader {
           return Promise.all(
             keys.map(async (key) => {
               try {
+                // Contrôle de la clé avant le cache (garde de version)
+                this.assertKeyAllowed(key);
                 // Appel direct pour éviter la récursion dans le DataLoader
                 if (!this.cacheEnabled) {
                   return await loadFn(connection, key);

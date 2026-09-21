@@ -5,6 +5,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
 import { createContextLogger } from '../utils/logger.js';
+import { recordSchemaVersion, resetSchemaVersions } from './schema-version.js';
 
 // Résolution de l'emplacement du fichier et du dossier pour les chemins relatifs
 const __filename = fileURLToPath(import.meta.url);
@@ -526,6 +527,48 @@ class DatabaseManager {
         discovered: discoveredList,
         explicit: this.explicitlyConfiguredSchemas.has(catalogId),
       });
+    }
+
+    // Sondage de la version de chaque schéma actif, une fois par attach/reload
+    await this.probeSchemaVersions();
+  }
+
+  /**
+   * Probes `dataset_metadata.schema_version` for every active schema.
+   *
+   * Runs once per attach/reload and caches its verdict in db/schema-version.ts,
+   * so no query path ever pays for this check. An unsupported or unreadable
+   * schema is warned about here and rejected later, when a query targets it —
+   * start-up is never blocked, because the other schemas remain usable.
+   */
+  // Sondage des versions : un seul passage, verdict mis en cache
+  private async probeSchemaVersions(): Promise<void> {
+    if (!this.sharedPool) return;
+
+    resetSchemaVersions();
+
+    const connection = await this.sharedPool.acquire();
+    try {
+      for (const [catalogId, schemaList] of Object.entries(this.schemas)) {
+        for (const schema of schemaList) {
+          let version: number | null = null;
+          try {
+            const rows = await connection.all(
+              `SELECT schema_version FROM "${catalogId}".${schema}.dataset_metadata LIMIT 1`,
+            );
+            const raw = rows[0]?.schema_version;
+            // Une table présente mais vide vaut une table absente (spec §2.3 :
+            // exactement une ligne par schéma).
+            version = raw === null || raw === undefined ? null : Number(raw);
+          } catch {
+            // Table dataset_metadata absente : catalogue à l'ancien format
+            version = null;
+          }
+          recordSchemaVersion(catalogId, schema, version);
+        }
+      }
+    } finally {
+      this.sharedPool.release(connection);
     }
   }
 

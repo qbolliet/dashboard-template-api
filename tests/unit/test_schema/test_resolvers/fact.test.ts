@@ -718,7 +718,7 @@ describe('complex combined query', () => {
   test('metadata + facts + aggregations + options in one request', async () => {
     const query = `
       query {
-        countryMeta: getMetaData(name: "country") { name label is_categorical }
+        countryMeta: getMetaData(name: "country") { name label isCategorical }
         facts: getFactTable(
           structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
           sort: [{ field: "value", order: DESC }]

@@ -12,6 +12,7 @@ import {
   createAggregatedFactsWithCountLoader,
 } from './aggregated-facts.js';
 import { createCatalogMetadataLoader } from './catalog.js';
+import { createDatasetInfoLoader } from './dataset-info.js';
 import {
   createCompareFacts,
   createCompareAggregatedFacts,
@@ -19,11 +20,12 @@ import {
 } from './cross-database.js';
 import { databaseManager } from '../db/index.js';
 
-import type { MetadataRow } from './metadata.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 import type { FactQueryParams, FactQueryResult } from './fact.js';
 import type { SelectOptionsParams, SelectOption } from './select-options.js';
 import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
-import type { CatalogMetadataRow, CatalogSchemaKey } from './catalog.js';
+import type { CatalogSchemaKey } from './catalog.js';
+import type { DatasetInfo } from './dataset-info.js';
 import type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
@@ -45,7 +47,7 @@ interface KeyValuePair<K, V> {
 
 /** Optional initial data for priming the full set of loaders. */
 interface PrimeData {
-  metadata?: KeyValuePair<string, MetadataRow | null>[];
+  metadata?: KeyValuePair<string, FieldMetadata | null>[];
   facts?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithCount?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithMetadata?: KeyValuePair<FactQueryParams, FactQueryResult>[];
@@ -59,7 +61,7 @@ interface PrimeData {
 
 /** Complete collection of loaders available for a single GraphQL request. */
 interface LoadersCollection {
-  metadata: Loader<string, MetadataRow | null>;
+  metadata: Loader<string, FieldMetadata | null>;
   fact: Loader<FactQueryParams, FactQueryResult>;
   factWithCount: Loader<FactQueryParams, FactQueryResult>;
   factWithMetadata: Loader<FactQueryParams, FactQueryResult>;
@@ -67,7 +69,8 @@ interface LoadersCollection {
   aggregatedFactsWithMetadata: Loader<AggregatedQueryParams, AggregatedResult>;
   aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
-  catalogMetadata: Loader<CatalogSchemaKey, CatalogMetadataRow[]>;
+  catalogMetadata: Loader<CatalogSchemaKey, FieldMetadata[]>;
+  datasetInfo: Loader<CatalogSchemaKey, DatasetInfo>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
   compareAggregatedFacts: Loader<CompareAggregatedFactsParams, ComparisonResult>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
@@ -125,6 +128,7 @@ const createLoaders = (
 
   // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
+  const datasetInfoLoader = createDatasetInfoLoader();
   const compareFactsLoader = createCompareFacts();
   const compareAggregatedFactsLoader = createCompareAggregatedFacts();
   const crossDatabaseSelectOptionsLoader = createCrossDatabaseSelectOptions();
@@ -140,6 +144,7 @@ const createLoaders = (
     aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
     selectOptions: selectOptionsLoader,
     catalogMetadata: catalogMetadataLoader,
+    datasetInfo: datasetInfoLoader,
     compareFacts: compareFactsLoader,
     compareAggregatedFacts: compareAggregatedFactsLoader,
     crossDatabaseSelectOptions: crossDatabaseSelectOptionsLoader,
@@ -155,6 +160,7 @@ const createLoaders = (
       aggregatedFactsWithCountLoader.clearAll();
       selectOptionsLoader.clearAll();
       catalogMetadataLoader.clearAll();
+      datasetInfoLoader.clearAll();
       compareFactsLoader.clearAll();
       compareAggregatedFactsLoader.clearAll();
       crossDatabaseSelectOptionsLoader.clearAll();

@@ -2,9 +2,11 @@
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { validateIdentifier } from '../utils/utils.js';
+import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
 import { buildWhere } from '../utils/filter-tree.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
 import type { CompiledFilter } from '../utils/filter-tree.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
 
@@ -51,7 +53,7 @@ interface AggregatedMetadata {
   count: number;
   keyExtent: [number, number] | [string, string] | null;
   valueExtent: [number, number];
-  groupByFieldInfo: Record<string, unknown> | null;
+  groupByFieldInfo: FieldMetadata | null;
   generatedAt: string;
   statistics?: AggregatedStatistics;
   totalGroups?: number;
@@ -178,13 +180,15 @@ class AggregatedFactsLoader extends FactQueryLoader {
     // Résolution de la fonction SQL d'agrégation
     const aggregationQuery = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
 
-    // Construction du critère de tri
+    // Construction du critère de tri. Sans tri explicite, le regroupement est
+    // ordonné par sa clé : deux pages successives restent disjointes sous le
+    // scan parallèle de DuckDB (revue §5.7).
     const sortClause =
       sort.length > 0
         ? `ORDER BY ${sort
-            .map((s) => (s.field === 'key' ? 'key' : `aggregatedValue ${s.order}`))
+            .map((s) => (s.field === 'key' ? `key ${s.order}` : `aggregatedValue ${s.order}`))
             .join(', ')}`
-        : '';
+        : 'ORDER BY key ASC';
 
     // Construction de la requête principale
     const query = `
@@ -299,8 +303,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const { groupBy } = params;
 
     // Récupération des informations sur le champ de regroupement
-    const fieldMetaQuery = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
-    const fieldMeta = await connection.all(fieldMetaQuery, [groupBy]);
+    // Même projection et même mapping camelCase que les loaders de métadonnées
+    const fieldMetaQuery = `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
+    const fieldMetaRows = await connection.all(fieldMetaQuery, [groupBy]);
+    const fieldMeta = fieldMetaRows.length > 0 ? toFieldMetadata(fieldMetaRows[0]) : null;
 
     // Calcul des extents de valeurs et de clés
     const values = data.map((d) => d.aggregatedValue);
@@ -312,7 +318,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
         count: 0,
         keyExtent: null,
         valueExtent: [0, 0],
-        groupByFieldInfo: (fieldMeta[0] as Record<string, unknown>) || null,
+        groupByFieldInfo: fieldMeta,
         generatedAt: new Date().toISOString(),
       };
     }
@@ -327,7 +333,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
         ? [Math.min(...keys.map(Number)), Math.max(...keys.map(Number))]
         : [keys[0], keys[keys.length - 1]],
       valueExtent: [Math.min(...values), Math.max(...values)],
-      groupByFieldInfo: (fieldMeta[0] as Record<string, unknown>) || null,
+      groupByFieldInfo: fieldMeta,
       generatedAt: new Date().toISOString(),
     };
 

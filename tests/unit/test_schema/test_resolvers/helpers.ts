@@ -44,6 +44,10 @@ let _server: ApolloServer | null = null;
  * Tests run in READ_ONLY mode to allow multiple Jest VM contexts to open
  * the same DuckLake file simultaneously; the catalog must pre-exist.
  *
+ * Also reconciles the schema list and probes the schema version of every
+ * schema, exactly as src/server.ts does before starting: without it the
+ * version guard would have no verdict to enforce.
+ *
  * Raises:
  *     Error: If the test catalog file is not found at the expected path.
  */
@@ -56,6 +60,9 @@ export const ensureSetup = async (): Promise<void> => {
         `Run "npm run test:setup" before running the resolver tests.`,
     );
   }
+
+  // Réconciliation des schémas + sondage des versions, comme au démarrage
+  await databaseManager.initSchemas();
 };
 
 /**

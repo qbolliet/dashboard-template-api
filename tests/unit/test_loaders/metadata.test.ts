@@ -2,7 +2,8 @@
  * Unit tests for MetadataLoader (src/loaders/metadata.ts).
  *
  * Verifies metadata retrieval by field name, null return for unknown fields,
- * boolean coercion of is_categorical and is_primary_key, and table qualification.
+ * the snake_case → camelCase mapping applied by utils/metadata-mapping.ts, and
+ * table qualification.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -16,20 +17,34 @@ import {
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
-/** Ligne de métadonnée retournée par la base de données (avant coercion). */
+/** Ligne brute de la table metadata, en snake_case, booléens en entiers. */
 interface MetadataRow {
   name: string;
-  type?: string;
+  label?: string;
+  sql_type?: string;
   is_categorical: number;
   is_primary_key: number;
+  parent_name?: string | null;
+  unit?: string | null;
+  display_format?: string | null;
+  family?: string | null;
+  description?: string | null;
+  default_aggregation?: string | null;
 }
 
-/** Métadonnée après traitement — booléens convertis. */
+/** Métadonnée exposée par le loader — camelCase, booléens convertis. */
 interface MetadataResult {
   name: string;
-  type?: string;
-  is_categorical: boolean;
-  is_primary_key: boolean;
+  label: string;
+  sqlType: string;
+  isCategorical: boolean;
+  isPrimaryKey: boolean;
+  parentName: string | null;
+  unit: string | null;
+  displayFormat: string | null;
+  family: string | null;
+  description: string | null;
+  defaultAggregation: string | null;
 }
 
 /** Instance d'un loader DataLoader — interface minimale. */
@@ -63,6 +78,14 @@ jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  // La garde de version (db/schema-version.js) crée son propre logger contextuel
+  createContextLogger: () => ({
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+    database: jest.fn(),
+  }),
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -111,20 +134,35 @@ describe('MetadataLoader', () => {
     test('retourne les métadonnées pour un nom trouvé', async () => {
       const row: MetadataRow = {
         name: 'age',
-        type: 'integer',
+        label: 'Âge',
+        sql_type: 'INTEGER',
         is_categorical: 0,
         is_primary_key: 0,
+        parent_name: null,
+        unit: 'ans',
+        display_format: ',.0f',
+        family: 'Démographie',
+        description: null,
+        default_aggregation: 'AVG',
       };
       mockConnection.all.mockResolvedValue([row]);
 
       const loader = createMetadataLoader('main');
       const result = await loader.load('age');
 
+      // Les onze colonnes remontent en camelCase, NULL compris
       expect(result).toEqual({
         name: 'age',
-        type: 'integer',
-        is_categorical: false,
-        is_primary_key: false,
+        label: 'Âge',
+        sqlType: 'INTEGER',
+        isCategorical: false,
+        isPrimaryKey: false,
+        parentName: null,
+        unit: 'ans',
+        displayFormat: ',.0f',
+        family: 'Démographie',
+        description: null,
+        defaultAggregation: 'AVG',
       });
     });
 
@@ -137,11 +175,12 @@ describe('MetadataLoader', () => {
       expect(result).toBeNull();
     });
 
-    test('convertit is_categorical en booléen', async () => {
+    test('convertit is_categorical en isCategorical booléen', async () => {
       mockConnection.all.mockResolvedValue([
         {
           name: 'country',
-          type: 'string',
+          label: 'Country',
+          sql_type: 'VARCHAR',
           is_categorical: 1,
           is_primary_key: 0,
         },
@@ -150,15 +189,16 @@ describe('MetadataLoader', () => {
       const loader = createMetadataLoader('main');
       const result = await loader.load('country');
 
-      expect(result!.is_categorical).toBe(true);
-      expect(result!.is_primary_key).toBe(false);
+      expect(result!.isCategorical).toBe(true);
+      expect(result!.isPrimaryKey).toBe(false);
     });
 
-    test('convertit is_primary_key en booléen', async () => {
+    test('convertit is_primary_key en isPrimaryKey booléen', async () => {
       mockConnection.all.mockResolvedValue([
         {
           name: 'id',
-          type: 'integer',
+          label: 'Id',
+          sql_type: 'INTEGER',
           is_categorical: 0,
           is_primary_key: 1,
         },
@@ -167,8 +207,22 @@ describe('MetadataLoader', () => {
       const loader = createMetadataLoader('main');
       const result = await loader.load('id');
 
-      expect(result!.is_categorical).toBe(false);
-      expect(result!.is_primary_key).toBe(true);
+      expect(result!.isCategorical).toBe(false);
+      expect(result!.isPrimaryKey).toBe(true);
+    });
+
+    test('projette explicitement les onze colonnes au lieu de SELECT *', async () => {
+      mockConnection.all.mockResolvedValue([
+        { name: 'field', is_categorical: 0, is_primary_key: 0 },
+      ]);
+
+      const loader = createMetadataLoader('main');
+      await loader.load('field');
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).not.toContain('SELECT *');
+      expect(query).toContain('default_aggregation');
+      expect(query).toContain('parent_name');
     });
 
     test('utilise qualifyTable pour la table metadata', async () => {

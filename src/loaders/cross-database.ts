@@ -1,7 +1,8 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
-import { BaseQueryLoader } from './base-loader.js';
+import { FactQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
+import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { AggregatedFactsLoader } from './aggregated-facts.js';
 import { validateIdentifier } from '../utils/utils.js';
@@ -83,7 +84,7 @@ interface CrossDatabaseSelectOption {
  * construction. Join keys are nonetheless compared as VARCHAR: two catalogs may
  * type the same column differently, and the cast aligns them.
  */
-class CrossDatabaseLoader extends BaseQueryLoader {
+class CrossDatabaseLoader extends FactQueryLoader {
   // Initialisation sans identifiant de catalogue (requêtes cross-catalog)
   /**
    * Creates a CrossDatabaseLoader with no specific catalog binding.
@@ -119,6 +120,9 @@ class CrossDatabaseLoader extends BaseQueryLoader {
       );
     }
     validateIdentifier(resolved, 'schema');
+    // Garde de version : les loaders cross-catalog ne sont liés à aucun
+    // catalogue, chaque cible est donc vérifiée ici, à sa résolution.
+    assertSchemaSupported(catalog, resolved);
     return resolved;
   }
 
@@ -160,8 +164,6 @@ class CrossDatabaseLoader extends BaseQueryLoader {
 
     // Validation des identifiants de jointure pour éviter les injections SQL
     joinFields.forEach((f) => validateIdentifier(f, 'joinField'));
-    // Validation des champs de tri (interpolés dans ORDER BY)
-    sort.forEach((s) => validateIdentifier(s.field, 'sortField'));
 
     const selectA = this.buildSideSelect(catalogA, schemaA, joinFields);
     const selectB = this.buildSideSelect(catalogB, schemaB, joinFields);
@@ -175,8 +177,11 @@ class CrossDatabaseLoader extends BaseQueryLoader {
         ? `a.k_${joinFields[0]}`
         : `CONCAT(${joinFields.map((f) => `a.k_${f}`).join(", '::', ")})`;
 
-    const sortClause =
-      sort.length > 0 ? `ORDER BY ${sort.map((s) => `${s.field} ${s.order}`).join(', ')}` : '';
+    // Tri déterministe : sans tri explicite, la clé de jointure ordonne le
+    // résultat. Les colonnes de cluster_by ne survivent pas aux CTE (seules
+    // key/valueA/valueB/delta/deltaPercent sont projetées), et `key` est
+    // construite depuis les joinFields — les coordonnées (revue §5.7).
+    const sortClause = sort.length > 0 ? this.buildSortClause(sort) : 'ORDER BY key ASC';
 
     const query = `
             WITH a AS (${selectA}),
@@ -266,6 +271,7 @@ class CrossDatabaseLoader extends BaseQueryLoader {
                 END AS deltaPercent
             FROM agg_a a
             JOIN agg_b b ON a.key = b.key
+            ORDER BY a.key ASC
             LIMIT ${limit} OFFSET ${offset}
         `;
 

@@ -23,9 +23,9 @@ const factTypeDefs: DocumentNode = gql`
 
   "A single fact record from the fact table, split into its coordinates and its measures"
   type Fact {
-    "Coordinates of the row — every column with is_primary_key = true, NULL levels of a column hierarchy included"
+    "Coordinates of the row — every column with isPrimaryKey = true, NULL levels of a column hierarchy included"
     keys: [FieldValue!]!
-    "Measures of the row — every column with is_primary_key = false"
+    "Measures of the row — every column with isPrimaryKey = false"
     measures: [FieldValue!]!
   }
 
@@ -152,7 +152,8 @@ const factTypeDefs: DocumentNode = gql`
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
-      aggregation: Aggregation! = SUM
+      "Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM"
+      aggregation: Aggregation
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]
@@ -168,7 +169,8 @@ const factTypeDefs: DocumentNode = gql`
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
-      aggregation: Aggregation! = SUM
+      "Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM"
+      aggregation: Aggregation
       limit: Int! = 100
       offset: Int! = 0
       sort: [SortInput!]

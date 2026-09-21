@@ -40,6 +40,12 @@ DATABASE:
     ACQUIRE_TIMEOUT: 60000
     POOL_RETRY_DELAY: 500
 
+# Versions du schéma de base (dataset_metadata.schema_version) lisibles par cette
+# API. Un schéma dont la version n'y figure pas, ou dépourvu de table
+# dataset_metadata, est signalé à l'attach et refusé à la requête
+# (SCHEMA_VERSION_UNSUPPORTED). Aucun chemin de compatibilité.
+SUPPORTED_SCHEMA_VERSIONS: ${SUPPORTED_SCHEMA_VERSIONS:-[1]}
+
 CATALOG_ROUTING:
   DEFAULT_CATALOG: ${DEFAULT_CATALOG:-default}
   ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-["default", "macroeconomics", "public_finance"]}

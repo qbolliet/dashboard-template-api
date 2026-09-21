@@ -477,26 +477,35 @@ describe('CacheInvalidationManager', () => {
   describe('getCacheStats', () => {
     test('returns nested catalog → schema → type counts', async () => {
       // 3 catalogues : main a 2 schémas (main, analytics), les autres 1 (main)
-      // Donc 4 (schema, catalog) combinaisons × 4 types = 16 appels scan
+      // Donc 4 (schema, catalog) combinaisons × 6 types = 24 appels scan
       // Ordre des schémas dans main : main puis analytics (cf. defaultSchemasByCatalog)
-      // Ordre des types : metadata, facts, aggregatedFacts, selectOptions
+      // Ordre des types : metadata, catalogMetadata, datasetInfo, facts,
+      // aggregatedFacts, selectOptions
       const scanResults: [string, string[]][] = [
-        // main / main : 2, 3, 0, 1
+        // main / main : 2, 1, 1, 3, 0, 1
         ['0', ['m1', 'm2']],
+        ['0', ['cm1']],
+        ['0', ['di1']],
         ['0', ['f1', 'f2', 'f3']],
         ['0', []],
         ['0', ['s1']],
-        // main / analytics : 0, 4, 0, 0
+        // main / analytics : 0, 0, 0, 4, 0, 0
+        ['0', []],
+        ['0', []],
         ['0', []],
         ['0', ['f10', 'f11', 'f12', 'f13']],
         ['0', []],
         ['0', []],
-        // test / main : 1, 1, 0, 0
+        // test / main : 1, 0, 0, 1, 0, 0
         ['0', ['m3']],
+        ['0', []],
+        ['0', []],
         ['0', ['f4']],
         ['0', []],
         ['0', []],
         // analytics / main : tout à 0
+        ['0', []],
+        ['0', []],
         ['0', []],
         ['0', []],
         ['0', []],
@@ -512,12 +521,16 @@ describe('CacheInvalidationManager', () => {
         main: {
           main: {
             metadata: 2,
+            catalogMetadata: 1,
+            datasetInfo: 1,
             facts: 3,
             aggregatedFacts: 0,
             selectOptions: 1,
           },
           analytics: {
             metadata: 0,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 4,
             aggregatedFacts: 0,
             selectOptions: 0,
@@ -526,6 +539,8 @@ describe('CacheInvalidationManager', () => {
         test: {
           main: {
             metadata: 1,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 1,
             aggregatedFacts: 0,
             selectOptions: 0,
@@ -534,6 +549,8 @@ describe('CacheInvalidationManager', () => {
         analytics: {
           main: {
             metadata: 0,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 0,
             aggregatedFacts: 0,
             selectOptions: 0,
@@ -541,7 +558,7 @@ describe('CacheInvalidationManager', () => {
         },
       });
       // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 6 types)
-      expect(mockRedis.scan).toHaveBeenCalledTimes(16);
+      expect(mockRedis.scan).toHaveBeenCalledTimes(24);
     });
 
     test('uses databaseManager.getSchemas to enumerate per-catalog schemas', async () => {

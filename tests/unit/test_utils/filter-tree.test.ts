@@ -25,19 +25,19 @@ import type {
 
 // ─── Données de test ──────────────────────────────────────────────────────────
 
-// Métadonnées couvrant chaque famille de type (sql_type relu côté serveur)
+// Métadonnées couvrant chaque famille de type (sqlType relu côté serveur)
 const metadataByName = new Map<string, ColumnMetadata>([
-  ['country', { sql_type: 'BIGINT' }],
-  ['big_id', { sql_type: 'UBIGINT' }],
-  ['value', { sql_type: 'DOUBLE' }],
-  ['amount', { sql_type: 'DECIMAL(18,3)' }],
-  ['day', { sql_type: 'DATE' }],
-  ['ts', { sql_type: 'TIMESTAMP' }],
-  ['ts_ns', { sql_type: 'TIMESTAMP_NS' }],
-  ['ts_tz', { sql_type: 'TIMESTAMP WITH TIME ZONE' }],
-  ['label', { sql_type: 'VARCHAR' }],
-  ['flag', { sql_type: 'BOOLEAN' }],
-  ['blob_col', { sql_type: 'BLOB' }],
+  ['country', { sqlType: 'BIGINT' }],
+  ['big_id', { sqlType: 'UBIGINT' }],
+  ['value', { sqlType: 'DOUBLE' }],
+  ['amount', { sqlType: 'DECIMAL(18,3)' }],
+  ['day', { sqlType: 'DATE' }],
+  ['ts', { sqlType: 'TIMESTAMP' }],
+  ['ts_ns', { sqlType: 'TIMESTAMP_NS' }],
+  ['ts_tz', { sqlType: 'TIMESTAMP WITH TIME ZONE' }],
+  ['label', { sqlType: 'VARCHAR' }],
+  ['flag', { sqlType: 'BOOLEAN' }],
+  ['blob_col', { sqlType: 'BLOB' }],
 ]);
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────

@@ -87,14 +87,15 @@ describe('getCatalogs', () => {
 
   // ── Cascade lazy : fields n'est chargé que s'il est demandé ──
   test('cascade — fields load when requested', async () => {
+    // Cascade limitée à un catalogue entièrement conforme : `fields` est
+    // non-nullable, donc un schéma refusé par la garde de version propagerait
+    // son erreur jusqu'à la racine (cf. le test de garde ci-dessous).
     const query = `
       query {
-        getCatalogs {
-          id
-          schemas {
-            name
-            fields { name is_categorical is_primary_key }
-          }
+        getCatalogSchema(catalog: "macroeconomics", schema: "main") {
+          name
+          isCategorical
+          isPrimaryKey
         }
       }
     `;
@@ -102,23 +103,30 @@ describe('getCatalogs', () => {
 
     expect(result.errors).toBeUndefined();
 
-    const catalogs = result.data!.getCatalogs as Array<{
-      id: string;
-      schemas: Array<{
-        name: string;
-        fields: Array<{ name: string; is_categorical: boolean; is_primary_key: boolean }>;
-      }>;
+    const fields = result.data!.getCatalogSchema as Array<{
+      name: string;
+      isCategorical: boolean;
+      isPrimaryKey: boolean;
     }>;
-    expect(catalogs.length).toBeGreaterThan(0);
 
-    // Chaque schéma déclare ses colonnes, dont au moins une clé primaire
+    // Le schéma déclare ses colonnes, dont au moins une clé primaire
     // (cohérence loader / scoping de schéma correct).
-    for (const cat of catalogs) {
-      for (const s of cat.schemas) {
-        expect(Array.isArray(s.fields)).toBe(true);
-        expect(s.fields.length).toBeGreaterThan(0);
-        expect(s.fields.some((f) => f.is_primary_key)).toBe(true);
-      }
+    expect(fields.length).toBeGreaterThan(0);
+    expect(fields.some((f) => f.isPrimaryKey)).toBe(true);
+  });
+
+  // ── La cascade traverse chaque schéma, garde de version comprise ──
+  test('cascade — fields est gardé schéma par schéma', async () => {
+    const result = await execute(server, {
+      query: 'query { getCatalogs { id schemas { name fields { name } } } }',
+    });
+
+    // Le catalogue `default` héberge deux fixtures non conformes : la cascade
+    // les traverse et la garde les refuse, ce qui prouve que le resolver lazy
+    // s'exécute bien par schéma.
+    expect(result.errors).toBeDefined();
+    for (const error of result.errors!) {
+      expect(error.extensions?.code).toBe('SCHEMA_VERSION_UNSUPPORTED');
     }
   });
 
@@ -151,8 +159,8 @@ describe('getCatalogSchema', () => {
         getCatalogSchema {
           name
           label
-          sql_type
-          is_categorical
+          sqlType
+          isCategorical
         }
       }
     `;
@@ -162,20 +170,20 @@ describe('getCatalogSchema', () => {
     const fields = result.data!.getCatalogSchema as Array<{
       name: string;
       label: string;
-      sql_type: string;
-      is_categorical: boolean;
+      sqlType: string;
+      isCategorical: boolean;
     }>;
     expect(Array.isArray(fields)).toBe(true);
     expect(fields.length).toBeGreaterThan(0);
     expect(fields[0]).toHaveProperty('name');
     expect(fields[0]).toHaveProperty('label');
-    expect(fields[0]).toHaveProperty('sql_type');
-    expect(typeof fields[0].is_categorical).toBe('boolean');
+    expect(fields[0]).toHaveProperty('sqlType');
+    expect(typeof fields[0].isCategorical).toBe('boolean');
   });
 
   test('same result with and without explicit empty catalog param', async () => {
-    const noParam = `query { getCatalogSchema { name is_categorical } }`;
-    const withEmpty = `query { getCatalogSchema(catalog: "") { name is_categorical } }`;
+    const noParam = `query { getCatalogSchema { name isCategorical } }`;
+    const withEmpty = `query { getCatalogSchema(catalog: "") { name isCategorical } }`;
 
     const r1 = await execute(server, { query: noParam });
     const r2 = await execute(server, { query: withEmpty });
@@ -190,7 +198,7 @@ describe('getCatalogSchema', () => {
   });
 
   test('schema contains the known test fields (country, indicator, value)', async () => {
-    const query = `query { getCatalogSchema { name is_categorical } }`;
+    const query = `query { getCatalogSchema { name isCategorical } }`;
     const result = await execute(server, { query });
 
     expect(result.errors).toBeUndefined();
@@ -222,8 +230,8 @@ describe('getCatalogSchema', () => {
   test('multiple catalogs in a single query', async () => {
     const query = `
       query {
-        schema1: getCatalogSchema { name is_categorical }
-        schema2: getCatalogSchema(catalog: "") { name is_categorical }
+        schema1: getCatalogSchema { name isCategorical }
+        schema2: getCatalogSchema(catalog: "") { name isCategorical }
       }
     `;
     const result = await execute(server, { query });
@@ -240,14 +248,14 @@ describe('getFields', () => {
   // Helper local : récupère les noms des champs catégoriels du catalogue par défaut
   // depuis getCatalogSchema, le champ dimensionNames ayant été retiré.
   async function defaultCategoricalNames(): Promise<string[]> {
-    const query = `query { getCatalogSchema { name is_categorical } }`;
+    const query = `query { getCatalogSchema { name isCategorical } }`;
     const result = await execute(server, { query });
     if (result.errors) return [];
     const fields = result.data!.getCatalogSchema as Array<{
       name: string;
-      is_categorical: boolean;
+      isCategorical: boolean;
     }>;
-    return fields.filter((f) => f.is_categorical).map((f) => f.name);
+    return fields.filter((f) => f.isCategorical).map((f) => f.name);
   }
 
   test('returns all fields as {value, label} pairs by default', async () => {
@@ -312,15 +320,15 @@ describe('getFields', () => {
     }
   });
 
-  test('sqlType filter only returns fields with the matching sql_type', async () => {
+  test('sqlType filter only returns fields with the matching sqlType', async () => {
     // Récupération préalable d'un type SQL présent dans le catalogue
-    const schemaQuery = `query { getCatalogSchema { name sql_type } }`;
+    const schemaQuery = `query { getCatalogSchema { name sqlType } }`;
     const schemaResult = await execute(server, { query: schemaQuery });
     const schema = schemaResult.data!.getCatalogSchema as Array<{
       name: string;
-      sql_type: string | null;
+      sqlType: string | null;
     }>;
-    const sampleType = schema.find((f) => f.sql_type)?.sql_type;
+    const sampleType = schema.find((f) => f.sqlType)?.sqlType;
     if (!sampleType) return;
 
     const query = `query { getFields(sqlType: "${sampleType}") { value } }`;
@@ -331,7 +339,7 @@ describe('getFields', () => {
     // Vérification que tous les champs retournés correspondent bien au type filtré
     const values = (result.data!.getFields as Array<{ value: string }>).map((f) => f.value);
     const expected = schema
-      .filter((f) => (f.sql_type ?? '').toLowerCase() === sampleType.toLowerCase())
+      .filter((f) => (f.sqlType ?? '').toLowerCase() === sampleType.toLowerCase())
       .map((f) => f.name);
     expect(values.sort()).toEqual(expected.sort());
   });
@@ -418,14 +426,14 @@ describe('getSharedFields', () => {
     schema: string | null = null,
   ): Promise<string[]> {
     const schemaArg = schema ? `, schema: "${schema}"` : '';
-    const query = `query { getCatalogSchema(catalog: "${catalog}"${schemaArg}) { name is_categorical } }`;
+    const query = `query { getCatalogSchema(catalog: "${catalog}"${schemaArg}) { name isCategorical } }`;
     const result = await execute(server, { query });
     if (result.errors) return [];
     const fields = result.data!.getCatalogSchema as Array<{
       name: string;
-      is_categorical: boolean;
+      isCategorical: boolean;
     }>;
-    return fields.filter((f) => f.is_categorical).map((f) => f.name);
+    return fields.filter((f) => f.isCategorical).map((f) => f.name);
   }
 
   /**
