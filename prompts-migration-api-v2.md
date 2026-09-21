@@ -32,6 +32,15 @@
 > fin de prompt : `npm run lint`, `npm run type:check`, `npm run test:setup` puis
 > `npm test` — corriger jusqu'au vert.
 >
+> **Pas de commit automatique** : Claude Code ne lance **jamais** `git add` / `git commit`
+> (ni `push`) dans cette série — le travail reste dans l'arbre de travail pour être
+> relu avant d'être commité. En fin de prompt, il **propose** un message de commit
+> conventionnel (type imposé par le prompt, voir le tableau des jalons) dans son résumé,
+> sous forme d'un bloc de code prêt à copier. Le commit est fait à la main après relecture,
+> **avant de lancer le prompt suivant** : cela garde un diff propre par prompt (`git diff`
+> ne montre que le travail à relire) et un historique conventionnel exploitable par
+> release-please.
+>
 > **Pas de dépréciation dans cette série** : le projet n'est pas publié (spec bdd §8),
 > tout ce qui disparaît est retiré directement. La politique `@deprecated` s'applique
 > à partir de 0.3.0 (prompt 9).
@@ -140,7 +149,8 @@ Propose ton plan avant d'implémenter (SDL définitif, signature exacte de treeT
 liste des call-sites à basculer vers le SQL paramétré). Conventions : commentaires
 français nominaux, docstrings anglaises Google. Termine par npm run lint,
 npm run type:check, npm run test:setup puis npm test, et résume les fichiers
-touchés. Commit conventionnel feat!: (rupture du contrat de filtre).
+touchés. Ne commite pas (je relis avant) : termine ton résumé par un message de
+commit conventionnel proposé, de type feat!: (rupture du contrat de filtre).
 ```
 
 _Pourquoi Opus + plan mode : conception d'un contrat public récursif, moteur de
@@ -201,7 +211,8 @@ double emploi.
 Propose ton plan (points de branchement exacts, ce qui est supprimé) avant
 d'implémenter. Conventions : commentaires français nominaux, docstrings anglaises
 Google. Termine par npm run lint, npm run type:check, npm run test:setup, npm test.
-Commit conventionnel fix(security):.
+Ne commite pas (je relis avant) : termine ton résumé par un message de commit
+conventionnel proposé, de type fix(security):.
 ```
 
 _Pourquoi Opus + plan mode : câblage de sécurité transversal, choix du niveau de la
@@ -305,7 +316,8 @@ Propose ton plan avant d'implémenter (forme exacte du setup de test, liste des
 fichiers supprimés/renommés, nouveau contrat Fact). Conventions : commentaires
 français nominaux, docstrings anglaises Google. Termine par npm run lint,
 npm run type:check, npm run test:setup, npm test, et un résumé des suppressions.
-Commit conventionnel feat!: (breaking change).
+Ne commite pas (je relis avant) : termine ton résumé par un message de commit
+conventionnel proposé, de type feat!: (breaking change).
 ```
 
 _Pourquoi Opus + plan mode : bascule structurelle (données de test dont dépendent
@@ -396,7 +408,9 @@ métadonnées de jeu de données et exploite cluster_by. Rupture assumée.
 Propose ton plan avant d'implémenter (liste des fichiers touchés par le renommage,
 emplacement de la garde de version). Conventions : commentaires français nominaux,
 docstrings anglaises Google. Termine par npm run lint, npm run type:check,
-npm run test:setup, npm test, et un résumé par module. Commit conventionnel feat!:.
+npm run test:setup, npm test, et un résumé par module. Ne commite pas (je relis
+avant) : termine ton résumé par un message de commit conventionnel proposé, de type
+feat!:.
 ```
 
 _Pourquoi Opus + plan mode : renommage transversal + nouveau contrat public + garde
@@ -455,8 +469,9 @@ GroupedSelectOptions compris), sans dépréciation.
    de TREE_MAX_NODES (config réduite dans le test).
 
 Conventions : commentaires français nominaux, docstrings anglaises Google. Termine
-par npm run lint, npm run type:check, npm run test:setup, npm test. Commit
-conventionnel feat!: (suppression de getGroupedSelectOptions).
+par npm run lint, npm run type:check, npm run test:setup, npm test. Ne commite pas
+(je relis avant) : termine ton résumé par un message de commit conventionnel proposé,
+de type feat!: (suppression de getGroupedSelectOptions).
 ```
 
 _Pourquoi Opus sans plan mode : la sémantique est figée par la revue, mais la
@@ -510,8 +525,9 @@ ni aux arguments existants.
    nombre), extents numérique et date, NULL.
 
 Conventions : commentaires français nominaux, docstrings anglaises Google. Termine
-par npm run lint, npm run type:check, npm run test:setup, npm test. Commit
-conventionnel feat: (ou feat!: si la sérialisation change la forme de valeurs déjà
+par npm run lint, npm run type:check, npm run test:setup, npm test. Ne commite pas
+(je relis avant) : termine ton résumé par un message de commit conventionnel proposé,
+de type feat: (ou feat!: si la sérialisation change la forme de valeurs déjà
 renvoyées — ce sera le cas pour les BIGINT).
 ```
 
@@ -572,8 +588,9 @@ Implémente des statistiques de colonne à la demande :
    getCatalogSchema, mise en cache (deux appels = une requête SQL).
 
 Conventions : commentaires français nominaux, docstrings anglaises Google. Termine
-par npm run lint, npm run type:check, npm run test:setup, npm test. Commit
-conventionnel feat:.
+par npm run lint, npm run type:check, npm run test:setup, npm test. Ne commite pas
+(je relis avant) : termine ton résumé par un message de commit conventionnel proposé,
+de type feat:.
 ```
 
 _Pourquoi Sonnet sans plan mode : fonctionnalité additive bien délimitée, calquée sur
@@ -646,7 +663,8 @@ Spécification du comportement :
 Propose ton plan (choix technique par format, gestion des fichiers temporaires,
 points de branchement des gardes) avant d'implémenter. Conventions : commentaires
 français nominaux, docstrings anglaises Google. Termine par npm run lint,
-npm run type:check, npm run test:setup, npm test. Commit conventionnel feat:.
+npm run type:check, npm run test:setup, npm test. Ne commite pas (je relis avant) :
+termine ton résumé par un message de commit conventionnel proposé, de type feat:.
 ```
 
 _Pourquoi Opus + plan mode : streaming, gestion de ressources (connexions, fichiers
@@ -730,7 +748,8 @@ en cours supprime sans préavis : projet non publié). Outille cette politique :
    getSharedFields, Measure → FieldValue…).
 
 Conventions habituelles. Termine par npm run lint, npm run type:check, npm test, et
-un essai local de schema:check et schema:diff. Commit conventionnel ci:.
+un essai local de schema:check et schema:diff. Ne commite pas (je relis avant) :
+termine ton résumé par un message de commit conventionnel proposé, de type ci:.
 ```
 
 _Pourquoi Sonnet sans plan mode : outillage standard entièrement spécifié
@@ -806,7 +825,8 @@ graphql-api générée par @graphql-markdown/docusaurus) + graphql-voyager + SDL
 Propose ton plan (option de split retenue, arborescence cible des deux sites) avant
 d'implémenter. Vérifie que les deux sites buildent (npm run docs:build adapté) et
 que le script du dictionnaire tourne contre l'API de test. Conventions habituelles.
-Commit conventionnel docs:.
+Ne commite pas (je relis avant) : termine ton résumé par un message de commit
+conventionnel proposé, de type docs:.
 ```
 
 _Pourquoi Sonnet + plan mode : travail guidé mais avec un choix de structure
@@ -816,22 +836,24 @@ _Pourquoi Sonnet + plan mode : travail guidé mais avec un choix de structure
 
 ## Ordre d'exécution et jalons
 
-| #   | Prompt                                                                 | Modèle | Plan mode | Après   | Commit   |
-| --- | ---------------------------------------------------------------------- | ------ | --------- | ------- | -------- |
-| 1   | Filtres en arbre (FilterNode + treeToSQL, suppression de filters)      | Opus   | oui       | —       | `feat!:` |
-| 2   | Branchement sécurité (rate limit, complexité)                          | Opus   | oui       | —       | `fix:`   |
-| 3   | Bascule base v1 : données de test + suppression couche dimension       | Opus   | oui       | 1, 2    | `feat!:` |
-| 4   | Contrat de métadonnées (camelCase, DatasetInfo, garde, tri par défaut) | Opus   | oui       | 3       | `feat!:` |
-| 5   | getSelectOptionsTree remplace getGroupedSelectOptions                  | Opus   | non       | 4       | `feat!:` |
-| 6   | Graphiques/tableaux : fields, sérialisation, extents                   | Sonnet | non       | 4       | `feat!:` |
-| 7   | Stats de colonnes (min/max)                                            | Sonnet | non       | 1, 4, 6 | `feat:`  |
-| 8   | Export REST Arrow/CSV/Parquet                                          | Opus   | oui       | 1, 2, 4 | `feat:`  |
-| 9   | Versioning du schéma (SDL suivi, CI, artefacts)                        | Sonnet | non       | 3-7     | `ci:`    |
-| 10  | Docs : deux sites, codegen, dictionnaire, skill                        | Sonnet | oui       | 3-9     | `docs:`  |
+| #   | Prompt                                                                 | Modèle | Plan mode | Après   | Commit proposé |
+| --- | ---------------------------------------------------------------------- | ------ | --------- | ------- | -------------- |
+| 1   | Filtres en arbre (FilterNode + treeToSQL, suppression de filters)      | Opus   | oui       | —       | `feat!:`       |
+| 2   | Branchement sécurité (rate limit, complexité)                          | Opus   | oui       | —       | `fix:`         |
+| 3   | Bascule base v1 : données de test + suppression couche dimension       | Opus   | oui       | 1, 2    | `feat!:`       |
+| 4   | Contrat de métadonnées (camelCase, DatasetInfo, garde, tri par défaut) | Opus   | oui       | 3       | `feat!:`       |
+| 5   | getSelectOptionsTree remplace getGroupedSelectOptions                  | Opus   | non       | 4       | `feat!:`       |
+| 6   | Graphiques/tableaux : fields, sérialisation, extents                   | Sonnet | non       | 4       | `feat!:`       |
+| 7   | Stats de colonnes (min/max)                                            | Sonnet | non       | 1, 4, 6 | `feat:`        |
+| 8   | Export REST Arrow/CSV/Parquet                                          | Opus   | oui       | 1, 2, 4 | `feat:`        |
+| 9   | Versioning du schéma (SDL suivi, CI, artefacts)                        | Sonnet | non       | 3-7     | `ci:`          |
+| 10  | Docs : deux sites, codegen, dictionnaire, skill                        | Sonnet | oui       | 3-9     | `docs:`        |
 
 Jalons entre prompts : `npm run lint` + `npm run type:check` + `npm run test:setup`
 
-- `npm test` verts, puis **un commit conventionnel par prompt**. La release (0.3.0,
+- `npm test` verts, puis relecture du travail (laissé non commité par Claude Code) et
+  **un commit conventionnel par prompt, fait à la main** à partir du message proposé
+  dans le résumé de fin de prompt. La release (0.3.0,
   déclenchée par release-please via les `feat!:`) ne se publie qu'une fois les prompts
   1 à 9 terminés, pour que la rupture sorte en une seule version avec son changelog
   complet et le SDL en artefact. Les prompts 1-2 peuvent être exécutés immédiatement ;

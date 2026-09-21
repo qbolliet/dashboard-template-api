@@ -9,6 +9,13 @@
 > sert de **spécification cible** pour la série de prompts
 > (`prompts-migration-api-v2.md`).
 >
+> **Mode de travail** : Claude Code n'effectue **aucun commit** (ni `git add`, ni
+> `push`) en exécutant la série de prompts. Le travail de chaque prompt reste dans
+> l'arbre de travail pour relecture ; le résumé de fin de prompt **propose** un message
+> de commit conventionnel, et le commit est fait à la main avant le prompt suivant. Les
+> conventions de commit citées plus bas (`feat!:`, `fix:`…, §5.3) restent la règle pour
+> ces messages proposés : c'est elles que release-please lit.
+>
 > **Terminologie** : la spécification bdd nomme le nouveau schéma **« version 1 »**
 > (`dataset_metadata.schema_version = 1`, projet non publié, aucune migration). Ce
 > document parlait de « schéma v2 » : ce terme est abandonné au profit de **« schéma
