@@ -155,6 +155,12 @@ interface PaginationConfig {
   SELECT_OPTIONS_LIMIT: number;
 }
 
+/** Bounds of the select options trees (getSelectOptionsTree). */
+interface SelectOptionsConfig {
+  /** Hard bound on the node count of a tree; exceeding it is a BAD_USER_INPUT. */
+  TREE_MAX_NODES: number;
+}
+
 /** Redis configuration — reconnection back-off strategy. */
 interface CacheRetryStrategyConfig {
   BASE_DELAY: number;
@@ -288,6 +294,7 @@ interface AppConfig {
     SECURITY_THRESHOLDS: SecurityThresholdsConfig;
     LOADERS: LoadersConfig;
     PAGINATION: PaginationConfig;
+    SELECT_OPTIONS?: SelectOptionsConfig;
   };
   DATABASE: {
     POOL: {

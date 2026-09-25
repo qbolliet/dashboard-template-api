@@ -3,6 +3,7 @@ import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { validateIdentifier } from '../utils/utils.js';
+import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces des options de sélection ─────────────────────────────────────
@@ -20,6 +21,34 @@ interface SelectOption {
   label: string;
 }
 
+/** Parameters for a select options tree query. */
+interface SelectOptionsTreeParams {
+  /** Deepest level displayed (the leaves of the tree). */
+  fieldName: string;
+  /** Levels kept going up from fieldName; null keeps the whole chain. */
+  maxDepth: number | null;
+  /** Case-insensitive filter on the fieldName level. */
+  searchTerm: string | null;
+  /** Hard bound on the node count; part of the key so a cached tree never bypasses it. */
+  maxNodes: number;
+}
+
+/** Node of a select options tree; `children` is absent on leaves. */
+interface SelectOptionNode {
+  value: string;
+  label: string;
+  children?: SelectOptionNode[];
+}
+
+/** Internal build node — children keyed by value, in insertion order. */
+interface BuildNode {
+  value: string;
+  children: Map<string, BuildNode>;
+}
+
+// Borne par défaut du nombre de nœuds d'un arbre (SELECT_OPTIONS.TREE_MAX_NODES)
+const DEFAULT_TREE_MAX_NODES = 5000;
+
 // ─── Fonction utilitaire ─────────────────────────────────────────────────────
 
 /**
@@ -34,6 +63,86 @@ interface SelectOption {
 // Échappement des jokers LIKE d'un terme de recherche
 function escapeLikeWildcards(term: string): string {
   return term.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+// Erreur de dépassement de la borne du nombre de nœuds
+/**
+ * Builds the error raised when a tree exceeds its node bound.
+ *
+ * @param fieldName - Leaf column of the requested tree.
+ * @param maxNodes - Configured bound.
+ * @returns BAD_USER_INPUT error pointing to searchTerm and maxDepth.
+ */
+function treeTooLargeError(fieldName: string, maxNodes: number): GraphQLError {
+  return new GraphQLError(
+    `Select options tree for '${fieldName}' exceeds ${maxNodes} nodes. ` +
+      'Narrow it with searchTerm or reduce maxDepth.',
+    { extensions: { code: 'BAD_USER_INPUT' } },
+  );
+}
+
+// Conversion d'un nœud de construction en nœud rendu
+/**
+ * Converts a build node into its rendered form, recursively.
+ *
+ * @param node - Build node to convert.
+ * @returns Rendered node, `label = value`, without `children` on a leaf.
+ */
+function toOptionNode(node: BuildNode): SelectOptionNode {
+  const rendered: SelectOptionNode = { value: node.value, label: node.value };
+  if (node.children.size > 0) {
+    rendered.children = [...node.children.values()].map(toOptionNode);
+  }
+  return rendered;
+}
+
+// Construction de l'arbre à partir des lignes du SELECT DISTINCT
+/**
+ * Builds a nested option tree from the distinct rows of a column chain.
+ *
+ * Rows must come ordered by the chain columns: siblings keep that order.
+ * A branch stops at its first NULL level (specification-bdd.md §2.5), so an
+ * irregular branch ends on a shallower leaf and no empty node is produced.
+ *
+ * @param rows - Distinct rows of the chain columns, ordered.
+ * @param chain - Column names, from the root level to the leaf level.
+ * @param maxNodes - Hard bound on the total number of nodes.
+ * @param fieldName - Leaf column, quoted in the overflow error.
+ * @returns The forest of root nodes.
+ * @throws {GraphQLError} BAD_USER_INPUT when the tree exceeds maxNodes.
+ */
+function buildOptionTree(
+  rows: Record<string, unknown>[],
+  chain: string[],
+  maxNodes: number,
+  fieldName: string,
+): SelectOptionNode[] {
+  // Initialisation des racines et du comptage des noeuds
+  const roots = new Map<string, BuildNode>();
+  let nodeCount = 0;
+
+  // Parcours des lignes
+  for (const row of rows) {
+    let siblings = roots;
+    // Parcours des branches
+    for (const column of chain) {
+      const raw = row[column];
+      // Premier niveau NULL : fin de la branche
+      if (raw === null || raw === undefined) break;
+
+      const value = String(raw);
+      let node = siblings.get(value);
+      if (!node) {
+        nodeCount += 1;
+        if (nodeCount > maxNodes) throw treeTooLargeError(fieldName, maxNodes);
+        node = { value, children: new Map() };
+        siblings.set(value, node);
+      }
+      siblings = node.children;
+    }
+  }
+
+  return [...roots.values()].map(toOptionNode);
 }
 
 // Classe de chargement des options de sélection
@@ -51,8 +160,13 @@ class SelectOptionsLoader extends BaseQueryLoader {
    *
    * @param catalogId - Catalog alias to query; null uses the default catalog.
    * @param schema - DuckLake schema within the catalog; null uses the catalog default.
+   * @param cacheVariant - Result shape sharing the prefix (e.g. 'tree'); null for flat lists.
    */
-  constructor(catalogId: string | null = null, schema: string | null = null) {
+  constructor(
+    catalogId: string | null = null,
+    schema: string | null = null,
+    cacheVariant: string | null = null,
+  ) {
     super({
       batchSize: config.API.LOADERS.BATCH_SIZE,
       cachePrefix: 'select-options',
@@ -61,6 +175,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
       cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT,
       catalogId,
       schema,
+      cacheVariant,
     });
   }
 
@@ -119,6 +234,104 @@ class SelectOptionsLoader extends BaseQueryLoader {
       label: String(row.value),
     }));
   }
+
+  // Méthode de résolution de la chaîne de colonnes d'une hiérarchie
+  /**
+   * Resolves the column chain ending at fieldName by walking `parentName` up.
+   *
+   * The writer guarantees a forest ; the walk still
+   * stops on a column already visited or on an undeclared parent, so that a
+   * corrupted metadata table can never make it loop.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param fieldName - Deepest level of the chain.
+   * @param maxDepth - Number of levels kept going up; null keeps them all.
+   * @returns Column names from the root level down to fieldName.
+   * @throws {GraphQLError} BAD_USER_INPUT when fieldName is not declared.
+   */
+  async resolveColumnChain(
+    connection: DuckDBConnection,
+    fieldName: string,
+    maxDepth: number | null,
+  ): Promise<string[]> {
+    // Lecture de metadata par le point de mapping unique du contrat
+    const rows = await connection.all(
+      `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')}`,
+    );
+    const parentOf = new Map(
+      rows.map(toFieldMetadata).map((field) => [field.name, field.parentName]),
+    );
+
+    if (!parentOf.has(fieldName)) {
+      throw new GraphQLError(`Unknown field '${fieldName}'`, {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+    }
+
+    // Remontée depuis la feuille, garde-fou anti-cycle compris
+    const chain = [fieldName];
+    let parent = parentOf.get(fieldName) ?? null;
+    while (parent && (maxDepth === null || chain.length < maxDepth)) {
+      if (chain.includes(parent) || !parentOf.has(parent)) break;
+      chain.push(parent);
+      parent = parentOf.get(parent) ?? null;
+    }
+
+    // Validation de chaque identifiant avant interpolation
+    return chain.reverse().map((column) => validateIdentifier(column, 'parentName'));
+  }
+
+  // Méthode de chargement de l'arbre des options d'une hiérarchie de colonnes
+  /**
+   * Loads the option tree of a column hierarchy, fieldName being the leaves.
+   *
+   * One distinct query over the chain columns, then the tree is built in
+   * memory. NULL root values are excluded and a NULL level ends its branch.
+   * With a searchTerm, only rows whose leaf matches are read, so only the
+   * branches leading to a retained leaf survive. The query is capped at
+   * maxNodes + 1 rows: each distinct row ends on a distinct node, so reaching
+   * the cap already proves the tree too large.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param params - Object with fieldName, maxDepth, searchTerm and maxNodes.
+   * @returns Forest of `{ value, label, children? }` nodes.
+   * @throws {GraphQLError} BAD_USER_INPUT when maxDepth < 1, fieldName is
+   *   unknown, or the tree exceeds maxNodes.
+   */
+  async loadSelectOptionsTree(
+    connection: DuckDBConnection,
+    { fieldName, maxDepth, searchTerm, maxNodes }: SelectOptionsTreeParams,
+  ): Promise<SelectOptionNode[]> {
+    validateIdentifier(fieldName, 'fieldName');
+    if (maxDepth !== null && maxDepth < 1) {
+      throw new GraphQLError('maxDepth must be greater than or equal to 1', {
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+    }
+
+    const chain = await this.resolveColumnChain(connection, fieldName, maxDepth);
+    const columns = chain.join(', ');
+
+    // Construction de la requête : racine non NULL, feuille éventuellement filtrée
+    let query =
+      `SELECT DISTINCT ${columns} FROM ${this.qualifyTable('fact_table')} ` +
+      `WHERE ${chain[0]} IS NOT NULL`;
+    const params: unknown[] = [];
+
+    if (searchTerm) {
+      query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
+      params.push(`%${escapeLikeWildcards(searchTerm.toLowerCase())}%`);
+    }
+
+    // Plafond maxNodes + 1 : une ligne distincte = un nœud terminal distinct
+    query += ` ORDER BY ${columns} LIMIT ?`;
+    params.push(maxNodes + 1);
+
+    const rows = await connection.all(query, params);
+    if (rows.length > maxNodes) throw treeTooLargeError(fieldName, maxNodes);
+
+    return buildOptionTree(rows, chain, maxNodes, fieldName);
+  }
 }
 
 // Fonction de création d'un loader pour les options de sélection
@@ -139,5 +352,31 @@ const createSelectOptionsLoader = (
   );
 };
 
-export { createSelectOptionsLoader, SelectOptionsLoader };
-export type { SelectOptionsParams, SelectOption };
+// Fonction de création d'un loader pour les arbres d'options de sélection
+/**
+ * Creates a DataLoader for select option trees of column hierarchies.
+ *
+ * Shares the `select-options` cache prefix (so the existing invalidation
+ * patterns cover it) under a dedicated `tree` variant.
+ *
+ * @param catalogId - Catalog alias to query; null uses the default catalog.
+ * @param schema - DuckLake schema within the catalog; null uses the catalog default.
+ * @returns DataLoader keyed by SelectOptionsTreeParams, returning option forests.
+ */
+const createSelectOptionsTreeLoader = (
+  catalogId: string | null = null,
+  schema: string | null = null,
+) => {
+  const loader = new SelectOptionsLoader(catalogId, schema, 'tree');
+  return loader.createLoader<SelectOptionsTreeParams, SelectOptionNode[]>((connection, params) =>
+    loader.loadSelectOptionsTree(connection, params),
+  );
+};
+
+export {
+  createSelectOptionsLoader,
+  createSelectOptionsTreeLoader,
+  SelectOptionsLoader,
+  DEFAULT_TREE_MAX_NODES,
+};
+export type { SelectOptionsParams, SelectOption, SelectOptionsTreeParams, SelectOptionNode };

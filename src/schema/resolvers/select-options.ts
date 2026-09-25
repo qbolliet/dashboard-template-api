@@ -1,8 +1,9 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
+import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
 import type { GraphQLContext } from './types.js';
-import type { SelectOption } from '../../loaders/select-options.js';
+import type { SelectOptionNode } from '../../loaders/select-options.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
@@ -15,27 +16,22 @@ export interface SelectOptionsArgs {
   schema?: string | null;
 }
 
-/** Arguments for the getGroupedSelectOptions query. */
-export interface GroupedSelectOptionsArgs {
-  groupField: string;
-  optionsField: string;
-  limit?: number;
+/** Arguments for the getSelectOptionsTree query. */
+export interface SelectOptionsTreeArgs {
+  fieldName: string;
+  maxDepth?: number | null;
+  searchTerm?: string | null;
   catalog?: string | null;
   schema?: string | null;
-}
-
-/** Grouped result of select options (group + options arrays). */
-export interface GroupedSelectOptions {
-  group: SelectOption[];
-  options: SelectOption[];
 }
 
 // Resolver pour la sélection des options
 /**
  * Resolvers for select options queries.
  *
- * Provides field values for dropdown menus and grouped option lists,
- * with optional full-text search filtering via searchTerm.
+ * Provides field values for dropdown menus (flat list of one column) and
+ * nested option trees of column hierarchies, both with optional
+ * case-insensitive search via searchTerm.
  */
 const selectOptionsResolvers = {
   Query: {
@@ -69,38 +65,29 @@ const selectOptionsResolvers = {
     },
 
     /**
-     * Fetches options for two fields simultaneously (group + options).
-     * Loads both option sets in parallel to minimise latency.
-     * Arguments follow {@link GroupedSelectOptionsArgs}.
+     * Fetches the nested option tree of a column hierarchy.
+     * Arguments follow {@link SelectOptionsTreeArgs}.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Object with group and options arrays.
+     * @returns Forest of `{ value, label, children? }` nodes.
      */
-    getGroupedSelectOptions: async (
+    getSelectOptionsTree: async (
       _: unknown,
-      {
-        groupField,
-        optionsField,
-        limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
-        catalog,
-        schema,
-      }: GroupedSelectOptionsArgs,
+      { fieldName, maxDepth = null, searchTerm = null, catalog, schema }: SelectOptionsTreeArgs,
       { loaders, getLoadersForCatalog }: GraphQLContext,
-    ): Promise<GroupedSelectOptions> => {
+    ): Promise<SelectOptionNode[]> => {
       // Sélection du loader adapté au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+      const loader = targetLoaders ? targetLoaders.selectOptionsTree : loaders.selectOptionsTree;
 
-      // Chargement en parallèle des deux ensembles d'options
-      const [groupOptions, fieldOptions] = await Promise.all([
-        loader.load({ fieldName: groupField, limit }),
-        loader.load({ fieldName: optionsField, limit }),
-      ]);
+      // La borne fait partie de la clé : un arbre en cache ne la contourne jamais
+      const maxNodes = config.API.SELECT_OPTIONS?.TREE_MAX_NODES ?? DEFAULT_TREE_MAX_NODES;
 
-      return {
-        group: groupOptions,
-        options: fieldOptions,
-      };
+      return withTimeout(
+        loader.load({ fieldName, maxDepth, searchTerm: searchTerm || null, maxNodes }),
+        config.API.TIMEOUTS.SELECT_OPTIONS,
+        'Select options tree fetch timeout',
+      );
     },
   },
 };

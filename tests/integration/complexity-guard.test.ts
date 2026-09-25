@@ -98,6 +98,7 @@ const REALISTIC_QUERIES: Record<string, string> = {
     }
     chart: getAggregatedFacts(limit: 100, structuredFilters: {}) { groupByValue value count }
     options: getSelectOptions { value label }
+    tree: getSelectOptionsTree(fieldName: "commune", maxDepth: 2)
     meta: getCatalogs { name schemas { name fields { name label sqlType unit displayFormat family } } }
   }`,
 };

@@ -83,7 +83,7 @@ query {
 
 The same `schema` argument is available on every data query
 (`getFactTable`, `getAggregatedFacts`, `getMetaData`,
-`getSelectOptions`, `getGroupedSelectOptions`, `getFields`). An unknown
+`getSelectOptions`, `getSelectOptionsTree`, `getFields`). An unknown
 schema returns a `GraphQLError` (allow-list validation).
 
 ## Targeting a specific schema across data queries
@@ -322,27 +322,36 @@ query {
 }
 ```
 
-## Grouped select options (cascaded dropdowns)
+## Select options tree (group-options menus)
+
+A hierarchy is a chain of columns declared through `Metadata.parentName`
+(`region → departement → commune`). `maxDepth: 2` on the leaf level returns
+departements holding their own communes — the group-options format:
 
 ```graphql
 query {
-  getGroupedSelectOptions(
-    groupField: "region"
-    optionsField: "country"
-    limit: 100
-    catalog: "macroeconomics"
-  ) {
-    group {
-      value
-      label
-    }
-    options {
-      value
-      label
-    }
-  }
+  getSelectOptionsTree(fieldName: "commune", maxDepth: 2, schema: "geography")
 }
 ```
+
+Excerpt of the result:
+
+```json
+[
+  {
+    "value": "Côte-d'Or",
+    "label": "Côte-d'Or",
+    "children": [
+      { "value": "Beaune", "label": "Beaune" },
+      { "value": "Dijon", "label": "Dijon" }
+    ]
+  },
+  { "value": "Saône-et-Loire", "label": "Saône-et-Loire" }
+]
+```
+
+A departement without communal level (`commune` NULL) is a leaf. Add
+`searchTerm` to filter the leaves; their ancestors are kept.
 
 ## Cross-database comparison
 

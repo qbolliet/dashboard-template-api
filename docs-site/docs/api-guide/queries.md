@@ -364,24 +364,26 @@ getSelectOptions(
 ): [SelectOption!]!
 ```
 
-### `getGroupedSelectOptions`
+### `getSelectOptionsTree`
 
-Two-level structure: a list of group options and a list of child options, for cascaded dropdowns.
+Nested option tree of a column hierarchy (chain of columns declared through `Metadata.parentName`), read with a single `SELECT DISTINCT` over the chain.
 
 ```graphql
-getGroupedSelectOptions(
-  groupField: String!
-  optionsField: String!
-  limit: Int = 50
+getSelectOptionsTree(
+  fieldName: String!    # deepest level displayed (the leaves)
+  maxDepth: Int         # levels kept going up from fieldName; default: whole chain
+  searchTerm: String    # case-insensitive filter on the fieldName level
   catalog: String
   schema: String
-): GroupedSelectOptions!
-
-type GroupedSelectOptions {
-  group: [SelectOption!]!
-  options: [SelectOption!]!
-}
+): JSON!                # [{ value, label, children? }]
 ```
+
+- `label` always equals `value`; `children` is absent on leaves.
+- A NULL level ends its branch: the parent becomes a leaf, no empty node is produced.
+- A column without `parentName` yields a one-level tree.
+- With `searchTerm`, only branches leading to a matching leaf are kept (ancestors included).
+- `maxDepth: 2` on `commune` (chain `region → departement → commune`) returns departements holding their own communes — the group-options format.
+- `maxDepth < 1`, an unknown field, or a tree larger than `API.SELECT_OPTIONS.TREE_MAX_NODES` (default 5000) is rejected with `BAD_USER_INPUT` — never truncated.
 
 ---
 

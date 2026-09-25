@@ -39,6 +39,12 @@ API:
     MAX_OFFSET: 10000
     SELECT_OPTIONS_LIMIT: 50
 
+  # Arbres d'options (getSelectOptionsTree)
+  SELECT_OPTIONS:
+    # Nombre maximal de nœuds d'un arbre ; au-delà, erreur explicite invitant
+    # à utiliser searchTerm ou maxDepth (aucune troncature silencieuse)
+    TREE_MAX_NODES: 5000
+
   # Query timeouts by operation type (ms)
   TIMEOUTS:
     FACT_SIMPLE: 10000

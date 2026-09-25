@@ -5,7 +5,7 @@ import {
   createFactWithCountLoader,
   createFactWithMetadataLoader,
 } from './fact.js';
-import { createSelectOptionsLoader } from './select-options.js';
+import { createSelectOptionsLoader, createSelectOptionsTreeLoader } from './select-options.js';
 import {
   createAggregatedFactsLoader,
   createAggregatedFactsWithMetadataLoader,
@@ -22,7 +22,12 @@ import { databaseManager } from '../db/index.js';
 
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
 import type { FactQueryParams, FactQueryResult } from './fact.js';
-import type { SelectOptionsParams, SelectOption } from './select-options.js';
+import type {
+  SelectOptionsParams,
+  SelectOption,
+  SelectOptionsTreeParams,
+  SelectOptionNode,
+} from './select-options.js';
 import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
 import type { CatalogSchemaKey } from './catalog.js';
 import type { DatasetInfo } from './dataset-info.js';
@@ -69,6 +74,7 @@ interface LoadersCollection {
   aggregatedFactsWithMetadata: Loader<AggregatedQueryParams, AggregatedResult>;
   aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
+  selectOptionsTree: Loader<SelectOptionsTreeParams, SelectOptionNode[]>;
   catalogMetadata: Loader<CatalogSchemaKey, FieldMetadata[]>;
   datasetInfo: Loader<CatalogSchemaKey, DatasetInfo>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
@@ -125,6 +131,7 @@ const createLoaders = (
   const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(catalogId, schema);
 
   const selectOptionsLoader = createSelectOptionsLoader(catalogId, schema);
+  const selectOptionsTreeLoader = createSelectOptionsTreeLoader(catalogId, schema);
 
   // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
@@ -143,6 +150,7 @@ const createLoaders = (
     aggregatedFactsWithMetadata: aggregatedFactsWithMetadataLoader,
     aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
     selectOptions: selectOptionsLoader,
+    selectOptionsTree: selectOptionsTreeLoader,
     catalogMetadata: catalogMetadataLoader,
     datasetInfo: datasetInfoLoader,
     compareFacts: compareFactsLoader,
@@ -159,6 +167,7 @@ const createLoaders = (
       aggregatedFactsWithMetadataLoader.clearAll();
       aggregatedFactsWithCountLoader.clearAll();
       selectOptionsLoader.clearAll();
+      selectOptionsTreeLoader.clearAll();
       catalogMetadataLoader.clearAll();
       datasetInfoLoader.clearAll();
       compareFactsLoader.clearAll();

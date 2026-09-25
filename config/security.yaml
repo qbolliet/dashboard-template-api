@@ -41,6 +41,9 @@ SECURITY:
       getFactTable: 5
       getAggregatedFacts: 10
       getFactTableWithMetadata: 8
+      # Scalaire JSON (coût de feuille nul sinon) : un DISTINCT sur toute la
+      # chaîne de colonnes, borné par API.SELECT_OPTIONS.TREE_MAX_NODES
+      getSelectOptionsTree: 5
 
   # Pas de section SANITIZATION : la sanitization XSS/SQL des valeurs n'a pas
   # d'objet sur ce chemin (SQL paramétré via treeToSQL, identifiants validés par

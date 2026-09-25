@@ -20,6 +20,11 @@
 > (`dataset_metadata.schema_version = 1`, projet non publié, aucune migration). Ce
 > document parlait de « schéma v2 » : ce terme est abandonné au profit de **« schéma
 > v1 »** ; la refonte de l'API sort en **0.3.0** (cf. §5.3).
+>
+> **Ajout du 2026-09-22 — codes et libellés** : la spec bdd a gagné un §2.6
+> (`metadata.label_for`, un code métier et son libellé en deux colonnes de la fact
+> table). Impacts API au §5.8 ; prompt 6 de la série, inséré après les prompts 1 à 5
+> déjà exécutés.
 
 ---
 
@@ -235,6 +240,7 @@ Réponse précise à votre question :
 | Type d'une variable → opérateurs de filtre + type de menu       | ✅ `Metadata.sql_type`                                                                                                                                                          | Exposer `unit`, `displayFormat`, `family`, `description`, `defaultAggregation`, `parentName` en camelCase ; retirer `python_type`    |
 | Min/max des numériques et dates (calibrage sliders/datepickers) | ❌ **Manque.** `DatasetMetadata.extents` n'est calculé que sur la _page retournée_ (`src/db/pool.ts:643-651`), uniquement pour les valeurs `number` — **jamais pour les dates** | Nouveau champ `stats` (min/max/distinctCount/nullCount) — voir ci-dessous                                                            |
 | Modalités d'une catégorielle → select-menu                      | ✅ `getSelectOptions` (via `dim_*` si catégorielle)                                                                                                                             | `SELECT DISTINCT` sur la fact table uniquement, `label = value` ; erreurs remontées au lieu de `[]`                                  |
+| Code métier affiché avec son libellé (nomenclature NC8)         | ❌ `label = value` partout                                                                                                                                                      | `value` = code, `label` = colonne de libellés (`labelFor`), recherche dans les deux, `keyLabel` sur les agrégats (§5.8)              |
 | Données `Array[Row]` + méta pour graphiques / tableaux          | ✅ `getFactTableWithMetadata` (OBJECTS/ARRAYS, extents de page, total, pagination)                                                                                              | Métadonnées des colonnes retournées (`fields`), sérialisation garantie des types, extents de dates (§5.6)                            |
 | Group-options / arbre de sélection                              | ⚠️ `getGroupedSelectOptions` retourne **deux listes indépendantes non corrélées** (`src/schema/resolvers/select-options.ts:95-103`)                                             | Remplacé par `getSelectOptionsTree` (JSON, chaîne `parentName`, profondeur quelconque) ; le group-options = arbre à 2 niveaux (§5.1) |
 | Titre / description / fraîcheur d'un jeu de résultats           | ❌ Rien (`dataset_metadata` n'existait pas)                                                                                                                                     | `DatasetInfo` (label, description, source, updatedAt, schemaVersion)                                                                 |
@@ -309,7 +315,9 @@ colonnes** (`parent_name`). Conséquences, dans l'ordre d'importance :
     feuilles retenues sont conservés ;
   - borne dure sur le nombre de nœuds (config), dépassement → erreur explicite
     invitant à utiliser `searchTerm` / `maxDepth` (pas de troncature silencieuse) ;
-  - colonne sans `parentName` → arbre à un niveau (liste de nœuds sans `children`).
+  - colonne sans `parentName` → arbre à un niveau (liste de nœuds sans `children`) ;
+  - `label = value` à chaque niveau, **sauf** niveau doté d'une colonne de libellés
+    (§5.8) : `label` = libellé (révision du 2026-09-22).
 
   Côté frontend, le mode groupé du `SelectMenu` attend
   `[{group: {value, label}, options: [...]}]` (fixture `MOCK_GROUPED_OPTIONS`) : le
@@ -438,7 +446,7 @@ Les manques réels :
      (`SelectOptionsArgs`, etc.) sont écrites à la main et peuvent dériver du schéma.
 3. **Le manque le plus intéressant : un dictionnaire des données auto-généré** depuis
    `metadata` + `dataset_metadata` (une page par schéma : colonnes, labels, types,
-   unités, familles, descriptions, hiérarchies). C'est la moitié « projet-spécifique »
+   unités, familles, descriptions, hiérarchies, couples code / libellé). C'est la moitié « projet-spécifique »
    de votre split de sites, data-driven par construction.
 4. **La skill `dashboard-api-client`** : sa section « Database schema (target for the
    API) » (ajoutée par le prompt 10 côté base) devient caduque une fois la refonte
@@ -560,6 +568,65 @@ avec un `sort` explicite, compléter par les clés primaires comme départage. L
 `cluster_by` est quasi gratuit (données déjà ordonnées tant que la maintenance
 `recluster` est tenue). S'applique à `getFactTable*`, `compareFacts` et à l'export.
 
+### 5.8 Codes et libellés (`labelFor`) — ajout du 2026-09-22
+
+Besoin : certaines colonnes portent un **code métier** à restituer tel quel (code de
+nomenclature tarifaire NC8, code INSEE) auquel on associe un **libellé** lisible. La
+spec bdd §2.6 tranche côté base : le code et le libellé sont **deux colonnes de la
+fact table**, et le lien est déclaré par `metadata.label_for`, **porté par la colonne
+de libellés** et pointant vers le code (un code peut en avoir plusieurs : fr, en…). Le
+writer garantit la **dépendance fonctionnelle** code → libellé (un seul libellé par
+code, `NULL` compris). Pas de table de référentiel, pas de jointure : tout reste de la
+lecture directe de la fact table. Contrat API :
+
+- **`Metadata.labelFor: String`** (colonne de code visée, `null` sinon) et
+  **`Metadata.labelFields: [String!]!`** (inverse : colonnes de libellés d'un code,
+  triées par nom, vide sinon). `labelFields` est calculé par le loader de métadonnées
+  sur les lignes déjà lues, sans requête supplémentaire. Le mapping snake → camel reste
+  au seul endroit fixé au prompt 4.
+- **`getFields(includeLabelFields: Boolean = false)`** : les colonnes de libellés ne
+  sont pas des variables à proposer dans un menu ; elles restent dans
+  `getCatalogSchema` (contrat complet) et sont requêtables par `fields` et les filtres.
+- **Choix de la colonne de libellés** (règle unique, partagée par toutes les queries) :
+  `labelField` fourni → doit être une colonne de libellés de la colonne visée, sinon
+  `BAD_USER_INPUT` ; absent → la seule colonne de libellés, ou la **première par ordre
+  alphabétique** s'il y en a plusieurs ; aucune → `label = value` (comportement
+  actuel). Un code sans libellé (`NULL`) garde `label = value` (`SelectOption.label`
+  est non-nullable).
+- **`getSelectOptions(..., labelField: String)`** : une requête,
+  `SELECT DISTINCT CAST(code AS VARCHAR) AS value, libelle AS label … ORDER BY value` —
+  la dépendance fonctionnelle garantit que `DISTINCT (code, libellé)` = `DISTINCT
+code`. `searchTerm` cherche dans le code **ou** le libellé (même échappement des
+  jokers). La colonne de libellés effective fait partie de la clé de cache.
+- **`getSelectOptionsTree`** : chaque niveau de la chaîne apporte son couple (code,
+  libellé) au même `SELECT DISTINCT` ; le libellé de chaque niveau suit la règle par
+  défaut (pas d'argument par niveau) ; `searchTerm` porte sur le code ou le libellé de
+  la feuille. Borne de nœuds inchangée (un nœud = un code).
+- **`AggregatedFact.keyLabel: String`** et **`ComparedFact.keyLabel: String`** :
+  libellé de la clé de groupe, obtenu **dans la même requête** par `ANY_VALUE(libelle)`
+  (licite grâce à la dépendance fonctionnelle) ; `null` quand la colonne groupée n'a pas
+  de libellés. Pour `compareFacts`, rempli seulement quand la comparaison porte sur un
+  seul champ de jointure doté de libellés (`COALESCE` des deux côtés). Note : le prompt
+  3 a supprimé l'ancien `keyLabel`, qui résolvait les codes par les `dim_*` via un field
+  resolver ; celui-ci est un champ SQL direct, sans résolveur ni requête de plus. Pas
+  d'argument `labelField` sur les agrégats pour l'instant (extension locale si un
+  dashboard bilingue le demande).
+- **`getSharedFields`** : exclut les colonnes de libellés ; la jointure entre jeux de
+  résultats porte sur le code, plus stable qu'un libellé révisable.
+- **Sans changement** : `treeToSQL` (une colonne de libellés est un `VARCHAR`, famille
+  texte : `CONTAINS 'viande'` fonctionne), `getFieldStats`, l'export, `Fact { keys,
+measures }` (les libellés sont des colonnes ordinaires, demandées via `fields`).
+  `DatasetWithMetadata.fields` (§5.6) porte `labelFor` / `labelFields` gratuitement :
+  le tableau du frontend peut afficher « code — libellé ».
+- **Compatibilité** : pas de chemin pour les catalogues sans colonne `label_for`
+  (schéma v1 de développement, reconstruit ; spec bdd, en-tête). Les données de test
+  sont complétées au prompt 6.
+
+**Non retenu** : un catalogue de référentiels séparé joint à la volée (jointure
+multi-catalogues à chaque requête, versionnage des nomenclatures, codes orphelins —
+spec bdd §2.6) ; une résolution de libellés par field resolver (requête par champ,
+retour du N+1 que la suppression des dimensions avait éliminé).
+
 ---
 
 ## 6. Points faibles relevés hors de vos questions
@@ -604,8 +671,9 @@ maîtrisées ; SDL non versionné et pas de garde-fou CI ; types resolvers manue
 
 **La base reformatée simplifie l'API plus qu'elle ne la complique** : une couche
 entière (dimensions, résolution de labels, jointures cross-catalogue par codes)
-disparaît, et les ajouts (`DatasetInfo`, champs d'UI, arbre de sélection) sont de la
-lecture directe de `metadata` / `dataset_metadata` / fact table.
+disparaît, et les ajouts (`DatasetInfo`, champs d'UI, arbre de sélection, couples
+code / libellé) sont de la lecture directe de `metadata` / `dataset_metadata` / fact
+table.
 
 **Évolutions majeures anticipables sans refonte** : ajout de HAVING, time travel en
 lecture (`AT (VERSION => n)` : les snapshots DuckLake portent déjà `run_id` et message

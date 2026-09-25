@@ -1,30 +1,13 @@
 /**
  * Tests for the select GraphQL type definitions.
  *
- * Validates the GroupedSelectOptions object type and the select-related query
- * fields: getSelectOptions and getGroupedSelectOptions with their argument signatures.
+ * Validates the select-related query fields: getSelectOptions and
+ * getSelectOptionsTree with their argument signatures, and the removal of
+ * getGroupedSelectOptions together with its GroupedSelectOptions type.
  */
 
 import { schema } from '../../../../src/schema/index.js';
-import { assertObjectType, isNonNullType, GraphQLFieldMap } from 'graphql';
-
-// ─── Types objet — select ─────────────────────────────────────────────────────
-
-describe('Object types — select', () => {
-  /**
-   * Verification that GroupedSelectOptions exposes group and options fields.
-   */
-  test('GroupedSelectOptions has group and options arrays', () => {
-    // Extraction des champs du type GroupedSelectOptions
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('GroupedSelectOptions')
-    ).getFields();
-
-    // Présence des champs de regroupement et d'options
-    expect(fields).toHaveProperty('group');
-    expect(fields).toHaveProperty('options');
-  });
-});
+import { isNonNullType, isScalarType, getNullableType, GraphQLFieldMap } from 'graphql';
 
 // ─── Champs de la Query — select ─────────────────────────────────────────────
 
@@ -43,9 +26,7 @@ describe('Query fields — select', () => {
     expect(queryFields).toHaveProperty('getSelectOptions');
 
     // Recherche de l'argument de nom de champ obligatoire
-    const fieldNameArg = queryFields.getSelectOptions.args.find(
-      (a) => a.name === 'fieldName'
-    );
+    const fieldNameArg = queryFields.getSelectOptions.args.find((a) => a.name === 'fieldName');
     expect(fieldNameArg).toBeDefined();
 
     // Caractère non-null de l'argument fieldName
@@ -53,20 +34,37 @@ describe('Query fields — select', () => {
   });
 
   /**
-   * Verification that getGroupedSelectOptions requires both groupField and optionsField.
+   * Verification of the getSelectOptionsTree signature and its JSON! return type.
    */
-  test('getGroupedSelectOptions has groupField and optionsField (NonNull) args', () => {
-    expect(queryFields).toHaveProperty('getGroupedSelectOptions');
+  test('getSelectOptionsTree exists with its arguments and returns JSON!', () => {
+    expect(queryFields).toHaveProperty('getSelectOptionsTree');
+    const field = queryFields.getSelectOptionsTree;
 
-    // Validation du caractère obligatoire de chaque argument de regroupement
-    for (const argName of ['groupField', 'optionsField']) {
-      const arg = queryFields.getGroupedSelectOptions.args.find(
-        (a) => a.name === argName
-      );
-      expect(arg).toBeDefined();
+    // Seul fieldName est obligatoire
+    const args = new Map(field.args.map((a) => [a.name, a]));
+    expect([...args.keys()].sort()).toEqual(
+      ['catalog', 'fieldName', 'maxDepth', 'schema', 'searchTerm'].sort(),
+    );
+    expect(isNonNullType(args.get('fieldName')!.type)).toBe(true);
+    expect(isNonNullType(args.get('maxDepth')!.type)).toBe(false);
+    // Pas de défaut SDL : maxDepth absent = toute la chaîne
+    expect(args.get('maxDepth')!.defaultValue).toBeUndefined();
 
-      // Argument obligatoire — contrainte NonNull
-      expect(isNonNullType(arg!.type)).toBe(true);
-    }
+    // Forme hiérarchique unique : scalaire JSON non nul
+    expect(isNonNullType(field.type)).toBe(true);
+    const inner = getNullableType(field.type);
+    expect(isScalarType(inner) && inner.name).toBe('JSON');
+
+    // La description documente la forme et l'exemple group-options
+    expect(field.description).toContain('children');
+    expect(field.description).toContain('maxDepth: 2');
+  });
+
+  /**
+   * Verification that the uncorrelated grouped query is gone, type included.
+   */
+  test('getGroupedSelectOptions and GroupedSelectOptions are removed', () => {
+    expect(queryFields).not.toHaveProperty('getGroupedSelectOptions');
+    expect(schema.getType('GroupedSelectOptions')).toBeUndefined();
   });
 });

@@ -38,9 +38,30 @@ interface DataLoaderInstance {
   load: (params: SelectOptionsParams) => Promise<SelectOption[] | null>;
 }
 
+/** Paramètres de chargement d'un arbre d'options. */
+interface SelectOptionsTreeParams {
+  fieldName: string;
+  maxDepth: number | null;
+  searchTerm: string | null;
+  maxNodes: number;
+}
+
+/** Nœud d'arbre retourné par le loader. */
+interface TreeNode {
+  value: string;
+  label: string;
+  children?: TreeNode[];
+}
+
+/** Instance du loader d'arbres — interface minimale. */
+interface TreeLoaderInstance {
+  load: (params: SelectOptionsTreeParams) => Promise<TreeNode[] | null>;
+}
+
 /** Module select-options.ts après import dynamique. */
 interface SelectOptionsModule {
   createSelectOptionsLoader: (databaseId?: string | null) => DataLoaderInstance;
+  createSelectOptionsTreeLoader: (databaseId?: string | null) => TreeLoaderInstance;
 }
 
 // ─── État des mocks partagés ───────────────────────────────────────────────────
@@ -81,9 +102,10 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 
 // Déclaration avant beforeAll — remplie après résolution des mocks
 let createSelectOptionsLoader: SelectOptionsModule['createSelectOptionsLoader'];
+let createSelectOptionsTreeLoader: SelectOptionsModule['createSelectOptionsTreeLoader'];
 
 beforeAll(async () => {
-  ({ createSelectOptionsLoader } =
+  ({ createSelectOptionsLoader, createSelectOptionsTreeLoader } =
     (await import('../../../src/loaders/select-options.js')) as unknown as SelectOptionsModule);
 });
 
@@ -244,5 +266,173 @@ describe('SelectOptionsLoader', () => {
 
       expect(mockConnection.all).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ─── Arbre d'options d'une hiérarchie de colonnes ──────────────────────────────
+
+/**
+ * Makes the metadata read return the given parent links, then the DISTINCT
+ * query return the given rows.
+ *
+ * @param parents - Column name → parent column name (null for a root).
+ * @param rows - Rows the DISTINCT query resolves to.
+ */
+// Métadonnées (liens parent_name) puis lignes du SELECT DISTINCT
+const mockHierarchy = (
+  parents: Record<string, string | null>,
+  rows: Record<string, unknown>[] = [],
+): void => {
+  mockConnection.all
+    .mockResolvedValueOnce(
+      Object.entries(parents).map(([name, parent]) => ({ name, parent_name: parent })) as never,
+    )
+    .mockResolvedValueOnce(rows as never);
+};
+
+// Chaîne region → departement → commune du setup de test
+const GEOGRAPHY = { region: null, departement: 'region', commune: 'departement' };
+
+/**
+ * Loads a tree with default parameters overridden by `params`.
+ *
+ * @param params - Parameters to override.
+ * @returns The loaded tree.
+ */
+// Chargement d'un arbre, paramètres par défaut surchargés
+const loadTree = (params: Partial<SelectOptionsTreeParams> = {}) =>
+  createSelectOptionsTreeLoader('main').load({
+    fieldName: 'commune',
+    maxDepth: null,
+    searchTerm: null,
+    maxNodes: 5000,
+    ...params,
+  });
+
+describe('SelectOptionsTreeLoader', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockConnection.all.mockReset();
+    mockDatabaseManager.getPool.mockReturnValue(mockPool);
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
+    mockPool.acquire.mockResolvedValue(mockConnection);
+  });
+
+  test('une seule requête DISTINCT sur la chaîne, racine non NULL, triée et plafonnée', async () => {
+    mockHierarchy(GEOGRAPHY);
+
+    await loadTree({ maxNodes: 100 });
+
+    const [sql, params] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT region, departement, commune');
+    expect(sql).toContain('fact_table');
+    expect(sql).toContain('WHERE region IS NOT NULL');
+    expect(sql).toContain('ORDER BY region, departement, commune LIMIT ?');
+    // Plafond maxNodes + 1 en paramètre lié
+    expect(params).toEqual([101]);
+    // Métadonnées + DISTINCT : deux requêtes au total
+    expect(mockConnection.all).toHaveBeenCalledTimes(2);
+  });
+
+  test('maxDepth tronque la chaîne en remontant depuis fieldName', async () => {
+    mockHierarchy(GEOGRAPHY);
+
+    await loadTree({ maxDepth: 2 });
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT departement, commune');
+    expect(sql).toContain('WHERE departement IS NOT NULL');
+  });
+
+  test('searchTerm filtre le niveau fieldName, jokers échappés', async () => {
+    mockHierarchy(GEOGRAPHY);
+
+    await loadTree({ searchTerm: 'Me_%' });
+
+    const [sql, params] = distinctCall();
+    expect(sql).toContain("LOWER(CAST(commune AS VARCHAR)) LIKE ? ESCAPE '\\'");
+    expect(params[0]).toBe('%me\\_\\%%');
+  });
+
+  test('construit l’arbre, une branche s’arrêtant au premier NULL', async () => {
+    mockHierarchy(GEOGRAPHY, [
+      { region: 'R1', departement: 'D1', commune: 'C1' },
+      { region: 'R1', departement: 'D1', commune: 'C2' },
+      { region: 'R1', departement: 'D2', commune: null },
+      { region: 'R2', departement: null, commune: null },
+    ]);
+
+    const tree = await loadTree();
+
+    expect(tree).toEqual([
+      {
+        value: 'R1',
+        label: 'R1',
+        children: [
+          {
+            value: 'D1',
+            label: 'D1',
+            children: [
+              { value: 'C1', label: 'C1' },
+              { value: 'C2', label: 'C2' },
+            ],
+          },
+          // Niveau absent : feuille, aucun nœud vide
+          { value: 'D2', label: 'D2' },
+        ],
+      },
+      { value: 'R2', label: 'R2' },
+    ]);
+  });
+
+  test('garde-fou anti-cycle : une chaîne corrompue ne boucle pas', async () => {
+    // Cycle a → b → c → a : interdit par le writer, toléré à la lecture
+    mockHierarchy({ a: 'c', b: 'a', c: 'b' });
+
+    await loadTree({ fieldName: 'c' });
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT a, b, c');
+  });
+
+  test('une parente non déclarée arrête la remontée', async () => {
+    mockHierarchy({ commune: 'ghost' });
+
+    await loadTree();
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT commune FROM');
+  });
+
+  test('une parente au nom invalide est rejetée avant la requête DISTINCT', async () => {
+    mockHierarchy({ commune: 'bad name', 'bad name': null });
+
+    await expect(loadTree()).rejects.toThrow(GraphQLError);
+    expect(mockConnection.all).toHaveBeenCalledTimes(1);
+  });
+
+  test('maxDepth < 1 rejeté avant toute requête', async () => {
+    await expect(loadTree({ maxDepth: 0 })).rejects.toThrow('maxDepth');
+    expect(mockConnection.all).not.toHaveBeenCalled();
+  });
+
+  test('champ inconnu de metadata → BAD_USER_INPUT, sans requête DISTINCT', async () => {
+    mockHierarchy(GEOGRAPHY);
+
+    await expect(loadTree({ fieldName: 'unknown' })).rejects.toThrow("Unknown field 'unknown'");
+    expect(mockConnection.all).toHaveBeenCalledTimes(1);
+  });
+
+  test('dépassement de maxNodes → BAD_USER_INPUT, jamais tronqué', async () => {
+    mockHierarchy(GEOGRAPHY, [
+      { region: 'R1', departement: 'D1', commune: 'C1' },
+      { region: 'R1', departement: 'D1', commune: 'C2' },
+    ]);
+
+    // 2 lignes ≤ 3, mais 4 nœuds > 3 : rejet à la construction
+    const error = await loadTree({ maxNodes: 3 }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GraphQLError);
+    expect((error as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+    expect((error as GraphQLError).message).toContain('exceeds 3 nodes');
   });
 });

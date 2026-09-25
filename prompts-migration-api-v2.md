@@ -43,11 +43,11 @@
 >
 > **Pas de dépréciation dans cette série** : le projet n'est pas publié (spec bdd §8),
 > tout ce qui disparaît est retiré directement. La politique `@deprecated` s'applique
-> à partir de 0.3.0 (prompt 9).
+> à partir de 0.3.0 (prompt 10).
 >
 > **Choix du modèle** : Opus pour les prompts qui exigent des décisions d'architecture,
 > touchent des invariants de sécurité ou beaucoup de fichiers interdépendants
-> (1, 2, 3, 4, 5, 8) ; Sonnet pour les tâches mécaniques bien spécifiées (6, 7, 9, 10).
+> (1, 2, 3, 4, 5, 6, 9) ; Sonnet pour les tâches mécaniques bien spécifiées (7, 8, 10, 11).
 > **Plan mode** : activé quand des choix d'implémentation doivent être validés avant
 > d'écrire ; inutile quand la spécification ci-dessous est déjà un plan.
 
@@ -479,7 +479,94 @@ construction d'arbre (NULL, recherche avec ancêtres, bornes) demande de la rigu
 
 ---
 
-## Prompt 6 — Données prêtes pour graphiques et tableaux : métadonnées de colonnes, sérialisation, extents
+## Prompt 6 — Codes et libellés : `labelFor`, options et agrégats libellés
+
+**Modèle : Opus · Plan mode : non · Dépendances : prompts 4 et 5**
+
+_Inséré le 2026-09-22, après l'exécution des prompts 1 à 5 (spec bdd §2.6, revue
+§5.8). Les prompts suivants ont été renumérotés (ancien 6 → 7, …, ancien 10 → 11)._
+
+```text
+Lis d'abord ../dashboard-template-database/specification-bdd.md (sections 2.2, 2.6 et
+8) puis revue-technique-api.md (section 5.8 — le contrat y est figé). Un code métier
+(nomenclature NC8, code INSEE) et son libellé sont deux colonnes de la fact_table ; la
+colonne de libellés porte metadata.label_for = <colonne de code>. Un code peut avoir
+plusieurs colonnes de libellés (fr, en). Le writer garantit la dépendance
+fonctionnelle code → libellé (un seul libellé par code, NULL compris). Aucune
+jointure, aucune table auxiliaire : tout se lit dans la fact_table.
+
+1) Données de test (tests/setup/setup-test-data.ts) : ajoute label_for au DDL de
+   metadata (après parent_name) et au test de contrat. Dans un schéma de test, ajoute
+   une hiérarchie de codes nc6 → nc8 (codes VARCHAR à zéros de tête, ex. '010121' →
+   '01012100') avec nc6_libelle, nc8_libelle_fr et nc8_libelle_en (label_for
+   renseigné), dont : un libellé contenant une apostrophe, un code nc8 sans libellé
+   (libellé NULL sur toutes ses lignes), et au moins une mesure pour les agrégats. Ajoute
+   aussi un code numérique (INTEGER) doté d'un libellé, pour le CAST de value. Respecte
+   la dépendance fonctionnelle et ORDER BY cluster_by. Le second catalogue de test
+   partage des codes nc8 pour compareFacts.
+
+2) Métadonnées (loaders metadata/catalog, typedefs metadata.ts) : labelFor: String et
+   labelFields: [String!]! (inverse, trié par nom, calculé dans le loader sur les lignes
+   déjà lues — aucune requête de plus). Descriptions SDL en français comme le reste du
+   type. Fonction pure exportée resolveLabelField(fieldName, metadataByName,
+   requested?: string) -> string | null implémentant LA règle de choix de la revue §5.8
+   (labelField fourni et valide ; sinon seule colonne ; sinon première par ordre
+   alphabétique ; sinon null ; labelField qui n'est pas une colonne de libellés de
+   fieldName → BAD_USER_INPUT nommant les colonnes possibles). Toutes les queries
+   ci-dessous passent par elle.
+
+3) getFields : argument includeLabelFields: Boolean = false (colonnes dont labelFor est
+   renseigné exclues par défaut). getCatalogSchema inchangé (toutes les colonnes).
+   getSharedFields exclut les colonnes de libellés.
+
+4) getSelectOptions : argument labelField: String. Colonne de libellés effective →
+   SELECT DISTINCT CAST(code AS VARCHAR) AS value, <libellé> AS label … WHERE code IS
+   NOT NULL [AND (LOWER(CAST(code AS VARCHAR)) LIKE ? ESCAPE … OR LOWER(<libellé>) LIKE
+   ? ESCAPE …)] ORDER BY value LIMIT ? ; label NULL → label = value. Sans colonne de
+   libellés : comportement actuel inchangé. La colonne effective entre dans la clé de
+   cache.
+
+5) getSelectOptionsTree : chaque niveau de la chaîne ajoute sa colonne de libellés
+   effective (règle par défaut, pas d'argument par niveau) au même SELECT DISTINCT ; le
+   nœud porte { value: code, label: libellé ?? code } ; searchTerm porte sur le code ou
+   le libellé de la feuille. La construction d'arbre et la borne TREE_MAX_NODES ne
+   changent pas (un nœud = un code). Mets à jour la description SDL (« label always
+   equals value » devient faux) avec l'exemple nc6 → nc8.
+
+6) Agrégats : AggregatedFact.keyLabel: String et ComparedFact.keyLabel: String,
+   calculés DANS la même requête SQL par ANY_VALUE(<libellé>) quand la colonne groupée
+   (resp. l'unique champ de jointure de compareFacts, COALESCE des deux côtés) a une
+   colonne de libellés effective ; null sinon. Pas de field resolver, pas de requête
+   supplémentaire, pas d'argument labelField ici. Vérifie que getAggregatedFactsWithMetadata
+   et compareAggregatedFacts suivent le même chemin.
+
+7) Tests : metadata (labelFor, labelFields trié, vide sur une colonne sans libellé) ;
+   getFields avec et sans includeLabelFields ; resolveLabelField (table de vérité, dont
+   labelField invalide) ; getSelectOptions sur nc8 (libellé fr par défaut = premier
+   alphabétique, labelField en, recherche sur le code '0101', recherche sur un mot du
+   libellé, libellé à apostrophe, code sans libellé → label = value, code INTEGER) ;
+   getSelectOptions sur une colonne sans libellés (inchangé) ; getSelectOptionsTree nc6
+   → nc8 (libellés aux deux niveaux, recherche par libellé de feuille avec ancêtres) ;
+   keyLabel sur getAggregatedFacts groupé par nc8 et par une colonne sans libellés ;
+   keyLabel sur compareFacts ; getSharedFields sans colonnes de libellés ; filtre
+   CONTAINS sur une colonne de libellés (doit passer, famille texte) ; cache (deux
+   labelField différents → deux entrées).
+
+Conventions : commentaires français nominaux, docstrings anglaises Google. Termine par
+npm run lint, npm run type:check, npm run test:setup, npm test. Ne commite pas (je
+relis avant) : termine ton résumé par un message de commit conventionnel proposé, de
+type feat: (ajouts seulement ; feat!: si un comportement existant a changé pour une
+colonne sans libellés — ce ne devrait pas être le cas).
+```
+
+_Pourquoi Opus sans plan mode : le contrat est figé par la revue §5.8, mais le prompt
+touche d'un coup les données de test, le loader de métadonnées, les deux queries
+d'options et deux chemins d'agrégation SQL — la cohérence d'une règle unique de choix
+du libellé à travers eux demande de la rigueur._
+
+---
+
+## Prompt 7 — Données prêtes pour graphiques et tableaux : métadonnées de colonnes, sérialisation, extents
 
 **Modèle : Sonnet · Plan mode : non · Dépendances : prompt 4**
 
@@ -518,7 +605,7 @@ ni aux arguments existants.
    numériques (y compris les entiers convertis au point 2) ET les colonnes
    date/timestamp (bornes en chaînes ISO, comparaison chronologique). Documente dans
    la description SDL que ce sont les bornes de la PAGE, et renvoie vers
-   Metadata.stats (prompt 7) pour les bornes globales.
+   Metadata.stats (prompt 8) pour les bornes globales.
 
 4) Tests : fields aligné sur columns (ordre, projection via fields), measureFieldInfo,
    chaque règle de sérialisation (dont BIGINT > 2^53 en chaîne et BIGINT ordinaire en
@@ -536,9 +623,9 @@ exacte de `getRowObjectsJson`) est levé par le test de constat demandé en prem
 
 ---
 
-## Prompt 7 — Statistiques de colonnes (min/max pour les menus de filtre)
+## Prompt 8 — Statistiques de colonnes (min/max pour les menus de filtre)
 
-**Modèle : Sonnet · Plan mode : non · Dépendances : prompts 1, 4 et 6**
+**Modèle : Sonnet · Plan mode : non · Dépendances : prompts 1, 4 et 7**
 
 ```text
 Lis d'abord revue-technique-api.md (sections 4 et 5.6). L'interface a besoin du
@@ -571,7 +658,7 @@ Implémente des statistiques de colonne à la demande :
    requête : SELECT MIN(col), MAX(col), COUNT(DISTINCT col), COUNT(*) - COUNT(col)
    FROM fact_table [WHERE ...]. fieldName validé par validateIdentifier, filtres
    convertis par treeToSQL en SQL paramétré, valeurs sérialisées par le convertisseur
-   du prompt 6. Pour une colonne texte ou booléenne, min/max restent calculés
+   du prompt 7. Pour une colonne texte ou booléenne, min/max restent calculés
    (ordre lexical) — documente-le. TTL long type SELECT_OPTIONS_CACHE_TIMEOUT pour la
    variante non filtrée, TTL court type FACT_CACHE_TIMEOUT pour la variante filtrée.
    L'invalidation existante par préfixe catalog/schema doit couvrir ce nouveau cache
@@ -598,7 +685,7 @@ les patterns de loaders existants._
 
 ---
 
-## Prompt 8 — Endpoint REST d'export Arrow / CSV / Parquet
+## Prompt 9 — Endpoint REST d'export Arrow / CSV / Parquet
 
 **Modèle : Opus · Plan mode : OUI · Dépendances : prompts 1, 2 et 4**
 
@@ -673,9 +760,9 @@ le plan verrouille l'approche par format avant d'écrire._
 
 ---
 
-## Prompt 9 — Versioning du schéma GraphQL (SDL versionné, CI, artefacts de release)
+## Prompt 10 — Versioning du schéma GraphQL (SDL versionné, CI, artefacts de release)
 
-**Modèle : Sonnet · Plan mode : non · Dépendances : prompts 3 à 7 (schéma stabilisé)**
+**Modèle : Sonnet · Plan mode : non · Dépendances : prompts 3 à 8 (schéma stabilisé)**
 
 ```text
 Lis d'abord revue-technique-api.md (section 5.3). Politique retenue : évolution
@@ -757,9 +844,9 @@ _Pourquoi Sonnet sans plan mode : outillage standard entièrement spécifié
 
 ---
 
-## Prompt 10 — Documentation : deux sites, codegen, dictionnaire des données, skill
+## Prompt 11 — Documentation : deux sites, codegen, dictionnaire des données, skill
 
-**Modèle : Sonnet · Plan mode : OUI · Dépendances : prompts 3 à 9**
+**Modèle : Sonnet · Plan mode : OUI · Dépendances : prompts 3 à 10**
 
 ```text
 Lis d'abord revue-technique-api.md (sections 5.4 et 5.6). Objectif : séparer la
@@ -775,7 +862,7 @@ graphql-api générée par @graphql-markdown/docusaurus) + graphql-voyager + SDL
    - Site « boîte à outils » (réutilisable entre projets) : code-reference TypeDoc,
      guides d'architecture génériques, versioning/politique de dépréciation.
    - Site « API & données » (projet-spécifique) : référence GraphQL
-     (graphql-markdown), voyager, page d'export REST (prompt 8), dictionnaire des
+     (graphql-markdown), voyager, page d'export REST (prompt 9), dictionnaire des
      données (point 2). Adapte le workflow .github/workflows/docs.yml pour builder
      et déployer les deux (deux chemins de publication sur GitHub Pages).
 
@@ -786,15 +873,16 @@ graphql-api générée par @graphql-markdown/docusaurus) + graphql-voyager + SDL
    résultats (DatasetInfo), source, date de mise à jour, colonnes de tri
    (clusterBy), tableau des colonnes (name, label, sqlType, unit, displayFormat,
    family, description, defaultAggregation, isCategorical, isPrimaryKey) groupé par
-   family, et les hiérarchies reconstruites depuis parentName (region → departement →
-   commune). Intégré au build du site « API & données » avec une variable
+   family, les colonnes de libellés rangées à côté de leur code (labelFor), et les
+   hiérarchies reconstruites depuis parentName (region → departement → commune ;
+   nc6 → nc8). Intégré au build du site « API & données » avec une variable
    d'environnement API_URL ; si l'API est injoignable, le build n'échoue pas mais
    loggue un avertissement et conserve les pages précédentes (même stratégie
    cleanOutputDir que la doc existante).
 
 3) GraphQL Code Generator (Apollo Codegen est déprécié — utiliser @graphql-codegen) :
    - côté API : ajoute @graphql-codegen/cli + typescript + typescript-resolvers,
-     config codegen.ts pointant sur schema.graphql (prompt 9), script npm "codegen".
+     config codegen.ts pointant sur schema.graphql (prompt 10), script npm "codegen".
      Utilise les types générés dans AU MOINS les resolvers de select-options et de
      metadata (démonstration du pattern, migration complète progressive) — les
      interfaces manuelles correspondantes sont supprimées. Le scalaire JSON reçoit un
@@ -811,13 +899,17 @@ graphql-api générée par @graphql-markdown/docusaurus) + graphql-voyager + SDL
    et ses champs d'UI ; DatasetInfo (et non « DatasetMetadata » comme l'écrit la
    section cible actuelle) ; CatalogSchemaInfo.info ; getSelectOptionsTree
    (argument fieldName, sémantique de maxDepth, recette de conversion en
-   group-options [{group: {value, label}, options}] pour un SelectMenu) ;
-   DatasetWithMetadata.fields ; règles de sérialisation (BIGINT en chaîne au-delà de
+   group-options [{group: {value, label}, options}] pour un SelectMenu) ; codes et
+   libellés (labelFor / labelFields, argument labelField et règle de choix par défaut,
+   value = code et label = libellé, includeLabelFields sur getFields, keyLabel des
+   agrégats et de compareFacts) ; DatasetWithMetadata.fields ; règles de sérialisation (BIGINT en chaîne au-delà de
    2^53, dates ISO) ; FieldStats / stats / getFieldStats ; getSharedFields ;
    agrégation par défaut ; tri par défaut ; endpoint /api/export avec exemples ;
    limites de conception (profondeur 7, offset 10 000) ; politique de versioning.
    Supprime les éléments disparus (Filter, dimensionDetails, getDimensionTable,
-   keyLabel, python_type, GroupedSelectOptions, dimensionNames) et la section
+   python_type, GroupedSelectOptions, dimensionNames) — keyLabel n'en fait plus
+   partie : il est revenu au prompt 6 avec un autre sens (libellé lu en SQL, plus de
+   résolution par dimension) — et la section
    transitoire « Database schema (target for the API) », dont le contenu utile est
    fondu dans la référence (garde un court paragraphe sur les trois tables et la
    convention NULL des hiérarchies).
@@ -843,11 +935,18 @@ _Pourquoi Sonnet + plan mode : travail guidé mais avec un choix de structure
 | 3   | Bascule base v1 : données de test + suppression couche dimension       | Opus   | oui       | 1, 2    | `feat!:`       |
 | 4   | Contrat de métadonnées (camelCase, DatasetInfo, garde, tri par défaut) | Opus   | oui       | 3       | `feat!:`       |
 | 5   | getSelectOptionsTree remplace getGroupedSelectOptions                  | Opus   | non       | 4       | `feat!:`       |
-| 6   | Graphiques/tableaux : fields, sérialisation, extents                   | Sonnet | non       | 4       | `feat!:`       |
-| 7   | Stats de colonnes (min/max)                                            | Sonnet | non       | 1, 4, 6 | `feat:`        |
-| 8   | Export REST Arrow/CSV/Parquet                                          | Opus   | oui       | 1, 2, 4 | `feat:`        |
-| 9   | Versioning du schéma (SDL suivi, CI, artefacts)                        | Sonnet | non       | 3-7     | `ci:`          |
-| 10  | Docs : deux sites, codegen, dictionnaire, skill                        | Sonnet | oui       | 3-9     | `docs:`        |
+| 6   | Codes et libellés (labelFor, options et agrégats libellés)             | Opus   | non       | 4, 5    | `feat:`        |
+| 7   | Graphiques/tableaux : fields, sérialisation, extents                   | Sonnet | non       | 4       | `feat!:`       |
+| 8   | Stats de colonnes (min/max)                                            | Sonnet | non       | 1, 4, 7 | `feat:`        |
+| 9   | Export REST Arrow/CSV/Parquet                                          | Opus   | oui       | 1, 2, 4 | `feat:`        |
+| 10  | Versioning du schéma (SDL suivi, CI, artefacts)                        | Sonnet | non       | 3-8     | `ci:`          |
+| 11  | Docs : deux sites, codegen, dictionnaire, skill                        | Sonnet | oui       | 3-10    | `docs:`        |
+
+Le prompt 6 a été inséré le 2026-09-22, après l'exécution des prompts 1 à 5 ; les
+anciens prompts 6 à 10 sont devenus 7 à 11 (renvois internes mis à jour). Côté base,
+il correspond aux prompts 12 (implémentation) et 13 (documentation) de
+`prompts-refonte-schema.md`, dont il ne dépend pas pour s'exécuter : les données de
+test de l'API sont écrites à la main d'après la spec.
 
 Jalons entre prompts : `npm run lint` + `npm run type:check` + `npm run test:setup`
 
@@ -855,13 +954,13 @@ Jalons entre prompts : `npm run lint` + `npm run type:check` + `npm run test:set
   **un commit conventionnel par prompt, fait à la main** à partir du message proposé
   dans le résumé de fin de prompt. La release (0.3.0,
   déclenchée par release-please via les `feat!:`) ne se publie qu'une fois les prompts
-  1 à 9 terminés, pour que la rupture sorte en une seule version avec son changelog
+  1 à 10 terminés, pour que la rupture sorte en une seule version avec son changelog
   complet et le SDL en artefact. Les prompts 1-2 peuvent être exécutés immédiatement ;
   le prompt 1 étant breaking, son déploiement se coordonne avec le frontend (ci-dessous).
 
 ## Coordination avec le frontend (`dashboard-template-frontend`)
 
-À planifier côté frontend, en une passe après le prompt 6 (ou au fil de l'eau sur une
+À planifier côté frontend, en une passe après le prompt 7 (ou au fil de l'eau sur une
 branche) :
 
 - **Filtres** : `MultiCriterionMenu` → `FilterNode` (mapping mécanique depuis
@@ -883,6 +982,11 @@ branche) :
   catégoriel) ; `unit`/`displayFormat` alimentent axes et tooltips.
 - **Métadonnées** : tous les accès `sql_type` / `is_categorical` / `is_primary_key`
   passent en camelCase ; `Fact.dimensionDetails` → `Fact.keys`.
+- **Codes et libellés** (prompt 6) : les menus affichent `label` (libellé) et
+  transmettent `value` (code) aux filtres ; les listes de variables utilisent
+  `getFields` sans `includeLabelFields` ; les graphiques groupés par un code
+  étiquettent avec `keyLabel ?? key` ; le tableau peut fusionner une colonne de code et
+  sa colonne de libellés (`Metadata.labelFields`) en « code — libellé ».
 - **Serveur de mock** : régénérer `scripts/schema.graphql` du frontend depuis le
-  `schema.graphql` suivi de l'API (prompt 9), et non depuis
+  `schema.graphql` suivi de l'API (prompt 10), et non depuis
   `docs-site/static/schema.graphql` (ignoré et périmé).

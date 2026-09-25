@@ -560,22 +560,11 @@ query TestSelectOptionsMacro {
   }
 }
 
-# Test 7.4: Options groupées (catalogue default)
-query TestGroupedSelectOptions {
-  getGroupedSelectOptions(
-    groupField: "country"
-    optionsField: "indicator"
-    limit: 20
-  ) {
-    group {
-      value
-      label
-    }
-    options {
-      value
-      label
-    }
-  }
+# Test 7.4: Arbre d'options d'une hiérarchie de colonnes (schéma geography)
+# maxDepth: 2 sur commune → départements portant leurs propres communes
+# (format group-options). Retour JSON : [{ value, label, children? }].
+query TestSelectOptionsTree {
+  getSelectOptionsTree(fieldName: "commune", maxDepth: 2, schema: "geography")
 }
 
 # ============================================
@@ -1452,7 +1441,7 @@ query TestGetFieldsInvalidDatabase {
 # schéma au sein du catalogue choisi par `catalog`. Omis => schéma par défaut
 # du catalogue (config SCHEMA, "main"). Les deux arguments sont disponibles sur
 # getMetaData, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
-# getSelectOptions, getGroupedSelectOptions, getCatalogSchema et getFields.
+# getSelectOptions, getSelectOptionsTree, getCatalogSchema et getFields.
 
 # Test 20.1: Métadonnées d'un schéma nommé au sein d'un catalogue
 query TestMetadataNamedSchema {
