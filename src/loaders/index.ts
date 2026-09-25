@@ -6,6 +6,7 @@ import {
   createFactWithMetadataLoader,
 } from './fact.js';
 import { createSelectOptionsLoader, createSelectOptionsTreeLoader } from './select-options.js';
+import { createFieldStatsLoader } from './field-stats.js';
 import {
   createAggregatedFactsLoader,
   createAggregatedFactsWithMetadataLoader,
@@ -28,6 +29,7 @@ import type {
   SelectOptionsTreeParams,
   SelectOptionNode,
 } from './select-options.js';
+import type { FieldStatsParams, FieldStats } from './field-stats.js';
 import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
 import type { CatalogSchemaKey } from './catalog.js';
 import type { DatasetInfo } from './dataset-info.js';
@@ -75,6 +77,7 @@ interface LoadersCollection {
   aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
   selectOptionsTree: Loader<SelectOptionsTreeParams, SelectOptionNode[]>;
+  fieldStats: Loader<FieldStatsParams, FieldStats>;
   catalogMetadata: Loader<CatalogSchemaKey, FieldMetadata[]>;
   datasetInfo: Loader<CatalogSchemaKey, DatasetInfo>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
@@ -132,6 +135,7 @@ const createLoaders = (
 
   const selectOptionsLoader = createSelectOptionsLoader(catalogId, schema);
   const selectOptionsTreeLoader = createSelectOptionsTreeLoader(catalogId, schema);
+  const fieldStatsLoader = createFieldStatsLoader(catalogId, schema);
 
   // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
@@ -151,6 +155,7 @@ const createLoaders = (
     aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
     selectOptions: selectOptionsLoader,
     selectOptionsTree: selectOptionsTreeLoader,
+    fieldStats: fieldStatsLoader,
     catalogMetadata: catalogMetadataLoader,
     datasetInfo: datasetInfoLoader,
     compareFacts: compareFactsLoader,
@@ -168,6 +173,7 @@ const createLoaders = (
       aggregatedFactsWithCountLoader.clearAll();
       selectOptionsLoader.clearAll();
       selectOptionsTreeLoader.clearAll();
+      fieldStatsLoader.clearAll();
       catalogMetadataLoader.clearAll();
       datasetInfoLoader.clearAll();
       compareFactsLoader.clearAll();

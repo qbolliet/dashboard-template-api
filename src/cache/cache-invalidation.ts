@@ -34,6 +34,7 @@ interface KeyPatterns {
   facts: KeyPatternFn;
   aggregatedFacts: KeyPatternFn;
   selectOptions: KeyPatternFn;
+  fieldStats: KeyPatternFn;
   /** Global pattern — matches every cache type for the given (catalog, schema?). */
   allCatalog: KeyPatternFn;
 }
@@ -86,6 +87,7 @@ class CacheInvalidationManager {
         `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,
       selectOptions: (catalog, schema) =>
         `select-options:${catalog || 'default'}:${schema || '*'}:*`,
+      fieldStats: (catalog, schema) => `field-stats:${catalog || 'default'}:${schema || '*'}:*`,
       // Tous les types pour un (catalog, schema?) donné
       allCatalog: (catalog, schema) => `*:${catalog || 'default'}:${schema || '*'}:*`,
     };

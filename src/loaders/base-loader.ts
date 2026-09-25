@@ -185,6 +185,22 @@ class BaseQueryLoader {
     // Aucun contrôle par défaut
   }
 
+  // Point d'extension : durée de vie de l'entrée de cache d'une clé
+  /**
+   * Returns the cache TTL applied to the entry of one DataLoader key.
+   *
+   * The base implementation returns the loader-wide `cacheTimeout`. Loaders
+   * whose keys have different volatilities (e.g. an unfiltered result that
+   * only changes with the nightly refresh, against a filtered one that is
+   * rarely asked twice) override it.
+   *
+   * @param _key - The DataLoader key about to be cached.
+   * @returns TTL in the unit expected by `withCache`.
+   */
+  cacheTimeoutFor(_key: unknown): number {
+    return this.cacheTimeout;
+  }
+
   // Méthode de résolution du schéma effectif du loader
   /**
    * Returns the schema this loader actually reads.
@@ -235,7 +251,7 @@ class BaseQueryLoader {
       // La variante sépare les loaders d'un même préfixe renvoyant des formes différentes.
       const variant = this.cacheVariant ? `${this.cacheVariant}:` : '';
       const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${variant}${JSON.stringify(key)}`;
-      return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeout);
+      return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeoutFor(key));
     } catch (error) {
       // L'erreur vient du loader : elle appartient à l'appelant
       if (loaderFailed) throw error;

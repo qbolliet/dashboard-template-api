@@ -64,6 +64,7 @@ interface KeyPatterns {
   facts: (catalog?: string | null, schema?: string | null) => string;
   aggregatedFacts: (catalog?: string | null, schema?: string | null) => string;
   selectOptions: (catalog?: string | null, schema?: string | null) => string;
+  fieldStats: (catalog?: string | null, schema?: string | null) => string;
   allCatalog: (catalog?: string | null, schema?: string | null) => string;
 }
 
@@ -245,6 +246,7 @@ describe('CacheInvalidationManager', () => {
         'facts',
         'aggregatedFacts',
         'selectOptions',
+        'fieldStats',
         'allCatalog',
       ];
       for (const type of expected) {
@@ -259,6 +261,7 @@ describe('CacheInvalidationManager', () => {
         'aggregated-facts:main:main:*',
       );
       expect(manager.keyPatterns.selectOptions('main', 'main')).toBe('select-options:main:main:*');
+      expect(manager.keyPatterns.fieldStats('main', 'main')).toBe('field-stats:main:main:*');
       expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main:*');
     });
 
@@ -266,6 +269,28 @@ describe('CacheInvalidationManager', () => {
       expect(manager.keyPatterns.metadata('main')).toBe('metadata:main:*:*');
       expect(manager.keyPatterns.allCatalog('test')).toBe('*:test:*:*');
       expect(manager.keyPatterns.facts('analytics', null)).toBe('facts:analytics:*:*');
+      expect(manager.keyPatterns.fieldStats('analytics')).toBe('field-stats:analytics:*:*');
+    });
+
+    test('the field-stats pattern covers the keys written by the field stats loader', () => {
+      // Clé écrite par BaseQueryLoader.loadWithCache : <préfixe>:<catalogue>:<schéma>:<clé JSON>
+      const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const globToRegExp = (glob: string): RegExp =>
+        new RegExp(`^${glob.split('*').map(escapeRegExp).join('.*')}$`);
+      const filteredKey =
+        'field-stats:main:geography:{"fieldName":"population","where":{"sql":"\\"region\\" = ?","params":["x"]}}';
+      const plainKey = 'field-stats:main:geography:{"fieldName":"population","where":null}';
+
+      for (const key of [filteredKey, plainKey]) {
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main', 'geography')).test(key)).toBe(
+          true,
+        );
+        // Tous les schémas du catalogue, puis tous les types : l'invalidation par préfixe
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main')).test(key)).toBe(true);
+        expect(globToRegExp(manager.keyPatterns.allCatalog('main')).test(key)).toBe(true);
+        // Un autre catalogue n'est pas touché
+        expect(globToRegExp(manager.keyPatterns.fieldStats('other')).test(key)).toBe(false);
+      }
     });
 
     test('falls back to "default" catalog when catalog is falsy', () => {
@@ -477,33 +502,37 @@ describe('CacheInvalidationManager', () => {
   describe('getCacheStats', () => {
     test('returns nested catalog → schema → type counts', async () => {
       // 3 catalogues : main a 2 schémas (main, analytics), les autres 1 (main)
-      // Donc 4 (schema, catalog) combinaisons × 6 types = 24 appels scan
+      // Donc 4 (schema, catalog) combinaisons × 7 types = 28 appels scan
       // Ordre des schémas dans main : main puis analytics (cf. defaultSchemasByCatalog)
       // Ordre des types : metadata, catalogMetadata, datasetInfo, facts,
-      // aggregatedFacts, selectOptions
+      // aggregatedFacts, selectOptions, fieldStats
       const scanResults: [string, string[]][] = [
-        // main / main : 2, 1, 1, 3, 0, 1
+        // main / main : 2, 1, 1, 3, 0, 1, 2
         ['0', ['m1', 'm2']],
         ['0', ['cm1']],
         ['0', ['di1']],
         ['0', ['f1', 'f2', 'f3']],
         ['0', []],
         ['0', ['s1']],
-        // main / analytics : 0, 0, 0, 4, 0, 0
+        ['0', ['fs1', 'fs2']],
+        // main / analytics : 0, 0, 0, 4, 0, 0, 0
         ['0', []],
         ['0', []],
         ['0', []],
         ['0', ['f10', 'f11', 'f12', 'f13']],
         ['0', []],
         ['0', []],
-        // test / main : 1, 0, 0, 1, 0, 0
+        ['0', []],
+        // test / main : 1, 0, 0, 1, 0, 0, 0
         ['0', ['m3']],
         ['0', []],
         ['0', []],
         ['0', ['f4']],
         ['0', []],
         ['0', []],
+        ['0', []],
         // analytics / main : tout à 0
+        ['0', []],
         ['0', []],
         ['0', []],
         ['0', []],
@@ -526,6 +555,7 @@ describe('CacheInvalidationManager', () => {
             facts: 3,
             aggregatedFacts: 0,
             selectOptions: 1,
+            fieldStats: 2,
           },
           analytics: {
             metadata: 0,
@@ -534,6 +564,7 @@ describe('CacheInvalidationManager', () => {
             facts: 4,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
         test: {
@@ -544,6 +575,7 @@ describe('CacheInvalidationManager', () => {
             facts: 1,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
         analytics: {
@@ -554,11 +586,12 @@ describe('CacheInvalidationManager', () => {
             facts: 0,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
       });
-      // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 6 types)
-      expect(mockRedis.scan).toHaveBeenCalledTimes(24);
+      // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 7 types)
+      expect(mockRedis.scan).toHaveBeenCalledTimes(28);
     });
 
     test('uses databaseManager.getSchemas to enumerate per-catalog schemas', async () => {

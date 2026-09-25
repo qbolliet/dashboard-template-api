@@ -6,6 +6,8 @@ import { GraphQLError } from 'graphql';
 import { compileFilterTree } from '../../utils/filter-tree.js';
 import { resolveEffectiveSort } from '../../utils/default-sort.js';
 import { databaseManager } from '../../db/index.js';
+import { attachScopeToAll, contextScope } from './scope.js';
+import type { FieldScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 import type { FactQueryParams } from '../../loaders/fact.js';
 import type { LoadersCollection } from '../../loaders/index.js';
@@ -82,6 +84,8 @@ export interface PaginatedFactResult {
 export interface DatasetSource {
   columns?: string[];
   metadataLoader?: LoadersCollection['metadata'];
+  /** Catalog and schema the page was read from, carried to the lazy `stats` of each field. */
+  scope?: FieldScope;
   [key: string]: unknown;
 }
 
@@ -164,15 +168,12 @@ const factResolvers = {
      * @returns Result with enriched data in the requested format.
      */
     // Requête des faits avec métadonnées optimisées pour D3
-    getFactTableWithMetadata: async (
-      _: unknown,
-      args: FactTableArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
-    ) => {
+    getFactTableWithMetadata: async (_: unknown, args: FactTableArgs, context: GraphQLContext) => {
       // Sélection des loaders adaptés au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
-      const activeLoaders = targetLoaders ?? loaders;
+      const targetLoaders = context.getLoadersForCatalog(args.catalog, args.schema);
+      const activeLoaders = targetLoaders ?? context.loaders;
       const params = await buildFactParams(args, activeLoaders);
+      const scope = contextScope(context, args.catalog, args.schema);
 
       const result = (await withTimeout(
         activeLoaders.factWithMetadata.load(params),
@@ -194,13 +195,14 @@ const factResolvers = {
           return {
             ...result,
             metadataLoader: activeLoaders.metadata,
+            scope,
             data: partitionedData.map((row) =>
               result.columns!.map((col) => (row as Record<string, unknown>)[col] ?? null),
             ),
           };
         }
 
-        return { ...result, metadataLoader: activeLoaders.metadata, data: partitionedData };
+        return { ...result, metadataLoader: activeLoaders.metadata, scope, data: partitionedData };
       }
 
       return result;
@@ -217,12 +219,13 @@ const factResolvers = {
      * column), so it fails explicitly instead of leaving a hole in the array.
      *
      * @param parent - The loaded page, carrying its columns and metadata loader.
-     * @returns One metadata row per column, same names and same order.
+     * @returns One metadata row per column, same names and same order, each
+     *   carrying the page's catalog and schema for the lazy `stats` field.
      * @throws {GraphQLError} When a returned column has no metadata row.
      */
     // Métadonnées des colonnes retournées, alignées sur `columns`
     fields: async (parent: DatasetSource): Promise<FieldMetadata[]> => {
-      const { columns = [], metadataLoader } = parent;
+      const { columns = [], metadataLoader, scope } = parent;
       if (!metadataLoader) {
         throw new GraphQLError('Column metadata is unavailable for this result');
       }
@@ -237,7 +240,8 @@ const factResolvers = {
         );
       }
 
-      return rows as FieldMetadata[];
+      const fields = rows as FieldMetadata[];
+      return scope ? attachScopeToAll(fields, scope) : fields;
     },
   },
 };

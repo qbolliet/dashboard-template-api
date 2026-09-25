@@ -238,7 +238,7 @@ Réponse précise à votre question :
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Liste colonnes + labels pour un select                          | ✅ `getFields` → `{value, label}`, filtrable par type/catégorie                                                                                                                 | Ajouter le filtre `family`                                                                                                           |
 | Type d'une variable → opérateurs de filtre + type de menu       | ✅ `Metadata.sql_type`                                                                                                                                                          | Exposer `unit`, `displayFormat`, `family`, `description`, `defaultAggregation`, `parentName` en camelCase ; retirer `python_type`    |
-| Min/max des numériques et dates (calibrage sliders/datepickers) | ❌ **Manque.** `DatasetMetadata.extents` n'est calculé que sur la _page retournée_ (`src/db/pool.ts:643-651`), uniquement pour les valeurs `number` — **jamais pour les dates** | Nouveau champ `stats` (min/max/distinctCount/nullCount) — voir ci-dessous                                                            |
+| Min/max des numériques et dates (calibrage sliders/datepickers) | ❌ **Manque.** `DatasetMetadata.extents` n'est calculé que sur la _page retournée_ (`src/db/pool.ts:643-651`), uniquement pour les valeurs `number` — **jamais pour les dates** | ✅ Réalisé : `Metadata.stats` (lazy) et `getFieldStats` — voir ci-dessous                                                            |
 | Modalités d'une catégorielle → select-menu                      | ✅ `getSelectOptions` (via `dim_*` si catégorielle)                                                                                                                             | `SELECT DISTINCT` sur la fact table uniquement, `label = value` ; erreurs remontées au lieu de `[]`                                  |
 | Code métier affiché avec son libellé (nomenclature NC8)         | ❌ `label = value` partout                                                                                                                                                      | `value` = code, `label` = colonne de libellés (`labelFor`), recherche dans les deux, `keyLabel` sur les agrégats (§5.8)              |
 | Données `Array[Row]` + méta pour graphiques / tableaux          | ✅ `getFactTableWithMetadata` (OBJECTS/ARRAYS, extents de page, total, pagination)                                                                                              | Métadonnées des colonnes retournées (`fields`), sérialisation garantie des types, extents de dates (§5.6)                            |
@@ -269,6 +269,26 @@ présent dans le selection set), avec cache Redis long — invalidé par le flux
 donc garantie par construction). Le front récupère alors colonnes + types + bornes en
 **une seule requête** `getCatalogSchema`. En complément : une query `getFieldStats`
 acceptant un `FilterNode` pour recalibrer les sliders après filtrage.
+
+**Réalisé (prompt 8).** Un seul chemin de calcul (`src/loaders/field-stats.ts`) :
+`SELECT MIN(col), MAX(col), COUNT(DISTINCT col), COUNT(*) - COUNT(col) FROM fact_table
+[WHERE …]`, colonne validée par `validateIdentifier` et contrôlée contre la table
+`metadata` (colonne inconnue → `BAD_USER_INPUT`), filtre compilé par `treeToSQL`,
+valeurs sérialisées par le convertisseur unique du §5.6 (entier au-delà de 2^53 en
+chaîne exacte, `DATE` en `YYYY-MM-DD`, `TIMESTAMP` en ISO). Sur une colonne texte ou
+booléenne, `min`/`max` sont calculés aussi (ordre lexical ; `false` < `true`) : ils
+n'ont pas de sens de calibrage. Le champ `Metadata.stats` et la query `getFieldStats`
+partagent le même loader, donc la même clé de cache pour la variante non filtrée.
+Chaque resolver qui produit un `Metadata` y attache `_catalog` / `_schema`
+(`src/schema/resolvers/scope.ts`, champs internes absents du SDL) : `getMetaData`,
+`getCatalogSchema`, `CatalogSchemaInfo.fields`, `DatasetWithMetadata.fields`,
+`groupByFieldInfo` et `measureFieldInfo` ; un `Metadata` sans scope échoue
+explicitement au lieu de deviner le catalogue. TTL : `SELECT_OPTIONS_CACHE_TIMEOUT`
+sans filtre, `FACT_CACHE_TIMEOUT` avec filtre (hook `cacheTimeoutFor` de
+`BaseQueryLoader`). Coût : `stats` = N requêtes pour N colonnes sélectionnées, d'où
+les scores `stats: 10` et `getFieldStats: 5` dans `config/security.yaml`. Les clés
+`field-stats:<catalogue>:<schéma>:…` sont couvertes par les motifs d'invalidation
+(`keyPatterns.fieldStats` et `allCatalog`) — sous réserve du point 9 du §6.
 
 ---
 
@@ -668,6 +688,18 @@ retour du N+1 que la suppression des dimensions avait éliminé).
 6. **Sérialisation `BIGINT` / timestamps** non maîtrisée (§0, §5.6).
 7. **Pagination non déterministe** sans tri (§5.7).
 8. **SDL non versionné** (§5.3).
+9. **L'invalidation du cache ne supprime rien dès que `keyPrefix` est non vide** (constat
+   du prompt 8, vérifié sur un Redis réel). Le client ioredis est créé avec
+   `keyPrefix` (`graphql-api:` par défaut, `src/cache/redis.ts`) : ioredis ajoute ce
+   préfixe aux clés des commandes, **pas** au motif `MATCH` de `SCAN`, et ne le retire
+   pas des clés que `SCAN` renvoie. `CacheInvalidationManager.scanKeys` cherche donc
+   `facts:<catalogue>:*` alors que les clés sont `graphql-api:facts:<catalogue>:…`
+   (aucun résultat), et un `DEL` des clés renvoyées les re-préfixerait. Conséquence :
+   `/api/cache/invalidate-all`, appelé par l'updater nocturne, est sans effet ; la
+   fraîcheur ne repose que sur les TTL (300 s pour les faits, 600 s pour les
+   métadonnées, options et stats non filtrées). Les tests unitaires ne le voient pas :
+   ils simulent `redis.scan`. Correctif : préfixer le motif avec
+   `redis.options.keyPrefix` et retirer ce préfixe des clés avant `DEL`.
 
 ---
 

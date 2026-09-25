@@ -44,6 +44,11 @@ SECURITY:
       # Scalaire JSON (coût de feuille nul sinon) : un DISTINCT sur toute la
       # chaîne de colonnes, borné par API.SELECT_OPTIONS.TREE_MAX_NODES
       getSelectOptionsTree: 5
+      # Statistiques de colonne : une requête SQL par colonne (MIN, MAX, COUNT DISTINCT).
+      # `stats` sur Metadata coûte N requêtes pour N colonnes sélectionnées : son
+      # score, fixé au-dessus de getFieldStats, décourage de l'ouvrir sur tout un catalogue.
+      getFieldStats: 5
+      stats: 10
 
   # Pas de section SANITIZATION : la sanitization XSS/SQL des valeurs n'a pas
   # d'objet sur ce chemin (SQL paramétré via treeToSQL, identifiants validés par

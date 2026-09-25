@@ -2,6 +2,7 @@
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
+import { attachScopeToAll, effectiveScope, validateSchemaForCatalog } from './scope.js';
 import { sqlTypeFamily } from '../../utils/filter-tree.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { DatasetInfo } from '../../loaders/dataset-info.js';
@@ -61,28 +62,6 @@ export interface CatalogEntry {
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
 
 /**
- * Validates an optional schema argument against the catalog's allow-list.
- *
- * The schema must belong to the configured (and optionally SQL-discovered)
- * list of schemas for the catalog. This is stricter than a regex check on the
- * identifier shape: it rejects syntactically valid but unknown schemas before
- * any string is interpolated into SQL.
- *
- * @param catalog - Catalog the schema must belong to.
- * @param schema - Schema name to validate, or null/undefined to skip.
- * @throws {GraphQLError} When the schema is not in the catalog's allow-list.
- */
-function validateSchemaForCatalog(catalog: string, schema?: string | null): void {
-  if (!schema) return;
-  if (!databaseManager.isValidSchema(catalog, schema)) {
-    throw new GraphQLError(
-      `Schema '${schema}' is not available for catalog '${catalog}'. ` +
-        `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
-    );
-  }
-}
-
-/**
  * Resolves the SQL type family of a metadata row.
  *
  * A column whose SQL type is unknown to the filter compiler yields null: it
@@ -130,7 +109,12 @@ const catalogResolvers = {
       _: Record<string, never>,
       { loaders }: GraphQLContext,
     ): Promise<FieldMetadata[]> => {
-      return loaders.catalogMetadata.load({ catalog: parent.catalogId, schema: parent.name });
+      const rows = await loaders.catalogMetadata.load({
+        catalog: parent.catalogId,
+        schema: parent.name,
+      });
+      // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
+      return attachScopeToAll(rows, effectiveScope(parent.catalogId, parent.name));
     },
 
     /**
@@ -184,7 +168,8 @@ const catalogResolvers = {
      * @param _ - Parent resolver result (unused at root).
      * @param args - Catalog alias and optional schema to query.
      * @param context - GraphQL context with loaders.
-     * @returns Array of catalog metadata rows describing the schema.
+     * @returns Array of catalog metadata rows describing the schema, each
+     *   carrying its catalog and schema for the lazy `stats` field.
      */
     // Récupération du schéma d'un catalogue spécifique
     getCatalogSchema: async (
@@ -194,7 +179,9 @@ const catalogResolvers = {
     ): Promise<FieldMetadata[]> => {
       const targetCatalog = databaseManager.validateCatalogRouting(catalog);
       validateSchemaForCatalog(targetCatalog, schema);
-      return loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+      const rows = await loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+      // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
+      return attachScopeToAll(rows, effectiveScope(targetCatalog, schema));
     },
 
     /**
@@ -229,7 +216,7 @@ const catalogResolvers = {
      * @param _ - Parent resolver result (unused at root).
      * Label columns (non-null `labelFor`) are excluded unless
      * `includeLabelFields` is true: they render the values of a code column
-     * and are not variables to offer in a menu (specification-bdd.md §8).
+     * and are not variables to offer in a menu.
      *
      * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family, includeLabelFields.
      * @param context - GraphQL context with loaders.
@@ -260,7 +247,7 @@ const catalogResolvers = {
 
       return fields
         .filter((field) => {
-          // Colonnes de libellés masquées par défaut (spec bdd §8)
+          // Colonnes de libellés masquées par défaut
           if (!includeLabelFields && field.labelFor !== null) {
             return false;
           }
@@ -302,7 +289,7 @@ const catalogResolvers = {
      * when every target declares it as categorical under the same name and
      * with the same SQL type family, so it is safe to use as a join key in
      * a cross-catalog query. Label columns are excluded: the join is made on
-     * the code, more stable than a revisable label (specification-bdd.md §8).
+     * the code, more stable than a revisable label.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - List of (catalog, schema) targets.

@@ -4,7 +4,9 @@ import { GraphQLError } from 'graphql';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
+import { attachScope, contextScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
+import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { LoadersCollection } from '../../loaders/index.js';
 import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
@@ -292,10 +294,11 @@ const aggregatedFactsResolvers = {
         catalog,
         schema,
       }: AggregatedFactsArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
+      context: GraphQLContext,
     ) => {
-      const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const activeLoaders = targetLoaders ?? loaders;
+      // Instanciation des loaders
+      const targetLoaders = context.getLoadersForCatalog(catalog, schema);
+      const activeLoaders = targetLoaders ?? context.loaders;
 
       // Agrégation effective, résolue avant validation et avant la clé de cache
       const effectiveAggregation = await resolveAggregation(aggregation, measure, activeLoaders);
@@ -330,8 +333,22 @@ const aggregatedFactsResolvers = {
         // Métadonnées de la mesure : loader de métadonnées (mis en cache), sans requête de plus
         const measureFieldInfo = await activeLoaders.metadata.load(measure);
 
+        // Catalogue et schéma rattachés aux deux Metadata pour la résolution paresseuse de `stats`
+        const scope = contextScope(context, catalog, schema);
+        const groupByFieldInfo = attachScope(
+          result.metadata.groupByFieldInfo as FieldMetadata | null,
+          scope,
+        );
+
         // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
-        return { ...result, metadata: { ...result.metadata, measureFieldInfo } };
+        return {
+          ...result,
+          metadata: {
+            ...result.metadata,
+            groupByFieldInfo,
+            measureFieldInfo: attachScope(measureFieldInfo, scope),
+          },
+        };
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
         if (error instanceof GraphQLError) throw error;

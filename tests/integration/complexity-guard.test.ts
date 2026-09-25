@@ -90,6 +90,16 @@ const REALISTIC_QUERIES: Record<string, string> = {
       count
     }
   }`,
+  // Bornes des sliders/datepickers : une requête SQL par colonne, filtres courants compris
+  sliderRanges: `{
+    price: getFieldStats(fieldName: "value", structuredFilters: {}) { min max }
+    date: getFieldStats(fieldName: "date", structuredFilters: {}) { min max }
+    horizon: getFieldStats(fieldName: "horizon", structuredFilters: {}) { min max distinctCount nullCount }
+  }`,
+  // Colonnes du schéma et leurs bornes globales en une seule requête
+  catalogWithStats: `{
+    getCatalogSchema { name label sqlType unit displayFormat stats { min max distinctCount nullCount } }
+  }`,
   fullPage: `{
     table: getFactTableWithMetadata(limit: 100, structuredFilters: {}, sort: []) {
       columns

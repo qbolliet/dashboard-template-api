@@ -38,6 +38,8 @@ describe('Object types — metadata', () => {
       'family',
       'description',
       'defaultAggregation',
+      // Champ dérivé, résolu à la demande — pas une colonne de la table metadata
+      'stats',
     ];
     expect(Object.keys(fields).sort()).toEqual([...expected].sort());
   });
@@ -86,6 +88,46 @@ describe('Object types — metadata', () => {
   test('defaultAggregation est typé par l’enum Aggregation', () => {
     expect(String(fields.defaultAggregation.type)).toBe('Aggregation');
   });
+
+  /**
+   * Verification that stats is an optional lazy field of type FieldStats.
+   */
+  test('stats est un champ FieldStats nullable, sans argument', () => {
+    expect(String(fields.stats.type)).toBe('FieldStats');
+    expect(fields.stats.args).toHaveLength(0);
+  });
+
+  /**
+   * Verification that the internal scope fields are not part of the SDL.
+   */
+  test('les champs internes _catalog et _schema ne sont pas exposés', () => {
+    expect(fields).not.toHaveProperty('_catalog');
+    expect(fields).not.toHaveProperty('_schema');
+  });
+});
+
+// ─── Type FieldStats ─────────────────────────────────────────────────────────
+
+describe('Object types — FieldStats', () => {
+  let fields: GraphQLFieldMap<unknown, unknown>;
+
+  beforeAll(() => {
+    fields = assertObjectType(schema.getType('FieldStats')).getFields();
+  });
+
+  test('expose min, max, distinctCount et nullCount', () => {
+    expect(Object.keys(fields).sort()).toEqual(['distinctCount', 'max', 'min', 'nullCount']);
+  });
+
+  test('min et max sont des JSON nullables (colonne vide)', () => {
+    expect(String(fields.min.type)).toBe('JSON');
+    expect(String(fields.max.type)).toBe('JSON');
+  });
+
+  test('distinctCount et nullCount sont des Int non nullables', () => {
+    expect(String(fields.distinctCount.type)).toBe('Int!');
+    expect(String(fields.nullCount.type)).toBe('Int!');
+  });
 });
 
 // ─── Champs de la Query — metadata ───────────────────────────────────────────
@@ -110,5 +152,22 @@ describe('Query fields — metadata', () => {
 
     // Caractère non-null de l'argument name
     expect(isNonNullType(nameArg!.type)).toBe(true);
+  });
+
+  /**
+   * Verification that getFieldStats takes a column, the routing and the filter tree.
+   */
+  test('getFieldStats retourne FieldStats! et accepte le même arbre de filtres que les faits', () => {
+    expect(queryFields).toHaveProperty('getFieldStats');
+    const field = queryFields.getFieldStats;
+
+    expect(String(field.type)).toBe('FieldStats!');
+    const args = Object.fromEntries(field.args.map((a) => [a.name, String(a.type)]));
+    expect(args).toEqual({
+      fieldName: 'String!',
+      catalog: 'String',
+      schema: 'String',
+      structuredFilters: 'FilterNode',
+    });
   });
 });

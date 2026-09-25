@@ -1,6 +1,7 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
+import { attachScope, contextScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
@@ -26,18 +27,26 @@ const metadataResolvers = {
      * Arguments follow {@link MetadataArgs}.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Metadata row for the requested field, or null if not found.
+     * @param context - GraphQL context with loaders.
+     * @returns Metadata row for the requested field (carrying its catalog and
+     *   schema for the lazy `stats` field), or null if not found.
      */
     getMetaData: async (
       _: unknown,
       { name, catalog, schema }: MetadataArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
+      context: GraphQLContext,
     ) => {
       // Sélection du loader adapté au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.metadata : loaders.metadata;
+      const targetLoaders = context.getLoadersForCatalog(catalog, schema);
+      const loader = targetLoaders ? targetLoaders.metadata : context.loaders.metadata;
 
-      return withTimeout(loader.load(name), config.API.TIMEOUTS.METADATA, 'Metadata fetch timeout');
+      const row = await withTimeout(
+        loader.load(name),
+        config.API.TIMEOUTS.METADATA,
+        'Metadata fetch timeout',
+      );
+      // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
+      return attachScope(row, contextScope(context, catalog, schema));
     },
   },
 };

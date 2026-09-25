@@ -5,6 +5,7 @@ import { aggregatedFactsResolvers } from './aggregated-facts.js';
 import { selectOptionsResolvers } from './select-options.js';
 import { fieldResolvers } from './field-resolvers.js';
 import { catalogResolvers } from './catalog.js';
+import { fieldStatsResolvers } from './field-stats.js';
 import { crossDatabaseResolvers } from './cross-database.js';
 
 // Combinaison des différents resolvers
@@ -21,12 +22,15 @@ const resolvers = {
     ...aggregatedFactsResolvers.Query,
     ...selectOptionsResolvers.Query,
     ...catalogResolvers.Query,
+    ...fieldStatsResolvers.Query,
     ...crossDatabaseResolvers.Query,
   },
   // Field resolvers : partition clés/mesures de Fact + cascade lazy sur CatalogSchemaInfo
   ...fieldResolvers,
   DatasetWithMetadata: factResolvers.DatasetWithMetadata,
   CatalogSchemaInfo: catalogResolvers.CatalogSchemaInfo,
+  // Champ lazy `stats` du type Metadata
+  Metadata: fieldStatsResolvers.Metadata,
 };
 
 // Ré-exportation de la combinaison
