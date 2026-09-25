@@ -9,6 +9,7 @@ import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
 import type { FactQueryParams } from '../../loaders/fact.js';
 import type { LoadersCollection } from '../../loaders/index.js';
+import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
@@ -71,6 +72,17 @@ export interface PaginatedFactResult {
   totalPages: number;
   generatedAt: string;
   columns?: string[];
+}
+
+/**
+ * Parent object of DatasetWithMetadata: the loaded page plus the metadata
+ * loader of the target catalog/schema, so that `fields` is resolved lazily and
+ * only when the client selects it.
+ */
+export interface DatasetSource {
+  columns?: string[];
+  metadataLoader?: LoadersCollection['metadata'];
+  [key: string]: unknown;
 }
 
 // Construction de resolvers pour la table des données
@@ -181,16 +193,51 @@ const factResolvers = {
         if (args.format === 'ARRAYS' && result.columns) {
           return {
             ...result,
+            metadataLoader: activeLoaders.metadata,
             data: partitionedData.map((row) =>
               result.columns!.map((col) => (row as Record<string, unknown>)[col] ?? null),
             ),
           };
         }
 
-        return { ...result, data: partitionedData };
+        return { ...result, metadataLoader: activeLoaders.metadata, data: partitionedData };
       }
 
       return result;
+    },
+  },
+
+  DatasetWithMetadata: {
+    /**
+     * Resolves the metadata of the returned columns, aligned on `columns`.
+     *
+     * Reads the metadata loader already used to compile the filters and to
+     * partition the rows: no query beyond its cache. A column without a
+     * metadata row cannot occur on a fact_table (the writer declares every
+     * column), so it fails explicitly instead of leaving a hole in the array.
+     *
+     * @param parent - The loaded page, carrying its columns and metadata loader.
+     * @returns One metadata row per column, same names and same order.
+     * @throws {GraphQLError} When a returned column has no metadata row.
+     */
+    // Métadonnées des colonnes retournées, alignées sur `columns`
+    fields: async (parent: DatasetSource): Promise<FieldMetadata[]> => {
+      const { columns = [], metadataLoader } = parent;
+      if (!metadataLoader) {
+        throw new GraphQLError('Column metadata is unavailable for this result');
+      }
+
+      const rows = await Promise.all(columns.map((column) => metadataLoader.load(column)));
+      const missing = columns.filter((_, index) => rows[index] === null);
+      if (missing.length > 0) {
+        throw new GraphQLError(
+          `No metadata row for column(s): ${missing.join(', ')}. ` +
+            `Every fact_table column must be declared in the metadata table.`,
+          { extensions: { code: 'INTERNAL_SERVER_ERROR' } },
+        );
+      }
+
+      return rows as FieldMetadata[];
     },
   },
 };

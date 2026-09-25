@@ -558,6 +558,22 @@ Deux notes rédigées côté frontend demandaient des évolutions de
 Même logique pour les agrégats : `AggregatedFactsMetadata.groupByFieldInfo` existe ;
 ajouter `measureFieldInfo: Metadata` (unité et format de la valeur agrégée).
 
+**Réalisé (prompt 7).** Constat de `getRowObjectsJson()` / `getRowsJson()` sur
+`@duckdb/node-api` 1.5.2-r.2 (`tests/unit/test_db/json-serialization.test.ts`) : tout
+entier de 64 bits ou plus (`BIGINT`, `UBIGINT`, `HUGEINT`), **même petit** (`'42'`), et
+tout `DECIMAL` sortent en **chaînes** ; `NaN` / `Infinity` sortent en chaînes
+(`'NaN'`) ; un `FLOAT` est élargi en double (`0.1` → `0.10000000149011612`) ; un
+`TIMESTAMP` porte un espace (`'2024-03-05 10:11:12'`) et un `TIMESTAMPTZ` est rendu dans
+le fuseau de la session (`+02`). Le convertisseur unique (`src/db/json-conversion.ts`,
+branché sur `convertRowObjects` / `convertRows`) applique la règle cible, avec ces
+précisions : un `FLOAT` est restitué par son plus court décimal (`0.1`) ; `NaN` et
+`±Infinity` valent `null` ; un `TIMESTAMPTZ` est sérialisé en UTC avec suffixe `Z`,
+indépendamment du fuseau de session ; une date infinie vaut `null`. Les extents d'une
+colonne d'entiers dépassant 2^53 comparent les valeurs comme des nombres : leur borne
+est approchée à cette échelle. Effet de déploiement : les entrées de cache Redis des
+requêtes de faits gardent l'ancienne forme (`BIGINT` en chaîne) jusqu'à expiration —
+vider le cache (`/api/cache/invalidate-all`) au déploiement.
+
 ### 5.7 Tri par défaut et pagination déterministe
 
 La pagination par offset sans `ORDER BY` n'est pas stable sous DuckDB (scan parallèle

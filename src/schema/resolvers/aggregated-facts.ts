@@ -51,6 +51,7 @@ export interface AggregatedFactRow {
 /** Aggregated result with metadata, used by getAggregatedFactsWithMetadata. */
 export interface AggregatedWithMetadataResult {
   data: AggregatedFactRow[];
+  metadata: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -326,8 +327,11 @@ const aggregatedFactsResolvers = {
           'Aggregated facts with metadata fetch timeout',
         )) as unknown as AggregatedWithMetadataResult;
 
+        // Métadonnées de la mesure : loader de métadonnées (mis en cache), sans requête de plus
+        const measureFieldInfo = await activeLoaders.metadata.load(measure);
+
         // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
-        return result;
+        return { ...result, metadata: { ...result.metadata, measureFieldInfo } };
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
         if (error instanceof GraphQLError) throw error;

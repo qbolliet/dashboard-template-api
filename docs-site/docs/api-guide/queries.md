@@ -241,6 +241,60 @@ getFactTableWithMetadata(
 `format: OBJECTS` returns `[{ col: val, … }]` — compatible with D3 and DataTable.  
 `format: ARRAYS` returns `[[val1, val2, …]]` — more compact, suited for AG Grid / TanStack Table.
 
+The response carries what a `<Chart>` or a `DataTable` needs to configure itself,
+with no second request and no sampling of the data:
+
+- `columns` — the returned column names, in order.
+- `fields` — the `Metadata` of each returned column, **aligned on `columns`** (same
+  names, same order, also with `fields:` projection and `format: ARRAYS`): `sqlType`
+  (axis type), `label` (header), `unit` (axis suffix), `displayFormat` (d3-format),
+  `family`, `labelFields`… They come from the already-loaded metadata, without any
+  extra query. A column with no row in the `metadata` table fails the request with an
+  explicit error instead of leaving a hole.
+- `metadata.extents` — min/max of the columns **of the page** (not of the whole
+  dataset; the global bounds of a column are `Metadata.stats`): `[min, max]` as numbers
+  for numeric columns, as ISO 8601 strings for date and timestamp columns (chronological
+  comparison). NULLs are ignored; a column with no value, and text or boolean columns,
+  have no entry. Integers beyond 2^53 (serialized as strings, see below) are compared as
+  numbers, so their bound is approximate at that magnitude.
+
+```graphql
+query {
+  getFactTableWithMetadata(fields: ["date", "value"], limit: 100) {
+    columns
+    fields {
+      name
+      label
+      sqlType
+      unit
+      displayFormat
+    }
+    data
+    metadata {
+      extents
+    }
+  }
+}
+```
+
+#### Value types
+
+Every JSON path — `OBJECTS`, `ARRAYS`, `getFactTable`, aggregates, `compare*` —
+serializes the values with one converter, driven by the DuckDB column type:
+
+| DuckDB type                      | JSON value                                                                         |
+| -------------------------------- | ---------------------------------------------------------------------------------- |
+| `TINYINT` … `UBIGINT`, `HUGEINT` | number when `Number.isSafeInteger` holds, **exact decimal string beyond** (> 2^53) |
+| `DECIMAL`, `FLOAT`, `DOUBLE`     | number (`NaN`, `±Infinity` → `null`)                                               |
+| `DATE`                           | `"YYYY-MM-DD"`                                                                     |
+| `TIMESTAMP`                      | `"YYYY-MM-DDTHH:mm:ss[.sss]"` (ISO 8601, `T` separator)                            |
+| `TIMESTAMP WITH TIME ZONE`       | same, in UTC, with a `Z` suffix                                                    |
+| `BOOLEAN`                        | boolean                                                                            |
+| `NULL`                           | `null`                                                                             |
+
+A client therefore tests `typeof value === "string"` on an integer column to detect a
+value beyond 2^53 and hands it to `BigInt(value)`; any other integer is a number.
+
 ---
 
 ### `getAggregatedFacts`
@@ -266,6 +320,9 @@ getAggregatedFacts(
 ### `getAggregatedFactsWithMetadata`
 
 Same as `getAggregatedFacts` but includes D3-ready statistics (mean, median, std-dev, quartiles, key/value extents).
+`metadata.groupByFieldInfo` and `metadata.measureFieldInfo` are the `Metadata` of the
+group-by column and of the aggregated measure (unit and display format of the
+aggregated value).
 
 ---
 

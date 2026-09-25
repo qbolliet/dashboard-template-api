@@ -1,6 +1,8 @@
 // Importation des modules
-import { DuckDBInstance, DuckDBConnection, Json } from '@duckdb/node-api';
+import { DuckDBInstance, DuckDBConnection, DuckDBResult, Json } from '@duckdb/node-api';
 import { config } from '../utils/config-loader.js';
+import { computeExtents, jsonValueConverter } from './json-conversion.js';
+import type { ColumnExtent } from './json-conversion.js';
 import { createContextLogger } from '../utils/logger.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -44,7 +46,8 @@ export interface WithMetadataResult {
   data: Record<string, Json>[];
   metadata: {
     count: number;
-    extents: Record<string, [number, number]>;
+    /** Bounds of the page: numbers for numeric columns, ISO strings for date/timestamp ones. */
+    extents: Record<string, ColumnExtent>;
   };
 }
 
@@ -108,6 +111,26 @@ export const bindParam = (
     // Conversion en string pour les types complexes
     prepared.bindVarchar(paramIndex, String(param));
   }
+};
+
+/**
+ * Runs a statement, binding the parameters when there are any.
+ *
+ * @param connection - DuckDB connection to run on.
+ * @param query - SQL statement to execute.
+ * @param params - Positional parameters of a prepared statement.
+ * @returns The DuckDB result, not yet read.
+ */
+// Exécution d'une requête, préparée si elle porte des paramètres
+const runQuery = async (
+  connection: DuckDBConnection,
+  query: string,
+  params: unknown[],
+): Promise<DuckDBResult> => {
+  if (params.length === 0) return connection.run(query);
+  const prepared = await connection.prepare(query);
+  params.forEach((param, i) => bindParam(prepared, param, i + 1));
+  return prepared.run();
 };
 
 /** Sanitize an alias into a safe SQL secret-name suffix ([a-zA-Z0-9_]). */
@@ -591,7 +614,7 @@ class DuckDBPool {
 
               /**
                * Execute a query and return results as objects.
-               * Uses native DuckDB JSON methods for BigInt handling.
+               * Values are serialized by the single DuckDB → JSON converter.
                *
                * @param query - SQL query to execute.
                * @param params - Parameters for prepared statement.
@@ -601,14 +624,8 @@ class DuckDBPool {
                 query: string,
                 params: unknown[] = [],
               ): Promise<Record<string, Json>[]> => {
-                if (params.length > 0) {
-                  const prepared = await duckdbConnection.prepare(query);
-                  params.forEach((param, i) => bindParam(prepared, param, i + 1));
-                  const result = await prepared.run();
-                  return result.getRowObjectsJson();
-                }
-                const result = await duckdbConnection.run(query);
-                return result.getRowObjectsJson();
+                const result = await runQuery(duckdbConnection, query, params);
+                return result.convertRowObjects(jsonValueConverter);
               },
 
               /**
@@ -620,14 +637,8 @@ class DuckDBPool {
                * @returns Query results as JSON array of arrays.
                */
               getAsJsonArray: async (query: string, params: unknown[] = []): Promise<Json[][]> => {
-                if (params.length > 0) {
-                  const prepared = await duckdbConnection.prepare(query);
-                  params.forEach((param, i) => bindParam(prepared, param, i + 1));
-                  const result = await prepared.run();
-                  return result.getRowsJson();
-                }
-                const result = await duckdbConnection.run(query);
-                return result.getRowsJson();
+                const result = await runQuery(duckdbConnection, query, params);
+                return result.convertRows(jsonValueConverter);
               },
 
               /**
@@ -635,39 +646,24 @@ class DuckDBPool {
                *
                * @param query - SQL query to execute.
                * @param params - Parameters for prepared statement.
-               * @returns Data with columns, rows, count, and numeric extents.
+               * @returns Data with columns, rows, count, and numeric/temporal extents.
                */
               getWithMetadata: async (
                 query: string,
                 params: unknown[] = [],
               ): Promise<WithMetadataResult> => {
-                let result;
-                if (params.length > 0) {
-                  const prepared = await duckdbConnection.prepare(query);
-                  params.forEach((param, i) => bindParam(prepared, param, i + 1));
-                  result = await prepared.run();
-                } else {
-                  result = await duckdbConnection.run(query);
-                }
-
+                const result = await runQuery(duckdbConnection, query, params);
                 const columnNames = result.columnNames();
-                const rows = await result.getRowObjectsJson();
-
-                // Calcul de l'extent (min/max) pour les colonnes numériques
-                const extents = columnNames.reduce<Record<string, [number, number]>>((acc, col) => {
-                  const values = rows
-                    .map((r) => r[col])
-                    .filter((v): v is number => typeof v === 'number' && v !== null);
-                  if (values.length > 0) {
-                    acc[col] = [Math.min(...values), Math.max(...values)];
-                  }
-                  return acc;
-                }, {});
+                const columnTypes = result.columnTypes();
+                const rows = await result.convertRowObjects(jsonValueConverter);
 
                 return {
                   columns: columnNames,
                   data: rows,
-                  metadata: { count: rows.length, extents },
+                  metadata: {
+                    count: rows.length,
+                    extents: computeExtents(columnNames, columnTypes, rows),
+                  },
                 };
               },
 

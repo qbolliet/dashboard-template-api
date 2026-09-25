@@ -25,6 +25,7 @@ const resolvers = {
   },
   // Field resolvers : partition clés/mesures de Fact + cascade lazy sur CatalogSchemaInfo
   ...fieldResolvers,
+  DatasetWithMetadata: factResolvers.DatasetWithMetadata,
   CatalogSchemaInfo: catalogResolvers.CatalogSchemaInfo,
 };
 

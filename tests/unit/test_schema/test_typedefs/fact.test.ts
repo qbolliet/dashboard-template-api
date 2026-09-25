@@ -134,8 +134,34 @@ describe('Object types — fact', () => {
     ).getFields();
 
     // Présence des champs structurels du dataset
-    for (const f of ['columns', 'data', 'metadata']) {
+    for (const f of ['columns', 'fields', 'data', 'metadata']) {
       expect(fields).toHaveProperty(f);
+    }
+  });
+
+  /**
+   * Verification that DatasetWithMetadata.fields is a non-null list of non-null
+   * Metadata, and that extents documents the page scope.
+   */
+  test('DatasetWithMetadata.fields is [Metadata!]! and extents documents the page scope', () => {
+    const dataset = assertObjectType(schema.getType('DatasetWithMetadata'));
+
+    expect(String(dataset.getFields().fields.type)).toBe('[Metadata!]!');
+
+    // Description SDL : bornes de la PAGE, renvoi vers Metadata.stats pour les globales
+    const extents = assertObjectType(schema.getType('DatasetMetadata')).getFields().extents;
+    expect(extents.description).toMatch(/THIS PAGE/);
+    expect(extents.description).toMatch(/Metadata\.stats/);
+  });
+
+  /**
+   * Verification that the JSON scalar documents the serialization rules.
+   */
+  test('JSON scalar documents the value serialization rules', () => {
+    const description = schema.getType('JSON')?.description ?? '';
+
+    for (const rule of ['Number.isSafeInteger', 'decimal string', 'YYYY-MM-DD', 'T separator']) {
+      expect(description).toContain(rule);
     }
   });
 
@@ -157,7 +183,7 @@ describe('Object types — fact', () => {
   /**
    * Verification that AggregatedFactsMetadata has all analysis fields.
    */
-  test('AggregatedFactsMetadata has count, keyExtent, valueExtent, statistics, groupByFieldInfo, generatedAt', () => {
+  test('AggregatedFactsMetadata has count, keyExtent, valueExtent, statistics, groupByFieldInfo, measureFieldInfo, generatedAt', () => {
     // Extraction des champs du type métadonnées d'agrégation
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('AggregatedFactsMetadata'),
@@ -170,6 +196,7 @@ describe('Object types — fact', () => {
       'valueExtent',
       'statistics',
       'groupByFieldInfo',
+      'measureFieldInfo',
       'generatedAt',
     ]) {
       expect(fields).toHaveProperty(f);

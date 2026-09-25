@@ -234,6 +234,13 @@ query {
     catalog: "macroeconomics"
   ) {
     columns
+    fields {
+      name
+      label
+      sqlType
+      unit
+      displayFormat
+    }
     data
     metadata {
       count

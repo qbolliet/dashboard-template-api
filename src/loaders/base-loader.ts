@@ -13,7 +13,7 @@ import { validateIdentifier } from '../utils/utils.js';
 /** Metadata of a D3 query result (columns, extents, pagination). */
 interface D3Metadata {
   count: number;
-  extents: Record<string, [number, number]>;
+  extents: Record<string, [number, number] | [string, string]>;
   total?: number;
   hasNextPage?: boolean;
   currentPage?: number;

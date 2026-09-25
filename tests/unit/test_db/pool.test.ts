@@ -5,6 +5,8 @@
  * Mocks @duckdb/node-api, config-loader, and logger to isolate pool logic.
  * Covers constructor, initializeInstance, acquire, release, close,
  * and all connection query methods (all, getAsJsonArray, getWithMetadata, exec).
+ * The DuckDB → JSON converter (src/db/json-conversion.ts) is mocked here: its
+ * behaviour is covered on real DuckDB values by json-serialization.test.ts.
  */
 
 import { jest } from '@jest/globals';
@@ -14,8 +16,10 @@ import { jest } from '@jest/globals';
 /** Résultat de requête mocké — simulation de DuckDBQueryResult. */
 interface MockQueryResult {
   getRowObjectsJson: jest.Mock;
-  getRowsJson: jest.Mock;
+  convertRowObjects: jest.Mock;
+  convertRows: jest.Mock;
   columnNames: jest.Mock;
+  columnTypes: jest.Mock;
 }
 
 /** Connexion DuckDB mockée — simulation de DuckDBConnection. */
@@ -94,7 +98,7 @@ interface QueryWithMetadata {
   data: unknown[];
   metadata: {
     count: number;
-    extents: Record<string, [number, number]>;
+    extents: Record<string, [number, number] | [string, string]>;
   };
 }
 
@@ -115,9 +119,15 @@ interface DuckDBNodeApiModule {
 // Résultat de requête mocké — utilisé par toutes les méthodes de connexion
 const mockQueryResult: MockQueryResult = {
   getRowObjectsJson: jest.fn().mockResolvedValue([{ id: 1, value: 'test' }]),
-  getRowsJson: jest.fn().mockResolvedValue([[1, 'test']]),
+  convertRowObjects: jest.fn().mockResolvedValue([{ id: 1, value: 'test' }]),
+  convertRows: jest.fn().mockResolvedValue([[1, 'test']]),
   columnNames: jest.fn().mockReturnValue(['id', 'value']),
+  columnTypes: jest.fn().mockReturnValue([{ typeId: 4 }, { typeId: 17 }]),
 };
+
+// Convertisseur et calcul d'extents mockés : sentinelle identifiable, extents fixes
+const mockJsonValueConverter = jest.fn();
+const mockComputeExtents = jest.fn().mockReturnValue({ id: [1, 1] });
 
 // Connexion DuckDB mockée — simulation de l'objet retourné par instance.connect()
 const mockDuckConn: MockDuckConnection = {
@@ -136,6 +146,11 @@ const mockInstance: MockDuckInstance = {
 
 jest.unstable_mockModule('@duckdb/node-api', () => ({
   DuckDBInstance: { create: jest.fn().mockResolvedValue(mockInstance) },
+}));
+
+jest.unstable_mockModule('../../../src/db/json-conversion.js', () => ({
+  jsonValueConverter: mockJsonValueConverter,
+  computeExtents: mockComputeExtents,
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -234,8 +249,11 @@ describe('DuckDBPool', () => {
     mockDuckConn.closeSync.mockReset();
     mockInstance.closeSync.mockReset();
     mockQueryResult.getRowObjectsJson.mockResolvedValue([{ id: 1, value: 'test' }]);
-    mockQueryResult.getRowsJson.mockResolvedValue([[1, 'test']]);
+    mockQueryResult.convertRowObjects.mockResolvedValue([{ id: 1, value: 'test' }]);
+    mockQueryResult.convertRows.mockResolvedValue([[1, 'test']]);
     mockQueryResult.columnNames.mockReturnValue(['id', 'value']);
+    mockQueryResult.columnTypes.mockReturnValue([{ typeId: 4 }, { typeId: 17 }]);
+    mockComputeExtents.mockReturnValue({ id: [1, 1] });
     // Statement préparé par défaut — méthodes de binding et run
     mockDuckConn.prepare.mockImplementation(() =>
       Promise.resolve<MockPreparedStatement>({
@@ -629,6 +647,11 @@ describe('DuckDBPool', () => {
         expect(rows).toEqual([{ id: 1, value: 'test' }]);
       });
 
+      test('serializes the rows with the single JSON converter', async () => {
+        await conn.all('SELECT * FROM main.main.tbl');
+        expect(mockQueryResult.convertRowObjects).toHaveBeenCalledWith(mockJsonValueConverter);
+      });
+
       test('uses prepared statement for parameterized queries', async () => {
         const mockPrep: MockPreparedStatement = {
           bindVarchar: jest.fn(),
@@ -710,7 +733,7 @@ describe('DuckDBPool', () => {
       test('returns rows as arrays (not objects)', async () => {
         const rows = await conn.getAsJsonArray('SELECT id FROM main.main.tbl');
         expect(rows).toEqual([[1, 'test']]);
-        expect(mockQueryResult.getRowsJson).toHaveBeenCalled();
+        expect(mockQueryResult.convertRows).toHaveBeenCalledWith(mockJsonValueConverter);
       });
 
       test('uses prepared statement for parameterized queries', async () => {
@@ -735,33 +758,19 @@ describe('DuckDBPool', () => {
         expect(result.metadata.count).toBe(1);
       });
 
-      test('computes numeric extents for numeric columns', async () => {
-        mockQueryResult.getRowObjectsJson.mockResolvedValue([
-          { id: 1, score: 10 },
-          { id: 2, score: 50 },
-          { id: 3, score: 30 },
-        ]);
+      test('delegates the extents to computeExtents with the DuckDB column types', async () => {
+        const rows = [{ id: 1, score: 10 }];
+        const types = [{ typeId: 4 }, { typeId: 11 }];
+        mockQueryResult.convertRowObjects.mockResolvedValue(rows);
         mockQueryResult.columnNames.mockReturnValue(['id', 'score']);
+        mockQueryResult.columnTypes.mockReturnValue(types);
+        mockComputeExtents.mockReturnValue({ score: [10, 10] });
 
         const { metadata } = await conn.getWithMetadata('SELECT id, score FROM t');
-        expect(metadata.extents.score).toEqual([10, 50]);
-        expect(metadata.extents.id).toEqual([1, 3]);
-      });
 
-      test('skips null values when computing extents', async () => {
-        mockQueryResult.getRowObjectsJson.mockResolvedValue([{ v: 5 }, { v: null }, { v: 15 }]);
-        mockQueryResult.columnNames.mockReturnValue(['v']);
-
-        const { metadata } = await conn.getWithMetadata('SELECT v FROM t');
-        expect(metadata.extents.v).toEqual([5, 15]);
-      });
-
-      test('excludes non-numeric columns from extents', async () => {
-        mockQueryResult.getRowObjectsJson.mockResolvedValue([{ name: 'alice' }, { name: 'bob' }]);
-        mockQueryResult.columnNames.mockReturnValue(['name']);
-
-        const { metadata } = await conn.getWithMetadata('SELECT name FROM t');
-        expect(metadata.extents).not.toHaveProperty('name');
+        expect(mockComputeExtents).toHaveBeenCalledWith(['id', 'score'], types, rows);
+        expect(metadata.extents).toEqual({ score: [10, 10] });
+        expect(mockQueryResult.convertRowObjects).toHaveBeenCalledWith(mockJsonValueConverter);
       });
     });
 
