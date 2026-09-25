@@ -3,6 +3,7 @@ import { withTimeout } from '../../utils/timeout.js';
 import { GraphQLError } from 'graphql';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
+import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import type { GraphQLContext } from './types.js';
 import type { LoadersCollection } from '../../loaders/index.js';
 import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
@@ -161,13 +162,34 @@ async function resolveAggregation(
   return 'SUM';
 }
 
+/**
+ * Resolves the label column whose value fills `keyLabel`.
+ *
+ * Same default rule as the select options (resolveLabelField, no argument):
+ * the effective column is part of the loader parameters, hence of the cache
+ * key, and the loader reads the label in the aggregation query itself.
+ *
+ * @param groupBy - Group-by column.
+ * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @returns The label column of groupBy, or null when it has none.
+ */
+// Colonne de libellés de la clé de groupe, règle par défaut
+async function resolveKeyLabelField(
+  groupBy: string,
+  activeLoaders: LoadersCollection,
+): Promise<string | null> {
+  const meta = await activeLoaders.metadata.load(groupBy);
+  return meta ? resolveLabelField(groupBy, indexMetadataByName([meta])) : null;
+}
+
 // Resolver pour les données agrégées
 /**
  * Resolvers for aggregated fact queries.
  *
  * Supports flexible grouping, multiple aggregation functions, sorting,
  * pagination, and optional D3 metadata. The group-by column of the fact
- * table already holds its label, so the key needs no resolution.
+ * table already holds its label; a code column with a label column also
+ * returns that label as `keyLabel`, read by the same SQL query.
  */
 const aggregatedFactsResolvers = {
   Query: {
@@ -212,6 +234,8 @@ const aggregatedFactsResolvers = {
         const where = await compileFilterTree(structuredFilters, (names) =>
           activeLoaders.metadata.loadMany(names),
         );
+        // Colonne de libellés de la clé, lue par ANY_VALUE dans la même requête
+        const labelField = await resolveKeyLabelField(groupBy, activeLoaders);
 
         const results = (await withTimeout(
           activeLoaders.aggregatedFacts.load({
@@ -220,6 +244,7 @@ const aggregatedFactsResolvers = {
             groupBy,
             measure,
             aggregation: effectiveAggregation,
+            labelField,
             limit,
             offset,
             sort,
@@ -228,7 +253,7 @@ const aggregatedFactsResolvers = {
           'Aggregated facts fetch timeout',
         )) as unknown as AggregatedFactRow[];
 
-        // La clé porte déjà son libellé : aucune résolution supplémentaire
+        // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
         return results;
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client
@@ -282,6 +307,8 @@ const aggregatedFactsResolvers = {
         const where = await compileFilterTree(structuredFilters, (names) =>
           activeLoaders.metadata.loadMany(names),
         );
+        // Colonne de libellés de la clé, lue par ANY_VALUE dans la même requête
+        const labelField = await resolveKeyLabelField(groupBy, activeLoaders);
 
         const result = (await withTimeout(
           activeLoaders.aggregatedFactsWithMetadata.load({
@@ -290,6 +317,7 @@ const aggregatedFactsResolvers = {
             groupBy,
             measure,
             aggregation: effectiveAggregation,
+            labelField,
             limit,
             offset,
             sort,
@@ -298,7 +326,7 @@ const aggregatedFactsResolvers = {
           'Aggregated facts with metadata fetch timeout',
         )) as unknown as AggregatedWithMetadataResult;
 
-        // La clé porte déjà son libellé : aucune résolution supplémentaire
+        // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
         return result;
       } catch (error) {
         // Les erreurs de validation (BAD_USER_INPUT) remontent telles quelles au client

@@ -17,6 +17,8 @@ const crossDatabaseTypeDefs: DocumentNode = gql`
   type ComparedFact {
     "Valeur de la clé commune (libellé porté par la colonne de jointure)"
     key: String!
+    "Libellé de la clé quand la comparaison porte sur un seul champ doté de colonnes de libellés (règle par défaut, COALESCE des deux côtés, même requête) ; null sinon"
+    keyLabel: String
     "Valeur dans le catalogue A"
     valueA: Float
     "Valeur dans le catalogue B"

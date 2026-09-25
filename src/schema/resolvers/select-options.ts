@@ -2,6 +2,7 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
+import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import type { GraphQLContext } from './types.js';
 import type { SelectOptionNode } from '../../loaders/select-options.js';
 
@@ -12,6 +13,8 @@ export interface SelectOptionsArgs {
   fieldName: string;
   limit?: number;
   searchTerm?: string;
+  /** Label column of fieldName to render; absent, the default rule applies. */
+  labelField?: string | null;
   catalog?: string | null;
   schema?: string | null;
 }
@@ -39,6 +42,11 @@ const selectOptionsResolvers = {
      * Fetches available options for a single field.
      * Arguments follow {@link SelectOptionsArgs}.
      *
+     * The effective label column is resolved here, by resolveLabelField on the
+     * metadata of the field (read with its label columns): it is then part of
+     * the loader key, hence of the cache key — two requests rendering the same
+     * codes with different labels never share a cache entry.
+     *
      * @param _ - Parent resolver result (unused at root).
      * @returns Array of select option objects.
      */
@@ -48,17 +56,32 @@ const selectOptionsResolvers = {
         fieldName,
         limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
         searchTerm = '',
+        labelField = null,
         catalog,
         schema,
       }: SelectOptionsArgs,
       { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
-      // Sélection du loader adapté au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+      // Sélection des loaders adaptés au catalogue/schéma cible
+      const activeLoaders = getLoadersForCatalog(catalog, schema) ?? loaders;
+
+      // Colonne de libellés effective ; champ inconnu : le loader lève l'erreur
+      const fieldMeta = await withTimeout(
+        activeLoaders.metadata.load(fieldName),
+        config.API.TIMEOUTS.METADATA,
+        'Metadata fetch timeout',
+      );
+      const effectiveLabelField = fieldMeta
+        ? resolveLabelField(fieldName, indexMetadataByName([fieldMeta]), labelField)
+        : null;
 
       return withTimeout(
-        loader.load({ fieldName, limit, searchTerm }),
+        activeLoaders.selectOptions.load({
+          fieldName,
+          limit,
+          searchTerm,
+          labelField: effectiveLabelField,
+        }),
         config.API.TIMEOUTS.SELECT_OPTIONS,
         'Select options fetch timeout',
       );

@@ -3,7 +3,13 @@ import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { validateIdentifier } from '../utils/utils.js';
-import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
+import {
+  METADATA_SELECT,
+  indexMetadataByName,
+  resolveLabelField,
+  toFieldMetadata,
+  withLabelFields,
+} from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
 
 // ─── Interfaces des options de sélection ─────────────────────────────────────
@@ -13,6 +19,11 @@ interface SelectOptionsParams {
   fieldName: string;
   limit: number;
   searchTerm?: string | null;
+  /**
+   * Effective label column of fieldName, already resolved by resolveLabelField;
+   * null renders `label = value`. Part of the key, hence of the cache key.
+   */
+  labelField?: string | null;
 }
 
 /** Select option with value and label. */
@@ -33,6 +44,13 @@ interface SelectOptionsTreeParams {
   maxNodes: number;
 }
 
+/** One level of a tree chain: the code column and its effective label column. */
+interface ChainLevel {
+  column: string;
+  /** Label column read with the code; null renders `label = value`. */
+  labelColumn: string | null;
+}
+
 /** Node of a select options tree; `children` is absent on leaves. */
 interface SelectOptionNode {
   value: string;
@@ -43,6 +61,7 @@ interface SelectOptionNode {
 /** Internal build node — children keyed by value, in insertion order. */
 interface BuildNode {
   value: string;
+  label: string;
   children: Map<string, BuildNode>;
 }
 
@@ -86,10 +105,10 @@ function treeTooLargeError(fieldName: string, maxNodes: number): GraphQLError {
  * Converts a build node into its rendered form, recursively.
  *
  * @param node - Build node to convert.
- * @returns Rendered node, `label = value`, without `children` on a leaf.
+ * @returns Rendered node, without `children` on a leaf.
  */
 function toOptionNode(node: BuildNode): SelectOptionNode {
-  const rendered: SelectOptionNode = { value: node.value, label: node.value };
+  const rendered: SelectOptionNode = { value: node.value, label: node.label };
   if (node.children.size > 0) {
     rendered.children = [...node.children.values()].map(toOptionNode);
   }
@@ -103,9 +122,11 @@ function toOptionNode(node: BuildNode): SelectOptionNode {
  * Rows must come ordered by the chain columns: siblings keep that order.
  * A branch stops at its first NULL level (specification-bdd.md §2.5), so an
  * irregular branch ends on a shallower leaf and no empty node is produced.
+ * A level with a label column reads its label from the `_label_<i>` alias of
+ * the row, falling back to the code when the label is NULL.
  *
  * @param rows - Distinct rows of the chain columns, ordered.
- * @param chain - Column names, from the root level to the leaf level.
+ * @param chain - Levels, from the root level to the leaf level.
  * @param maxNodes - Hard bound on the total number of nodes.
  * @param fieldName - Leaf column, quoted in the overflow error.
  * @returns The forest of root nodes.
@@ -113,7 +134,7 @@ function toOptionNode(node: BuildNode): SelectOptionNode {
  */
 function buildOptionTree(
   rows: Record<string, unknown>[],
-  chain: string[],
+  chain: ChainLevel[],
   maxNodes: number,
   fieldName: string,
 ): SelectOptionNode[] {
@@ -125,7 +146,7 @@ function buildOptionTree(
   for (const row of rows) {
     let siblings = roots;
     // Parcours des branches
-    for (const column of chain) {
+    for (const [index, { column, labelColumn }] of chain.entries()) {
       const raw = row[column];
       // Premier niveau NULL : fin de la branche
       if (raw === null || raw === undefined) break;
@@ -135,7 +156,10 @@ function buildOptionTree(
       if (!node) {
         nodeCount += 1;
         if (nodeCount > maxNodes) throw treeTooLargeError(fieldName, maxNodes);
-        node = { value, children: new Map() };
+        // Libellé du niveau, repli sur le code quand il est NULL
+        const rawLabel = labelColumn ? row[`_label_${index}`] : null;
+        const label = rawLabel === null || rawLabel === undefined ? value : String(rawLabel);
+        node = { value, label, children: new Map() };
         siblings.set(value, node);
       }
       siblings = node.children;
@@ -149,9 +173,10 @@ function buildOptionTree(
 /**
  * Loader for select option queries (dropdown values).
  *
- * The fact table stores labels directly (no dim_* table exists), so every
- * field resolves the same way: a DISTINCT scan of the column, with
- * `label = value`.
+ * The fact table stores labels directly (no dim_* table exists): a DISTINCT
+ * scan of the column, with `label = value` — except for a code column with a
+ * label column (specification-bdd.md §2.6), read from the same fact table
+ * row: `value` = code, `label` = label.
  */
 class SelectOptionsLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux options de sélection
@@ -187,17 +212,25 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * of a column hierarchy. The search term is bound as a parameter and its
    * LIKE wildcards are escaped.
    *
+   * With a label column, the code and its label are read by the same
+   * `SELECT DISTINCT`: the functional dependency code → label guaranteed by
+   * the writer makes `DISTINCT (code, label)` equal to `DISTINCT code`. The
+   * code is cast to VARCHAR, the search matches the code or the label, and a
+   * NULL label falls back to the code (`SelectOption.label` is non-null).
+   *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Object with fieldName, limit, and optional searchTerm.
-   * @returns Array of SelectOption where value and label are the column value.
+   * @param params - Object with fieldName, limit, optional searchTerm and the
+   *   effective labelField.
+   * @returns Array of SelectOption; `label = value` without a label column.
    * @throws {GraphQLError} BAD_USER_INPUT when the column does not exist in the
    *   schema's metadata table.
    */
   async loadSelectOptions(
     connection: DuckDBConnection,
-    { fieldName, limit, searchTerm }: SelectOptionsParams,
+    { fieldName, limit, searchTerm, labelField = null }: SelectOptionsParams,
   ): Promise<SelectOption[]> {
     validateIdentifier(fieldName, 'fieldName');
+    if (labelField) validateIdentifier(labelField, 'labelField');
 
     // La colonne doit être déclarée dans metadata : contrôle explicite pour
     // renvoyer une erreur utilisable plutôt que de laisser fuiter DuckDB.
@@ -209,6 +242,10 @@ class SelectOptionsLoader extends BaseQueryLoader {
       throw new GraphQLError(`Unknown field '${fieldName}'`, {
         extensions: { code: 'BAD_USER_INPUT' },
       });
+    }
+
+    if (labelField) {
+      return this.loadLabelledSelectOptions(connection, fieldName, labelField, limit, searchTerm);
     }
 
     // Construction de la requête : valeurs distinctes, NULL exclus, triées
@@ -228,10 +265,55 @@ class SelectOptionsLoader extends BaseQueryLoader {
 
     const results = await connection.all(query, params);
 
-    // La fact table porte le libellé : label = value, toujours (spec bdd §2.4)
+    // Colonne sans libellés : la fact table porte le libellé, label = value (spec bdd §2.4)
     return results.map((row) => ({
       value: String(row.value),
       label: String(row.value),
+    }));
+  }
+
+  // Méthode de chargement des couples (code, libellé) d'une colonne de code
+  /**
+   * Loads the distinct (code, label) pairs of a code column.
+   *
+   * @param connection - Active DuckDB connection from the pool.
+   * @param fieldName - Code column, already validated.
+   * @param labelField - Effective label column, already validated.
+   * @param limit - Maximum number of options.
+   * @param searchTerm - Case-insensitive filter on the code or the label.
+   * @returns Options ordered by code as VARCHAR, `label` falling back to the code.
+   */
+  private async loadLabelledSelectOptions(
+    connection: DuckDBConnection,
+    fieldName: string,
+    labelField: string,
+    limit: number,
+    searchTerm?: string | null,
+  ): Promise<SelectOption[]> {
+    // Couple (code, libellé) lu dans la même ligne de la fact table
+    let query =
+      `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value, ${labelField} AS label ` +
+      `FROM ${this.qualifyTable('fact_table')} WHERE ${fieldName} IS NOT NULL`;
+    const params: unknown[] = [];
+
+    // Recherche dans le code ou le libellé, même échappement des jokers
+    if (searchTerm) {
+      const pattern = `%${escapeLikeWildcards(searchTerm.toLowerCase())}%`;
+      query +=
+        ` AND (LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
+        ` OR LOWER(${labelField}) LIKE ? ESCAPE '\\')`;
+      params.push(pattern, pattern);
+    }
+
+    query += ' ORDER BY value LIMIT ?';
+    params.push(limit);
+
+    const results = await connection.all(query, params);
+
+    // Code sans libellé : label = value, SelectOption.label étant non nullable
+    return results.map((row) => ({
+      value: String(row.value),
+      label: row.label === null || row.label === undefined ? String(row.value) : String(row.label),
     }));
   }
 
@@ -241,25 +323,28 @@ class SelectOptionsLoader extends BaseQueryLoader {
    *
    * The writer guarantees a forest ; the walk still
    * stops on a column already visited or on an undeclared parent, so that a
-   * corrupted metadata table can never make it loop.
+   * corrupted metadata table can never make it loop. Each level carries its
+   * effective label column, picked by the default rule of resolveLabelField
+   * from the same metadata read (no per-level argument).
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param fieldName - Deepest level of the chain.
    * @param maxDepth - Number of levels kept going up; null keeps them all.
-   * @returns Column names from the root level down to fieldName.
+   * @returns Levels from the root down to fieldName, with their label columns.
    * @throws {GraphQLError} BAD_USER_INPUT when fieldName is not declared.
    */
   async resolveColumnChain(
     connection: DuckDBConnection,
     fieldName: string,
     maxDepth: number | null,
-  ): Promise<string[]> {
+  ): Promise<ChainLevel[]> {
     // Lecture de metadata par le point de mapping unique du contrat
     const rows = await connection.all(
       `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')}`,
     );
+    const metadataByName = indexMetadataByName(withLabelFields(rows.map(toFieldMetadata)));
     const parentOf = new Map(
-      rows.map(toFieldMetadata).map((field) => [field.name, field.parentName]),
+      [...metadataByName.values()].map((field) => [field.name, field.parentName]),
     );
 
     if (!parentOf.has(fieldName)) {
@@ -277,8 +362,14 @@ class SelectOptionsLoader extends BaseQueryLoader {
       parent = parentOf.get(parent) ?? null;
     }
 
-    // Validation de chaque identifiant avant interpolation
-    return chain.reverse().map((column) => validateIdentifier(column, 'parentName'));
+    // Validation de chaque identifiant avant interpolation, libellé par défaut du niveau
+    return chain.reverse().map((column) => {
+      const labelColumn = resolveLabelField(column, metadataByName);
+      return {
+        column: validateIdentifier(column, 'parentName'),
+        labelColumn: labelColumn ? validateIdentifier(labelColumn, 'labelField') : null,
+      };
+    });
   }
 
   // Méthode de chargement de l'arbre des options d'une hiérarchie de colonnes
@@ -287,8 +378,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
    *
    * One distinct query over the chain columns, then the tree is built in
    * memory. NULL root values are excluded and a NULL level ends its branch.
-   * With a searchTerm, only rows whose leaf matches are read, so only the
-   * branches leading to a retained leaf survive. The query is capped at
+   * Each level with a label column adds that column to the same DISTINCT —
+   * the functional dependency code → label keeps one row per code path, so
+   * a node is still one code. With a searchTerm, only rows whose leaf code or
+   * leaf label matches are read, so only the branches leading to a retained
+   * leaf survive. The query is capped at
    * maxNodes + 1 rows: each distinct row ends on a distinct node, so reaching
    * the cap already proves the tree too large.
    *
@@ -310,21 +404,37 @@ class SelectOptionsLoader extends BaseQueryLoader {
     }
 
     const chain = await this.resolveColumnChain(connection, fieldName, maxDepth);
-    const columns = chain.join(', ');
+    const codes = chain.map(({ column }) => column).join(', ');
+    // Chaque niveau apporte son code et, s'il en a une, sa colonne de libellés
+    const projection = chain
+      .flatMap(({ column, labelColumn }, index) =>
+        labelColumn ? [column, `${labelColumn} AS _label_${index}`] : [column],
+      )
+      .join(', ');
+    const leafLabel = chain[chain.length - 1].labelColumn;
 
     // Construction de la requête : racine non NULL, feuille éventuellement filtrée
     let query =
-      `SELECT DISTINCT ${columns} FROM ${this.qualifyTable('fact_table')} ` +
-      `WHERE ${chain[0]} IS NOT NULL`;
+      `SELECT DISTINCT ${projection} FROM ${this.qualifyTable('fact_table')} ` +
+      `WHERE ${chain[0].column} IS NOT NULL`;
     const params: unknown[] = [];
 
+    // Recherche sur le code de la feuille, ou sur son libellé quand il existe
     if (searchTerm) {
-      query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
-      params.push(`%${escapeLikeWildcards(searchTerm.toLowerCase())}%`);
+      const pattern = `%${escapeLikeWildcards(searchTerm.toLowerCase())}%`;
+      if (leafLabel) {
+        query +=
+          ` AND (LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
+          ` OR LOWER(${leafLabel}) LIKE ? ESCAPE '\\')`;
+        params.push(pattern, pattern);
+      } else {
+        query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
+        params.push(pattern);
+      }
     }
 
     // Plafond maxNodes + 1 : une ligne distincte = un nœud terminal distinct
-    query += ` ORDER BY ${columns} LIMIT ?`;
+    query += ` ORDER BY ${codes} LIMIT ?`;
     params.push(maxNodes + 1);
 
     const rows = await connection.all(query, params);
@@ -379,4 +489,10 @@ export {
   SelectOptionsLoader,
   DEFAULT_TREE_MAX_NODES,
 };
-export type { SelectOptionsParams, SelectOption, SelectOptionsTreeParams, SelectOptionNode };
+export type {
+  SelectOptionsParams,
+  SelectOption,
+  SelectOptionsTreeParams,
+  SelectOptionNode,
+  ChainLevel,
+};

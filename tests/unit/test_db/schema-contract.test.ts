@@ -4,7 +4,7 @@
  * Locks the test fixtures onto the database specification
  * (../dashboard-template-database/specification-bdd.md §2): every schema holds
  * EXACTLY the three tables fact_table, metadata and dataset_metadata — no dim_*
- * table — `metadata` carries the eleven specified columns with their nullability,
+ * table — `metadata` carries the twelve specified columns with their nullability,
  * `dataset_metadata` carries the six specified columns on a single row, and the
  * declared metadata rows agree with the real fact_table columns.
  *
@@ -22,8 +22,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Schémas de test, par catalogue. */
 const TEST_SCHEMAS: Array<[catalog: string, catalogFile: string, schemas: string[]]> = [
-  ['default', 'test-default.ducklake', ['main', 'predictions', 'geography']],
-  ['macroeconomics', 'test-macroeconomics.ducklake', ['main']],
+  ['default', 'test-default.ducklake', ['main', 'predictions', 'geography', 'trade']],
+  ['macroeconomics', 'test-macroeconomics.ducklake', ['main', 'trade']],
   ['public_finance', 'test-public-finance.ducklake', ['main']],
 ];
 
@@ -47,6 +47,7 @@ const METADATA_CONTRACT: Array<[string, string, boolean]> = [
   ['is_primary_key', 'BOOLEAN', false],
   ['is_categorical', 'BOOLEAN', false],
   ['parent_name', 'VARCHAR', true],
+  ['label_for', 'VARCHAR', true],
   ['unit', 'VARCHAR', true],
   ['display_format', 'VARCHAR', true],
   ['family', 'VARCHAR', true],
@@ -84,6 +85,7 @@ interface MetadataRow {
   is_primary_key: boolean;
   is_categorical: boolean;
   parent_name: string | null;
+  label_for: string | null;
   default_aggregation: string | null;
 }
 
@@ -149,7 +151,7 @@ beforeAll(async () => {
       metadataBySchema.set(
         key,
         (await query(
-          `SELECT name, sql_type, is_primary_key, is_categorical, parent_name, default_aggregation
+          `SELECT name, sql_type, is_primary_key, is_categorical, parent_name, label_for, default_aggregation
            FROM "${catalog}".${schema}.metadata`,
         )) as unknown as MetadataRow[],
       );
@@ -273,6 +275,69 @@ describe('table metadata', () => {
       }
     },
   );
+});
+
+// ─── Colonnes de libellés (spec §2.6) ─────────────────────────────────────────
+
+describe('colonnes de libellés (label_for)', () => {
+  test.each(ALL_SCHEMAS)('%s.%s respecte les invariants de label_for', (catalog, schema) => {
+    const rows = metadataBySchema.get(`${catalog}.${schema}`) ?? [];
+    const byName = new Map(rows.map((row) => [row.name, row]));
+    const parents = new Set(rows.map((row) => row.parent_name).filter((name) => name !== null));
+
+    for (const row of rows) {
+      if (row.label_for === null) continue;
+
+      // 1. La cible existe et diffère de la colonne de libellés
+      const target = byName.get(row.label_for);
+      expect(target).toBeDefined();
+      expect(row.label_for).not.toBe(row.name);
+      // 2. Pas de chaîne : la cible n'est pas elle-même une colonne de libellés
+      expect(target!.label_for).toBeNull();
+      // 3. VARCHAR, hors clé primaire, hors hiérarchie
+      expect(row.sql_type).toBe('VARCHAR');
+      expect(row.is_primary_key).toBe(false);
+      expect(row.parent_name).toBeNull();
+      expect(parents.has(row.name)).toBe(false);
+    }
+  });
+
+  test.each(ALL_SCHEMAS)(
+    '%s.%s respecte la dépendance fonctionnelle code → libellé',
+    async (catalog, schema) => {
+      const rows = metadataBySchema.get(`${catalog}.${schema}`) ?? [];
+      const table = `"${catalog}".${schema}.fact_table`;
+
+      for (const { name: label, label_for: code } of rows) {
+        if (code === null) continue;
+
+        // Contrôle de la spec §2.6, mot pour mot
+        const conflicting = await query(
+          `SELECT ${code} FROM ${table} WHERE ${code} IS NOT NULL GROUP BY ${code}
+           HAVING COUNT(DISTINCT ${label}) > 1
+               OR (COUNT(${label}) > 0 AND COUNT(${label}) < COUNT(*))`,
+        );
+        expect(conflicting).toEqual([]);
+        const orphans = await query(
+          `SELECT COUNT(*) AS n FROM ${table} WHERE ${code} IS NULL AND ${label} IS NOT NULL`,
+        );
+        expect(Number(orphans[0].n)).toBe(0);
+      }
+    },
+  );
+
+  test('default.trade déclare les colonnes de libellés de nc6, nc8 et partner_code', () => {
+    const rows = metadataBySchema.get('default.trade') ?? [];
+    const labelFor = Object.fromEntries(rows.map((row) => [row.name, row.label_for]));
+
+    expect(labelFor).toMatchObject({
+      nc6_libelle: 'nc6',
+      nc8_libelle_en: 'nc8',
+      nc8_libelle_fr: 'nc8',
+      partner_libelle: 'partner_code',
+      nc8: null,
+    });
+  });
 });
 
 // ─── Table dataset_metadata ───────────────────────────────────────────────────

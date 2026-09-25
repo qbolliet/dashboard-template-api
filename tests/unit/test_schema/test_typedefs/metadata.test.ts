@@ -23,7 +23,7 @@ describe('Object types — metadata', () => {
   /**
    * Verification that Metadata exposes the eleven columns of the contract.
    */
-  test('Metadata expose les onze colonnes de la spec §2.2, en camelCase', () => {
+  test('Metadata expose les douze colonnes de la spec §2.2 et labelFields, en camelCase', () => {
     const expected = [
       'name',
       'label',
@@ -31,6 +31,8 @@ describe('Object types — metadata', () => {
       'isCategorical',
       'isPrimaryKey',
       'parentName',
+      'labelFor',
+      'labelFields',
       'unit',
       'displayFormat',
       'family',
@@ -57,9 +59,10 @@ describe('Object types — metadata', () => {
     for (const required of ['name', 'label', 'sqlType', 'isCategorical', 'isPrimaryKey']) {
       expect(isNonNullType(fields[required].type)).toBe(true);
     }
-    // Les six champs d'UI appartiennent au producteur : ils restent nullables
+    // Les sept champs d'UI appartiennent au producteur : ils restent nullables
     for (const optional of [
       'parentName',
+      'labelFor',
       'unit',
       'displayFormat',
       'family',
@@ -68,6 +71,13 @@ describe('Object types — metadata', () => {
     ]) {
       expect(isNonNullType(fields[optional].type)).toBe(false);
     }
+  });
+
+  /**
+   * Verification that labelFields is a non-null list of non-null strings.
+   */
+  test('labelFields est une liste non nullable de chaînes non nullables', () => {
+    expect(String(fields.labelFields.type)).toBe('[String!]!');
   });
 
   /**

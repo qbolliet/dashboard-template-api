@@ -20,6 +20,12 @@ interface CompareFactsParams {
   /** Schema within catalogB. Null/undefined uses the catalog's default schema. */
   schemaB?: string | null;
   joinFields: string[];
+  /**
+   * Effective label columns of the single join field on each side, resolved by
+   * resolveLabelField (null: none, or several join fields). Part of the key.
+   */
+  labelFieldA?: string | null;
+  labelFieldB?: string | null;
   limit: number;
   offset: number;
   sort?: SortItem[];
@@ -33,6 +39,9 @@ interface CompareAggregatedFactsParams {
   schemaB?: string | null;
   groupBy: string;
   aggregation?: AggregationType;
+  /** Effective label columns of groupBy on each side (null: none). Part of the key. */
+  labelFieldA?: string | null;
+  labelFieldB?: string | null;
   limit: number;
   offset: number;
 }
@@ -51,6 +60,8 @@ interface CrossDatabaseSelectOptionsParams {
 /** Comparison row between two catalogs (delta and delta%). */
 interface ComparisonRow {
   key: string;
+  /** Label of the key, COALESCE of both sides; null without label column. */
+  keyLabel: string | null;
   valueA: number | null;
   valueB: number | null;
   delta: number | null;
@@ -64,6 +75,44 @@ interface ComparisonResult {
   hasNextPage: boolean;
   currentPage: number;
   totalPages: number;
+}
+
+// Alias interne du libellé de la clé dans les CTE de chaque côté
+const KEY_LABEL_ALIAS = '_key_label';
+
+/**
+ * Builds the keyLabel expression from the label columns available on each side.
+ *
+ * @param labelFieldA - Label column on side A, or null.
+ * @param labelFieldB - Label column on side B, or null.
+ * @returns `COALESCE(a._key_label, b._key_label)` over the sides that have one,
+ *   or `NULL` when neither side has a label column.
+ */
+// Expression du libellé de la clé : COALESCE des côtés dotés de libellés
+function keyLabelExpression(labelFieldA: string | null, labelFieldB: string | null): string {
+  const sides = [
+    labelFieldA ? `a.${KEY_LABEL_ALIAS}` : null,
+    labelFieldB ? `b.${KEY_LABEL_ALIAS}` : null,
+  ].filter((side): side is string => side !== null);
+  return sides.length > 0 ? `COALESCE(${sides.join(', ')})` : 'NULL';
+}
+
+/**
+ * Converts a raw comparison row into its typed form.
+ *
+ * @param row - Raw row with key, keyLabel, valueA, valueB, delta, deltaPercent.
+ * @returns The typed comparison row.
+ */
+// Mise en forme d'une ligne de comparaison
+function toComparisonRow(row: Record<string, unknown>): ComparisonRow {
+  return {
+    key: String(row.key),
+    keyLabel: row.keyLabel != null ? String(row.keyLabel) : null,
+    valueA: row.valueA != null ? Number(row.valueA) : null,
+    valueB: row.valueB != null ? Number(row.valueB) : null,
+    delta: row.delta != null ? Number(row.delta) : null,
+    deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null,
+  };
 }
 
 /** Select option from a cross-catalog query. */
@@ -126,6 +175,17 @@ class CrossDatabaseLoader extends FactQueryLoader {
     return resolved;
   }
 
+  // Validation d'une colonne de libellés avant interpolation
+  /**
+   * Validates an optional label column name before SQL interpolation.
+   *
+   * @param labelField - Label column resolved by the resolver, or null/undefined.
+   * @returns The validated name, or null.
+   */
+  private validateLabelField(labelField?: string | null): string | null {
+    return labelField ? validateIdentifier(labelField, 'labelField') : null;
+  }
+
   // Construction du SELECT d'un côté : mesure + colonnes de jointure alignées
   /**
    * Builds the per-side SELECT that exposes the measure plus one key column per
@@ -134,10 +194,18 @@ class CrossDatabaseLoader extends FactQueryLoader {
    * @param catalog - Catalog alias for this side.
    * @param schema - Resolved schema for this side.
    * @param joinFields - Fields participating in the join.
+   * @param labelField - Label column of the single join field on this side, or null.
    * @returns A SQL SELECT statement (no trailing semicolon).
    */
-  private buildSideSelect(catalog: string, schema: string, joinFields: string[]): string {
+  private buildSideSelect(
+    catalog: string,
+    schema: string,
+    joinFields: string[],
+    labelField: string | null,
+  ): string {
     const keyCols = joinFields.map((f) => `CAST(f.${f} AS VARCHAR) AS k_${f}`);
+    // Libellé de la clé lu dans la même ligne que le code
+    if (labelField) keyCols.push(`f.${labelField} AS ${KEY_LABEL_ALIAS}`);
     return `SELECT f.value AS value, ${keyCols.join(', ')} FROM "${catalog}".${schema}.fact_table f`;
   }
 
@@ -147,7 +215,9 @@ class CrossDatabaseLoader extends FactQueryLoader {
    *
    * Join fields are matched directly on their stored values — the fact table
    * carries the labels — cast to VARCHAR to align differing SQL types. Returns
-   * delta (B - A) and deltaPercent per row, with pagination metadata.
+   * delta (B - A) and deltaPercent per row, with pagination metadata. With a
+   * single join field that has a label column, `keyLabel` is read in the same
+   * query, COALESCE of both sides.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Parameters defining the two datasets, join fields, and pagination.
@@ -165,8 +235,13 @@ class CrossDatabaseLoader extends FactQueryLoader {
     // Validation des identifiants de jointure pour éviter les injections SQL
     joinFields.forEach((f) => validateIdentifier(f, 'joinField'));
 
-    const selectA = this.buildSideSelect(catalogA, schemaA, joinFields);
-    const selectB = this.buildSideSelect(catalogB, schemaB, joinFields);
+    // Libellés seulement pour un champ de jointure unique
+    const single = joinFields.length === 1;
+    const labelFieldA = single ? this.validateLabelField(params.labelFieldA) : null;
+    const labelFieldB = single ? this.validateLabelField(params.labelFieldB) : null;
+
+    const selectA = this.buildSideSelect(catalogA, schemaA, joinFields, labelFieldA);
+    const selectB = this.buildSideSelect(catalogB, schemaB, joinFields, labelFieldB);
 
     // Condition de jointure a↔b sur les libellés portés par les colonnes
     const joinCondition = joinFields.map((f) => `a.k_${f} = b.k_${f}`).join(' AND ');
@@ -180,7 +255,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
     // Tri déterministe : sans tri explicite, la clé de jointure ordonne le
     // résultat. Les colonnes de cluster_by ne survivent pas aux CTE (seules
     // key/valueA/valueB/delta/deltaPercent sont projetées), et `key` est
-    // construite depuis les joinFields — les coordonnées (revue §5.7).
+    // construite depuis les joinFields.
     const sortClause = sort.length > 0 ? this.buildSortClause(sort) : 'ORDER BY key ASC';
 
     const query = `
@@ -188,6 +263,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
                  b AS (${selectB})
             SELECT
                 ${keyExpr} AS key,
+                ${keyLabelExpression(labelFieldA, labelFieldB)} AS keyLabel,
                 a.value AS valueA,
                 b.value AS valueB,
                 b.value - a.value AS delta,
@@ -214,13 +290,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const total = Number(countResult[0]?.total ?? 0);
 
     return {
-      data: results.map((row) => ({
-        key: String(row.key),
-        valueA: row.valueA != null ? Number(row.valueA) : null,
-        valueB: row.valueB != null ? Number(row.valueB) : null,
-        delta: row.delta != null ? Number(row.delta) : null,
-        deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null,
-      })),
+      data: results.map(toComparisonRow),
       total,
       hasNextPage: offset + limit < total,
       currentPage: Math.floor(offset / limit) + 1,
@@ -235,6 +305,8 @@ class CrossDatabaseLoader extends FactQueryLoader {
    * Each side is aggregated by its own groupBy column — which carries the label
    * — then the two results are joined on that key, cast to VARCHAR so differing
    * SQL types align. Uses CTEs to pre-aggregate, avoiding Cartesian products.
+   * The label of the key is read by `ANY_VALUE` in each side's aggregation —
+   * the same path as getAggregatedFacts — then merged by COALESCE.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Parameters defining datasets, groupBy, aggregation, and pagination.
@@ -250,19 +322,24 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const schemaB = this.resolveSchema(catalogB, params.schemaB);
 
     validateIdentifier(groupBy, 'groupBy');
+    const labelFieldA = this.validateLabelField(params.labelFieldA);
+    const labelFieldB = this.validateLabelField(params.labelFieldB);
     const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation as AggregationType] || 'SUM';
 
-    // CTE d'agrégation per-side : regroupement direct sur la colonne
-    const aggSide = (catalog: string, schema: string): string =>
-      `SELECT CAST(${groupBy} AS VARCHAR) AS key, ${aggFn}(value) AS value
+    // CTE d'agrégation per-side : regroupement direct sur la colonne, libellé par ANY_VALUE
+    const aggSide = (catalog: string, schema: string, labelField: string | null): string =>
+      `SELECT CAST(${groupBy} AS VARCHAR) AS key,
+              ${labelField ? `ANY_VALUE(${labelField}) AS ${KEY_LABEL_ALIAS},` : ''}
+              ${aggFn}(value) AS value
        FROM "${catalog}".${schema}.fact_table
        GROUP BY ${groupBy}`;
 
     const query = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
-                 agg_b AS (${aggSide(catalogB, schemaB)})
+            WITH agg_a AS (${aggSide(catalogA, schemaA, labelFieldA)}),
+                 agg_b AS (${aggSide(catalogB, schemaB, labelFieldB)})
             SELECT
                 a.key,
+                ${keyLabelExpression(labelFieldA, labelFieldB)} AS keyLabel,
                 a.value AS valueA,
                 b.value AS valueB,
                 b.value - a.value AS delta,
@@ -277,8 +354,8 @@ class CrossDatabaseLoader extends FactQueryLoader {
 
     // Comptage total des clés communes pour la pagination
     const countQuery = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA)}),
-                 agg_b AS (${aggSide(catalogB, schemaB)})
+            WITH agg_a AS (${aggSide(catalogA, schemaA, null)}),
+                 agg_b AS (${aggSide(catalogB, schemaB, null)})
             SELECT COUNT(*) AS total FROM agg_a a JOIN agg_b b ON a.key = b.key
         `;
 
@@ -289,13 +366,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const total = Number(countResult[0]?.total ?? 0);
 
     return {
-      data: results.map((row) => ({
-        key: String(row.key),
-        valueA: row.valueA != null ? Number(row.valueA) : null,
-        valueB: row.valueB != null ? Number(row.valueB) : null,
-        delta: row.delta != null ? Number(row.delta) : null,
-        deltaPercent: row.deltaPercent != null ? Number(row.deltaPercent) : null,
-      })),
+      data: results.map(toComparisonRow),
       total,
       hasNextPage: offset + limit < total,
       currentPage: Math.floor(offset / limit) + 1,

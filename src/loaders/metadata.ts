@@ -1,7 +1,11 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
+import {
+  METADATA_FIELD_WITH_LABELS_WHERE,
+  METADATA_SELECT,
+  toFieldMetadataWithLabels,
+} from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
@@ -11,7 +15,9 @@ import type { FieldMetadata } from '../utils/metadata-mapping.js';
  *
  * Extends BaseQueryLoader to load the metadata row of a single field from the
  * metadata table of the current catalog. Rows are returned in camelCase: the
- * snake_case → camelCase mapping lives in utils/metadata-mapping.ts.
+ * snake_case → camelCase mapping lives in utils/metadata-mapping.ts. The same
+ * read also returns the label columns pointing at the field, so `labelFields`
+ * is derived without a second query.
  */
 class MetadataLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux méta-données
@@ -39,21 +45,25 @@ class MetadataLoader extends BaseQueryLoader {
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param name - Field name to look up in the metadata table.
-   * @returns Metadata row in camelCase, or null when the field is unknown.
+   * @returns Metadata row in camelCase with its `labelFields`, or null when the
+   *   field is unknown.
    */
   async loadSingle(connection: DuckDBConnection, name: string): Promise<FieldMetadata | null> {
-    // Paramétrisation de la requête pour éviter les injections SQL
-    const query = `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
+    // Paramétrisation de la requête pour éviter les injections SQL ; la colonne
+    // est lue avec ses colonnes de libellés, base du calcul de labelFields
+    const query =
+      `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} ` +
+      `WHERE ${METADATA_FIELD_WITH_LABELS_WHERE}`;
 
     // Exécution de la requête
-    const result = await connection.all(query, [name]);
+    const result = await connection.all(query, [name, name]);
 
     // Absence de résultat → retour null
     if (!result || result.length === 0) {
       return null;
     }
 
-    return toFieldMetadata(result[0]);
+    return toFieldMetadataWithLabels(result, name);
   }
 }
 

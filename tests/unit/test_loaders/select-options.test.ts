@@ -5,7 +5,8 @@
  * a DISTINCT scan of the column with `label = value`. Verifies that path,
  * NULL exclusion, ordering, searchTerm parameterization (with escaped LIKE
  * wildcards), string coercion, and the errors raised for an unknown or
- * malformed field name.
+ * malformed field name. A code column with a label column reads (code, label)
+ * in the same DISTINCT, searches both, and keys its cache on the label column.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -25,6 +26,7 @@ interface SelectOptionsParams {
   fieldName: string;
   limit: number;
   searchTerm: string | null;
+  labelField?: string | null;
 }
 
 /** Option retournée par le loader. */
@@ -103,10 +105,13 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 // Déclaration avant beforeAll — remplie après résolution des mocks
 let createSelectOptionsLoader: SelectOptionsModule['createSelectOptionsLoader'];
 let createSelectOptionsTreeLoader: SelectOptionsModule['createSelectOptionsTreeLoader'];
+// Mock de withCache, inspecté par les tests de clé de cache
+let withCacheMock: jest.Mock;
 
 beforeAll(async () => {
   ({ createSelectOptionsLoader, createSelectOptionsTreeLoader } =
     (await import('../../../src/loaders/select-options.js')) as unknown as SelectOptionsModule);
+  withCacheMock = (await import('../../../src/utils/cache.js')).withCache as unknown as jest.Mock;
 });
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
@@ -434,5 +439,153 @@ describe('SelectOptionsTreeLoader', () => {
     expect(error).toBeInstanceOf(GraphQLError);
     expect((error as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
     expect((error as GraphQLError).message).toContain('exceeds 3 nodes');
+  });
+});
+
+// ─── Colonnes de libellés (spec §2.6) ─────────────────────────────────────────
+
+describe('SelectOptionsLoader — colonne de code dotée de libellés', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockConnection.all.mockReset();
+    mockDatabaseManager.getPool.mockReturnValue(mockPool);
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
+    mockPool.acquire.mockResolvedValue(mockConnection);
+  });
+
+  test('lit le couple (code, libellé) dans le même DISTINCT, trié par value', async () => {
+    mockDeclaredField([{ value: '01012100', label: 'Pure-bred breeding horses' }]);
+
+    const result = await createSelectOptionsLoader('main').load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: null,
+      labelField: 'nc8_libelle_en',
+    });
+
+    const [sql, params] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT CAST(nc8 AS VARCHAR) AS value, nc8_libelle_en AS label');
+    expect(sql).toContain('WHERE nc8 IS NOT NULL');
+    expect(sql).toContain('ORDER BY value LIMIT ?');
+    expect(params).toEqual([10]);
+    expect(result).toEqual([{ value: '01012100', label: 'Pure-bred breeding horses' }]);
+  });
+
+  test('searchTerm porte sur le code OU le libellé, jokers échappés', async () => {
+    mockDeclaredField([]);
+
+    await createSelectOptionsLoader('main').load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: '10%',
+      labelField: 'nc8_libelle_fr',
+    });
+
+    const [sql, params] = distinctCall();
+    expect(sql).toContain(
+      "AND (LOWER(CAST(nc8 AS VARCHAR)) LIKE ? ESCAPE '\\' OR LOWER(nc8_libelle_fr) LIKE ? ESCAPE '\\')",
+    );
+    expect(params).toEqual(['%10\\%%', '%10\\%%', 10]);
+  });
+
+  test('un libellé NULL se replie sur le code', async () => {
+    mockDeclaredField([{ value: '02013090', label: null }]);
+
+    const result = await createSelectOptionsLoader('main').load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: null,
+      labelField: 'nc8_libelle_en',
+    });
+
+    expect(result).toEqual([{ value: '02013090', label: '02013090' }]);
+  });
+
+  test('un nom de colonne de libellés invalide est rejeté avant toute requête', async () => {
+    await expect(
+      createSelectOptionsLoader('main').load({
+        fieldName: 'nc8',
+        limit: 10,
+        searchTerm: null,
+        labelField: 'x; DROP TABLE t',
+      }),
+    ).rejects.toThrow();
+    expect(mockConnection.all).not.toHaveBeenCalled();
+  });
+
+  test('deux labelField différents → deux entrées de cache distinctes', async () => {
+    mockConnection.all.mockResolvedValue([{ name: 'nc8' }] as never);
+    const loader = createSelectOptionsLoader('main');
+
+    await loader.load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: null,
+      labelField: 'nc8_libelle_en',
+    });
+    await loader.load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: null,
+      labelField: 'nc8_libelle_fr',
+    });
+
+    const keys = withCacheMock.mock.calls.map(([key]) => String(key));
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(keys[0]).toContain('nc8_libelle_en');
+    expect(keys[1]).toContain('nc8_libelle_fr');
+  });
+});
+
+describe('SelectOptionsTreeLoader — libellés par niveau', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockConnection.all.mockReset();
+    mockDatabaseManager.getPool.mockReturnValue(mockPool);
+    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
+    mockPool.acquire.mockResolvedValue(mockConnection);
+  });
+
+  // Chaîne nc6 → nc8 : nc6 a un libellé, nc8 en a deux (en choisi par défaut)
+  const TRADE_METADATA = [
+    { name: 'nc6', parent_name: null, label_for: null },
+    { name: 'nc6_libelle', parent_name: null, label_for: 'nc6' },
+    { name: 'nc8', parent_name: 'nc6', label_for: null },
+    { name: 'nc8_libelle_fr', parent_name: null, label_for: 'nc8' },
+    { name: 'nc8_libelle_en', parent_name: null, label_for: 'nc8' },
+  ];
+
+  test('chaque niveau ajoute sa colonne de libellés au même DISTINCT', async () => {
+    mockConnection.all.mockResolvedValueOnce(TRADE_METADATA as never).mockResolvedValueOnce([
+      { nc6: '010129', _label_0: 'Chevaux', nc8: '01012910', _label_1: 'Horses for slaughter' },
+      { nc6: '010129', _label_0: 'Chevaux', nc8: '01012990', _label_1: null },
+    ] as never);
+
+    const result = await createSelectOptionsTreeLoader('main').load({
+      fieldName: 'nc8',
+      maxDepth: null,
+      searchTerm: 'slaughter',
+      maxNodes: 100,
+    });
+
+    const [sql, params] = distinctCall();
+    expect(sql).toContain(
+      'SELECT DISTINCT nc6, nc6_libelle AS _label_0, nc8, nc8_libelle_en AS _label_1',
+    );
+    // Tri et recherche : codes de la chaîne, code ou libellé de la feuille
+    expect(sql).toContain('ORDER BY nc6, nc8 LIMIT ?');
+    expect(sql).toContain('OR LOWER(nc8_libelle_en) LIKE ?');
+    expect(params).toEqual(['%slaughter%', '%slaughter%', 101]);
+    expect(result).toEqual([
+      {
+        value: '010129',
+        label: 'Chevaux',
+        children: [
+          { value: '01012910', label: 'Horses for slaughter' },
+          { value: '01012990', label: '01012990' },
+        ],
+      },
+    ]);
   });
 });

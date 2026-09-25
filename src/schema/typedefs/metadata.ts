@@ -8,9 +8,10 @@ import type { DocumentNode } from 'graphql';
  * GraphQL type definitions for field metadata queries.
  *
  * Declares the Metadata type, the full contract between the database and the
- * interface (specification-bdd.md §2.2): one row per fact_table column, five
- * columns guaranteed NOT NULL by the writer and six optional UI fields owned
- * by the metadata producer. Also declares the getMetaData query entry point.
+ * interface: one row per fact_table column, five
+ * columns guaranteed NOT NULL by the writer and seven optional UI fields owned
+ * by the metadata producer, plus the derived `labelFields`.
+ * Also declares the getMetaData query entry point.
  */
 const metadataTypeDefs: DocumentNode = gql`
   "Métadonnées d'une colonne de la table des faits — contrat entre la base et l'interface"
@@ -27,6 +28,10 @@ const metadataTypeDefs: DocumentNode = gql`
     isPrimaryKey: Boolean!
     "Colonne parente dans une hiérarchie de colonnes (chaîne region → departement → commune)"
     parentName: String
+    "Renseigné sur une colonne de libellés : colonne de code dont elle porte le libellé de chaque valeur (nc8_libelle_fr → nc8)"
+    labelFor: String
+    "Colonnes de libellés de cette colonne de code (inverse de labelFor), triées par nom ; vide si elle n'en a pas"
+    labelFields: [String!]!
     "Suffixe d'axe / tooltip (« € », « % », « MW »)"
     unit: String
     "Chaîne d3-format (« ,.2f », « .0% »)"

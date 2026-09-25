@@ -3,7 +3,9 @@ import { GraphQLError } from 'graphql';
 import { withTimeout } from '../../utils/timeout.js';
 import { databaseManager } from '../../db/index.js';
 import { config } from '../../utils/config-loader.js';
+import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import type { GraphQLContext } from './types.js';
+import type { LoadersCollection } from '../../loaders/index.js';
 import type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
@@ -92,6 +94,38 @@ function assertValidCatalog(catalog: string): void {
   }
 }
 
+/**
+ * Resolves the label column of a field on one side of a comparison.
+ *
+ * Reads the side's metadata through the catalogMetadata loader (same cache as
+ * getCatalogSchema) and applies the default rule of resolveLabelField. The
+ * schema is checked against the catalog's allow-list first: the metadata
+ * loader interpolates it into SQL.
+ *
+ * @param loaders - Request loaders (catalogMetadata is catalog-independent).
+ * @param catalog - Catalog alias of the side, already validated.
+ * @param schema - Schema of the side; null uses the catalog default.
+ * @param field - Join or group-by field whose label column is looked up.
+ * @returns The effective label column, or null when the field has none.
+ * @throws {GraphQLError} When the schema is not available for the catalog.
+ */
+// Colonne de libellés d'un champ, d'un côté de la comparaison
+async function resolveSideLabelField(
+  loaders: LoadersCollection,
+  catalog: string,
+  schema: string | null,
+  field: string,
+): Promise<string | null> {
+  if (schema && !databaseManager.isValidSchema(catalog, schema)) {
+    throw new GraphQLError(
+      `Schema '${schema}' is not available for catalog '${catalog}'. ` +
+        `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
+    );
+  }
+  const rows = await loaders.catalogMetadata.load({ catalog, schema });
+  return resolveLabelField(field, indexMetadataByName(rows));
+}
+
 // Resolver pour les requêtes cross-catalog
 /**
  * Resolvers for cross-catalog / cross-schema query operations.
@@ -99,7 +133,9 @@ function assertValidCatalog(catalog: string): void {
  * All resolvers check that cross-catalog queries are enabled and that each
  * provided catalog alias is valid before dispatching to the loader. Comparing
  * two schemas of the same catalog (catalogA === catalogB, distinct schemas) is
- * supported and gated by the same flag.
+ * supported and gated by the same flag. The label columns that fill
+ * `ComparedFact.keyLabel` are resolved here, before the load, so that they
+ * are part of the cache key.
  */
 const crossDatabaseResolvers = {
   Query: {
@@ -143,6 +179,15 @@ const crossDatabaseResolvers = {
         throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
       }
 
+      // Libellé de la clé : seulement pour un champ de jointure unique
+      const [labelFieldA, labelFieldB] =
+        joinFields.length === 1
+          ? await Promise.all([
+              resolveSideLabelField(loaders, catalogA, schemaA, joinFields[0]),
+              resolveSideLabelField(loaders, catalogB, schemaB, joinFields[0]),
+            ])
+          : [null, null];
+
       return withTimeout(
         loaders.compareFacts.load({
           catalogA,
@@ -150,6 +195,8 @@ const crossDatabaseResolvers = {
           schemaA,
           schemaB,
           joinFields,
+          labelFieldA,
+          labelFieldB,
           limit,
           offset,
           sort,
@@ -206,6 +253,12 @@ const crossDatabaseResolvers = {
         );
       }
 
+      // Libellé de la clé de groupe de chaque côté, même règle que getAggregatedFacts
+      const [labelFieldA, labelFieldB] = await Promise.all([
+        resolveSideLabelField(loaders, catalogA, schemaA, groupBy),
+        resolveSideLabelField(loaders, catalogB, schemaB, groupBy),
+      ]);
+
       return withTimeout(
         loaders.compareAggregatedFacts.load({
           catalogA,
@@ -213,6 +266,8 @@ const crossDatabaseResolvers = {
           schemaA,
           schemaB,
           groupBy,
+          labelFieldA,
+          labelFieldB,
           aggregation,
           limit,
           offset,

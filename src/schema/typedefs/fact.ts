@@ -33,6 +33,8 @@ const factTypeDefs: DocumentNode = gql`
   type AggregatedFact {
     "Grouping key"
     key: String
+    "Label of the grouping key when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise"
+    keyLabel: String
     "Aggregated value"
     aggregatedValue: Float
     "Number of records in this group"

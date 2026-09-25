@@ -2,7 +2,11 @@
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { validateIdentifier } from '../utils/utils.js';
-import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
+import {
+  METADATA_FIELD_WITH_LABELS_WHERE,
+  METADATA_SELECT,
+  toFieldMetadataWithLabels,
+} from '../utils/metadata-mapping.js';
 import { buildWhere } from '../utils/filter-tree.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
 import type { CompiledFilter } from '../utils/filter-tree.js';
@@ -22,6 +26,11 @@ interface AggregatedQueryParams {
   /** Measure column to aggregate (e.g. value, lower_bound). */
   measure: string;
   aggregation: AggregationType;
+  /**
+   * Effective label column of groupBy, resolved by resolveLabelField before the
+   * load (hence part of the cache key); null leaves keyLabel null.
+   */
+  labelField?: string | null;
   limit: number;
   offset: number;
   sort?: SortItem[];
@@ -35,6 +44,8 @@ interface AggregatedQueryParams {
 /** Row of an aggregated fact result. */
 interface AggregatedFactRow {
   key: string;
+  /** Label of the group key, read by ANY_VALUE in the same query; null without label column. */
+  keyLabel: string | null;
   aggregatedValue: number;
   count: number;
   _groupByField: string;
@@ -140,7 +151,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
   /**
    * Loads aggregated fact data grouped by a fact table column.
    *
-   * Applies filters, aggregation, sorting, and pagination. When
+   * Applies filters, aggregation, sorting, and pagination. When the group
+   * column has a label column, its label is read in the same query by
+   * `ANY_VALUE` — licit because the writer guarantees the functional
+   * dependency code → label. When
    * includeMetadata or includeCount are true, additional queries are
    * issued to compute statistics and total group count.
    *
@@ -158,6 +172,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
       groupBy,
       measure,
       aggregation,
+      labelField = null,
       limit,
       offset,
       sort = [],
@@ -173,6 +188,10 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const measureColumn = validateIdentifier(measure, 'measure');
     // Validation de la colonne de regroupement (interpolée dans SELECT et GROUP BY)
     const groupByColumn = validateIdentifier(groupBy, 'groupBy');
+    // Libellé de la clé lu dans la même requête (dépendance fonctionnelle code → libellé)
+    const keyLabelSelect = labelField
+      ? `ANY_VALUE(${validateIdentifier(labelField, 'labelField')}) as keyLabel,`
+      : '';
 
     // Construction de la condition de filtre paramétrée
     const whereClause = buildWhere(where);
@@ -182,7 +201,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
     // Construction du critère de tri. Sans tri explicite, le regroupement est
     // ordonné par sa clé : deux pages successives restent disjointes sous le
-    // scan parallèle de DuckDB (revue §5.7).
+    // scan parallèle de DuckDB.
     const sortClause =
       sort.length > 0
         ? `ORDER BY ${sort
@@ -194,6 +213,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const query = `
             SELECT
                 ${groupByColumn} as key,
+                ${keyLabelSelect}
                 ${aggregationQuery}(${measureColumn}) as aggregatedValue,
                 COUNT(*) as count
             FROM ${this.qualifyTable('fact_table')}
@@ -208,6 +228,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const data: AggregatedFactRow[] = results.map((row) => ({
       ...row,
       key: String(row.key),
+      keyLabel: row.keyLabel === null || row.keyLabel === undefined ? null : String(row.keyLabel),
       aggregatedValue: Number(row.aggregatedValue),
       count: Number(row.count),
       _groupByField: groupBy,
@@ -304,9 +325,11 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
     // Récupération des informations sur le champ de regroupement
     // Même projection et même mapping camelCase que les loaders de métadonnées
-    const fieldMetaQuery = `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
-    const fieldMetaRows = await connection.all(fieldMetaQuery, [groupBy]);
-    const fieldMeta = fieldMetaRows.length > 0 ? toFieldMetadata(fieldMetaRows[0]) : null;
+    const fieldMetaQuery =
+      `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} ` +
+      `WHERE ${METADATA_FIELD_WITH_LABELS_WHERE}`;
+    const fieldMetaRows = await connection.all(fieldMetaQuery, [groupBy, groupBy]);
+    const fieldMeta = toFieldMetadataWithLabels(fieldMetaRows, groupBy);
 
     // Calcul des extents de valeurs et de clés
     const values = data.map((d) => d.aggregatedValue);

@@ -3,7 +3,7 @@ import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
-import { METADATA_SELECT, toFieldMetadata } from '../utils/metadata-mapping.js';
+import { METADATA_SELECT, toFieldMetadata, withLabelFields } from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
@@ -22,7 +22,7 @@ interface CatalogSchemaKey {
  *
  * Loads every metadata row of a given catalog/schema. Rows are returned in
  * camelCase: the snake_case → camelCase mapping lives in
- * utils/metadata-mapping.ts.
+ * utils/metadata-mapping.ts. `labelFields` is derived from the same rows.
  */
 class CatalogMetadataLoader extends BaseQueryLoader {
   // Initialisation sans identifiant de base de données (requêtes cross-catalog)
@@ -58,7 +58,7 @@ class CatalogMetadataLoader extends BaseQueryLoader {
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param key - Catalog alias and optional schema to query.
-   * @returns Array of metadata rows in camelCase.
+   * @returns Array of metadata rows in camelCase, `labelFields` filled.
    */
   async loadAllMetadata(
     connection: DuckDBConnection,
@@ -67,7 +67,8 @@ class CatalogMetadataLoader extends BaseQueryLoader {
     const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
     const query = `SELECT ${METADATA_SELECT} FROM "${catalog}".${resolvedSchema}.metadata`;
     const rows = await connection.all(query);
-    return rows.map((row) => toFieldMetadata(row));
+    // Inverse de label_for calculé sur les lignes lues, sans requête de plus
+    return withLabelFields(rows.map((row) => toFieldMetadata(row)));
   }
 }
 

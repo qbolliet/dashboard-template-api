@@ -63,13 +63,13 @@ const catalogTypeDefs: DocumentNode = gql`
     "Liste tous les catalogues disponibles avec leurs schémas (cascade lazy via les selection sets)"
     getCatalogs: [Catalog!]!
 
-    "Retourne tous les champs (métadonnées) d'un catalogue/schéma"
+    "Retourne tous les champs (métadonnées) d'un catalogue/schéma, colonnes de libellés comprises (contrat complet)"
     getCatalogSchema(catalog: String, schema: String): [Metadata!]!
 
     "Retourne les méta-données du jeu de résultats d'un catalogue/schéma (titre, fraîcheur, tri physique)"
     getDatasetInfo(catalog: String, schema: String): DatasetInfo!
 
-    "Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire, famille thématique ou sous-chaîne du nom (pour alimenter des menus select)"
+    "Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire, famille thématique ou sous-chaîne du nom (pour alimenter des menus select). Les colonnes de libellés sont exclues sauf includeLabelFields: true"
     getFields(
       catalog: String
       schema: String
@@ -78,9 +78,11 @@ const catalogTypeDefs: DocumentNode = gql`
       isPrimaryKey: Boolean
       namePattern: String
       family: String
+      "Inclut les colonnes de libellés (labelFor renseigné), masquées par défaut : ce ne sont pas des variables à proposer dans un menu"
+      includeLabelFields: Boolean = false
     ): [SelectOption!]!
 
-    "Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées."
+    "Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées ; les colonnes de libellés sont exclues (la jointure porte sur le code)."
     getSharedFields(targets: [CatalogSchemaInput!]!): [String!]!
   }
 `;

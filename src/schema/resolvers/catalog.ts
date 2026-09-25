@@ -24,6 +24,8 @@ export interface FieldsArgs {
   isPrimaryKey?: boolean | null;
   namePattern?: string | null;
   family?: string | null;
+  /** False (default) hides the label columns, which are not variables to offer. */
+  includeLabelFields?: boolean | null;
 }
 
 /** A single (catalog, schema) target as accepted by getSharedFields. */
@@ -225,14 +227,27 @@ const catalogResolvers = {
      * is optional; when several are provided they are combined with AND.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family.
+     * Label columns (non-null `labelFor`) are excluded unless
+     * `includeLabelFields` is true: they render the values of a code column
+     * and are not variables to offer in a menu (specification-bdd.md §8).
+     *
+     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family, includeLabelFields.
      * @param context - GraphQL context with loaders.
      * @returns Array of SelectOption where value is the field name and label is the field label (fallback: name).
      */
     // Récupération des noms de champs au format SelectOption avec filtrage en mémoire
     getFields: async (
       _: unknown,
-      { catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family }: FieldsArgs,
+      {
+        catalog,
+        schema,
+        sqlType,
+        isCategorical,
+        isPrimaryKey,
+        namePattern,
+        family,
+        includeLabelFields,
+      }: FieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<SelectOption[]> => {
       const targetCatalog = databaseManager.validateCatalogRouting(catalog ?? null);
@@ -245,6 +260,10 @@ const catalogResolvers = {
 
       return fields
         .filter((field) => {
+          // Colonnes de libellés masquées par défaut (spec bdd §8)
+          if (!includeLabelFields && field.labelFor !== null) {
+            return false;
+          }
           // Filtre par type SQL (comparaison insensible à la casse)
           if (normalizedSqlType && field.sqlType.toLowerCase() !== normalizedSqlType) {
             return false;
@@ -282,7 +301,8 @@ const catalogResolvers = {
      * validated against the allow-list before loading. A field is shared
      * when every target declares it as categorical under the same name and
      * with the same SQL type family, so it is safe to use as a join key in
-     * a cross-catalog query.
+     * a cross-catalog query. Label columns are excluded: the join is made on
+     * the code, more stable than a revisable label (specification-bdd.md §8).
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - List of (catalog, schema) targets.
@@ -317,11 +337,11 @@ const catalogResolvers = {
         ),
       );
 
-      // Indexation par nom de colonne catégorielle, avec sa famille de type
+      // Indexation par nom de colonne catégorielle hors libellés, avec sa famille de type
       const indexed = metadataSets.map((rows) => {
         const families = new Map<string, string | null>();
         rows
-          .filter((row) => row.isCategorical)
+          .filter((row) => row.isCategorical && row.labelFor === null)
           .forEach((row) => families.set(String(row.name), typeFamilyOf(row)));
         return families;
       });

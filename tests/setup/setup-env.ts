@@ -17,13 +17,16 @@ process.env.DEFAULT_CATALOG_PATH = 'data/test-default.ducklake';
 process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
 process.env.DEFAULT_READ_ONLY = 'true';
 // Schémas du catalogue default : main (jeu principal), predictions
-// (comparaisons cross-schéma), geography (hiérarchie de colonnes), plus les
-// deux fixtures volontairement non conformes de la garde de version.
+// (comparaisons cross-schéma), geography (hiérarchie de colonnes), trade
+// (codes et libellés), plus les deux fixtures volontairement non conformes de
+// la garde de version.
 process.env.DEFAULT_SCHEMAS =
-  '["main", "predictions", "geography", "unsupported_version", "missing_dataset_metadata"]';
+  '["main", "predictions", "geography", "trade", "unsupported_version", "missing_dataset_metadata"]';
 // Redirection de macroeconomics et public_finance vers les catalogues synthétiques locaux
 process.env.MACROECONOMICS_CATALOG_PATH = 'data/test-macroeconomics.ducklake';
 process.env.MACROECONOMICS_DATA_PATH = 'data/test-macroeconomics_data/';
+// Second schéma trade : codes nc8 partagés avec default.trade (compareFacts)
+process.env.MACROECONOMICS_SCHEMAS = '["main", "trade"]';
 process.env.PUBLIC_FINANCE_CATALOG_PATH = 'data/test-public-finance.ducklake';
 process.env.PUBLIC_FINANCE_DATA_PATH = 'data/test-public-finance_data/';
 process.env.ALLOWED_CATALOGS = '["default", "macroeconomics", "public_finance"]';

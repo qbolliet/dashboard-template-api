@@ -5,7 +5,8 @@
  * reproducing the DDL of the database specification (specification-bdd.md §2):
  * every schema holds EXACTLY three tables — fact_table, metadata,
  * dataset_metadata — categorical columns store their labels directly, and no
- * dim_* table exists.
+ * dim_* table exists. A business code and its label are two fact_table
+ * columns linked by metadata.label_for (§2.6).
  *
  * Must be run as a separate process (npm run test:setup) BEFORE npm test,
  * because DuckLake allows only one write connection at a time on Windows.
@@ -37,6 +38,7 @@ interface MetadataRow {
   isPrimaryKey: boolean;
   isCategorical: boolean;
   parentName: string | null;
+  labelFor: string | null;
   unit: string | null;
   displayFormat: string | null;
   family: string | null;
@@ -252,6 +254,143 @@ const GEOGRAPHY_TREE: Array<[string, string, string | null]> = [
   ['Occitanie', 'Hérault', 'Montpellier'],
 ];
 
+// ─── Schéma « trade » : codes et libellés (spec §2.6) ────────────────────────────
+
+/** Column order of the `trade` fact_table. */
+const TRADE_COLUMNS = `
+  nc6             VARCHAR,
+  nc6_libelle     VARCHAR,
+  nc8             VARCHAR,
+  nc8_libelle_en  VARCHAR,
+  nc8_libelle_fr  VARCHAR,
+  partner_code    INTEGER,
+  partner_libelle VARCHAR,
+  year            INTEGER,
+  value           DOUBLE,
+  weight_kg       DOUBLE
+`;
+
+// Hiérarchie de codes nc6 → nc8 (parent_name) ; chaque niveau porte ses propres
+// colonnes de libellés (label_for), nc8 en a deux (en, fr). Les colonnes de
+// libellés ne sont ni clés primaires ni membres de la hiérarchie (spec §2.6) ;
+// elles sont catégorielles pour que getSharedFields ait à les exclure.
+const TRADE_METADATA: MetadataRow[] = [
+  meta('nc6', 'Code NC6', 'VARCHAR', true, true, { family: 'Nomenclature' }),
+  meta('nc6_libelle', 'Libellé NC6', 'VARCHAR', false, true, {
+    labelFor: 'nc6',
+    family: 'Nomenclature',
+  }),
+  meta('nc8', 'Code NC8', 'VARCHAR', true, true, {
+    parentName: 'nc6',
+    family: 'Nomenclature',
+    description: 'Code de la nomenclature combinée, zéros de tête compris',
+  }),
+  meta('nc8_libelle_en', 'Libellé NC8 (en)', 'VARCHAR', false, true, {
+    labelFor: 'nc8',
+    family: 'Nomenclature',
+  }),
+  meta('nc8_libelle_fr', 'Libellé NC8 (fr)', 'VARCHAR', false, true, {
+    labelFor: 'nc8',
+    family: 'Nomenclature',
+  }),
+  // Code numérique doté d'un libellé : value = CAST(code AS VARCHAR)
+  meta('partner_code', 'Code pays partenaire', 'INTEGER', true, true, { family: 'Géographie' }),
+  meta('partner_libelle', 'Pays partenaire', 'VARCHAR', false, true, {
+    labelFor: 'partner_code',
+    family: 'Géographie',
+  }),
+  meta('year', 'Année', 'INTEGER', true, false, { family: 'Temps' }),
+  meta('value', 'Valeur des échanges', 'DOUBLE', false, false, {
+    unit: '€',
+    displayFormat: ',.0f',
+    family: 'Commerce',
+    defaultAggregation: 'SUM',
+  }),
+  meta('weight_kg', 'Masse nette', 'DOUBLE', false, false, {
+    unit: 'kg',
+    displayFormat: ',.0f',
+    family: 'Commerce',
+    defaultAggregation: 'SUM',
+  }),
+];
+
+const TRADE_CLUSTER_BY = TRADE_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+/** One nc8 code with its nc6 parent and every label (NULL when absent). */
+interface TradeCode {
+  nc6: string;
+  nc6Libelle: string;
+  nc8: string;
+  en: string | null;
+  fr: string | null;
+}
+
+// Libellé NC6 à apostrophe, partagé par les deux codes nc8 du chapitre 0201
+const NC6_BOVINS = "Viandes désossées de l'espèce bovine, fraîches ou réfrigérées";
+const NC6_CHEVAUX = 'Chevaux, autres que reproducteurs de race pure';
+
+// Codes du catalogue default. 02013090 n'a AUCUN libellé : NULL sur toutes ses
+// lignes, ce que la dépendance fonctionnelle code → libellé autorise.
+const TRADE_CODES_DEFAULT: TradeCode[] = [
+  {
+    nc6: '010121',
+    nc6Libelle: 'Chevaux reproducteurs de race pure',
+    nc8: '01012100',
+    en: 'Pure-bred breeding horses',
+    fr: 'Chevaux reproducteurs de race pure',
+  },
+  {
+    nc6: '010129',
+    nc6Libelle: NC6_CHEVAUX,
+    nc8: '01012910',
+    en: 'Horses for slaughter',
+    fr: 'Chevaux de boucherie',
+  },
+  {
+    nc6: '010129',
+    nc6Libelle: NC6_CHEVAUX,
+    nc8: '01012990',
+    en: 'Horses other than for slaughter',
+    fr: 'Chevaux autres que de boucherie',
+  },
+  {
+    nc6: '020130',
+    nc6Libelle: NC6_BOVINS,
+    nc8: '02013000',
+    en: 'Boneless bovine meat, fresh or chilled',
+    fr: "Viandes désossées de l'espèce bovine, fraîches ou réfrigérées",
+  },
+  { nc6: '020130', nc6Libelle: NC6_BOVINS, nc8: '02013090', en: null, fr: null },
+];
+
+// Codes du second catalogue : trois codes partagés avec default (compareFacts),
+// dont 02013090 libellé ici seulement (COALESCE des deux côtés), et un code propre.
+const TRADE_CODES_MACRO: TradeCode[] = [
+  TRADE_CODES_DEFAULT[0],
+  TRADE_CODES_DEFAULT[3],
+  {
+    nc6: '020130',
+    nc6Libelle: NC6_BOVINS,
+    nc8: '02013090',
+    en: 'Other boneless bovine meat',
+    fr: 'Autres viandes bovines désossées',
+  },
+  {
+    nc6: '030211',
+    nc6Libelle: 'Truites, fraîches ou réfrigérées',
+    nc8: '03021100',
+    en: 'Trout, fresh or chilled',
+    fr: 'Truites, fraîches ou réfrigérées',
+  },
+];
+
+// Pays partenaires : code numérique ISO 3166 et libellé (apostrophe comprise)
+const TRADE_PARTNERS: Array<[number, string]> = [
+  [250, 'France'],
+  [276, 'Allemagne'],
+  [384, "Côte d'Ivoire"],
+];
+
 // ─── Fonctions utilitaires ─────────────────────────────────────────────────────
 
 /**
@@ -262,7 +401,7 @@ const GEOGRAPHY_TREE: Array<[string, string, string | null]> = [
  * @param sqlType - DuckDB SQL type.
  * @param isPrimaryKey - Whether the column belongs to the logical key.
  * @param isCategorical - Whether the column is filtered through a select menu.
- * @param options - Optional UI fields (parentName, unit, displayFormat, family, description, defaultAggregation).
+ * @param options - Optional UI fields (parentName, labelFor, unit, displayFormat, family, description, defaultAggregation).
  * @returns A fully populated MetadataRow.
  */
 // Construction d'une ligne de métadonnées avec valeurs optionnelles à NULL
@@ -275,7 +414,13 @@ function meta(
   options: Partial<
     Pick<
       MetadataRow,
-      'parentName' | 'unit' | 'displayFormat' | 'family' | 'description' | 'defaultAggregation'
+      | 'parentName'
+      | 'labelFor'
+      | 'unit'
+      | 'displayFormat'
+      | 'family'
+      | 'description'
+      | 'defaultAggregation'
     >
   > = {},
 ): MetadataRow {
@@ -286,6 +431,7 @@ function meta(
     isPrimaryKey,
     isCategorical,
     parentName: options.parentName ?? null,
+    labelFor: options.labelFor ?? null,
     unit: options.unit ?? null,
     displayFormat: options.displayFormat ?? null,
     family: options.family ?? null,
@@ -468,6 +614,71 @@ function buildGeographyRows(): unknown[][] {
   return rows;
 }
 
+/**
+ * Builds the fact rows of a `trade` schema.
+ *
+ * Every label is a function of its code (one label per code, NULL included),
+ * so the rows honour the functional dependency the writer guarantees.
+ *
+ * @param codes - nc8 codes with their nc6 parent and labels.
+ * @param partners - Partner codes and labels.
+ * @param years - Observation years.
+ * @param multiplier - Scaling factor applied to every measured value.
+ * @returns Rows aligned with TRADE_COLUMNS.
+ */
+// Génération des échanges, une ligne par code, partenaire et année
+function buildTradeRows(
+  codes: TradeCode[],
+  partners: Array<[number, string]>,
+  years: number[],
+  multiplier: number,
+): unknown[][] {
+  const rows: unknown[][] = [];
+  codes.forEach((code, codeIndex) => {
+    partners.forEach(([partnerCode, partnerLabel], partnerIndex) => {
+      years.forEach((year, yearIndex) => {
+        const value = (1000 * (codeIndex + 1) + 100 * partnerIndex + 10 * yearIndex) * multiplier;
+        rows.push([
+          code.nc6,
+          code.nc6Libelle,
+          code.nc8,
+          code.en,
+          code.fr,
+          partnerCode,
+          partnerLabel,
+          year,
+          value,
+          value / 4,
+        ]);
+      });
+    });
+  });
+  return rows;
+}
+
+/**
+ * Builds the SchemaSpec of a `trade` schema.
+ *
+ * @param alias - Catalog alias, quoted in the dataset source.
+ * @param rows - Fact rows aligned with TRADE_COLUMNS.
+ * @returns The schema specification.
+ */
+// Assemblage d'un schéma « trade »
+function tradeSpec(alias: string, rows: unknown[][]): SchemaSpec {
+  return {
+    metadata: TRADE_METADATA,
+    datasetMetadata: {
+      label: `Échanges par produit — ${alias}`,
+      description: 'Échanges par code NC8 et pays partenaire',
+      source: `test-fixture:${alias}.trade`,
+      updatedAt: '2026-09-01 04:45:00',
+      schemaVersion: 1,
+      clusterBy: TRADE_CLUSTER_BY,
+    },
+    rows,
+  };
+}
+
 // ─── Écriture d'un schéma ──────────────────────────────────────────────────────
 
 /**
@@ -543,6 +754,7 @@ async function createSchema(
       is_primary_key      BOOLEAN NOT NULL,
       is_categorical      BOOLEAN NOT NULL,
       parent_name         VARCHAR,
+      label_for           VARCHAR,
       unit                VARCHAR,
       display_format      VARCHAR,
       family              VARCHAR,
@@ -572,8 +784,8 @@ async function createSchema(
     await conn.run(
       `INSERT INTO ${qualify('metadata')}
          (name, label, sql_type, is_primary_key, is_categorical, parent_name,
-          unit, display_format, family, description, default_aggregation)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          label_for, unit, display_format, family, description, default_aggregation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         row.name,
         row.label,
@@ -581,6 +793,7 @@ async function createSchema(
         row.isPrimaryKey,
         row.isCategorical,
         row.parentName,
+        row.labelFor,
         row.unit,
         row.displayFormat,
         row.family,
@@ -703,8 +916,8 @@ async function createCatalog(
  * Orchestrates the creation of all test DuckLake catalogs.
  *
  * Creates a shared in-memory DuckDB instance, installs the DuckLake extension
- * if needed, then creates the default (main + predictions + geography),
- * macroeconomics, and public_finance catalogs.
+ * if needed, then creates the default (main + predictions + geography +
+ * trade), macroeconomics (main + trade), and public_finance catalogs.
  */
 async function setupTestData(): Promise<void> {
   // Création du répertoire de données de test si absent
@@ -769,6 +982,16 @@ async function setupTestData(): Promise<void> {
       rows: buildGeographyRows(),
     });
 
+    // Quatrième schéma `trade` : codes NC6 → NC8 et code numérique, chacun doté
+    // de colonnes de libellés (spec §2.6)
+    await createSchema(
+      conn,
+      'default',
+      'trade',
+      TRADE_COLUMNS,
+      tradeSpec('default', buildTradeRows(TRADE_CODES_DEFAULT, TRADE_PARTNERS, [2023, 2024], 1.0)),
+    );
+
     // Deux schémas VOLONTAIREMENT non conformes, réservés au test de la garde
     // de version. Ils ne décrivent aucun format réel : le premier annonce une
     // version que l'API ne supporte pas, le second reproduit un catalogue
@@ -809,6 +1032,18 @@ async function setupTestData(): Promise<void> {
       path.resolve(dataDir, 'test-macroeconomics.ducklake'),
       path.resolve(dataDir, 'test-macroeconomics_data'),
       1.05,
+    );
+
+    // Schéma `trade` du second catalogue : codes nc8 en partie partagés (compareFacts)
+    await createSchema(
+      conn,
+      'macroeconomics',
+      'trade',
+      TRADE_COLUMNS,
+      tradeSpec(
+        'macroeconomics',
+        buildTradeRows(TRADE_CODES_MACRO, TRADE_PARTNERS.slice(0, 2), [2024], 1.05),
+      ),
     );
 
     // Catalogue finances publiques

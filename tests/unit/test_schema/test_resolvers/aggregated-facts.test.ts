@@ -249,16 +249,18 @@ describe('getAggregatedFacts', () => {
     expect(keys).toContain('France');
   });
 
-  test('keyLabel a disparu du schéma', async () => {
+  test('keyLabel est null sur une colonne sans colonne de libellés', async () => {
     const query = `
       query {
-        getAggregatedFacts(measure: "value", groupBy: "country", limit: 1, offset: 0) { key keyLabel }
+        getAggregatedFacts(measure: "value", groupBy: "country", limit: 3, offset: 0) { key keyLabel }
       }
     `;
     const result = await execute(server, { query });
 
-    expect(result.errors).toBeDefined();
-    expect(result.errors![0].message).toMatch(/keyLabel/);
+    expect(result.errors).toBeUndefined();
+    const rows = result.data!.getAggregatedFacts as Array<{ key: string; keyLabel: string | null }>;
+    expect(rows.length).toBeGreaterThan(0);
+    rows.forEach((row) => expect(row.keyLabel).toBeNull());
   });
 
   test('paginates — respects limit', async () => {

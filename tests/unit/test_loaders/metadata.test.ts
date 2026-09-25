@@ -25,6 +25,7 @@ interface MetadataRow {
   is_categorical: number;
   is_primary_key: number;
   parent_name?: string | null;
+  label_for?: string | null;
   unit?: string | null;
   display_format?: string | null;
   family?: string | null;
@@ -40,6 +41,8 @@ interface MetadataResult {
   isCategorical: boolean;
   isPrimaryKey: boolean;
   parentName: string | null;
+  labelFor: string | null;
+  labelFields: string[];
   unit: string | null;
   displayFormat: string | null;
   family: string | null;
@@ -150,7 +153,7 @@ describe('MetadataLoader', () => {
       const loader = createMetadataLoader('main');
       const result = await loader.load('age');
 
-      // Les onze colonnes remontent en camelCase, NULL compris
+      // Les douze colonnes remontent en camelCase, NULL compris
       expect(result).toEqual({
         name: 'age',
         label: 'Âge',
@@ -158,6 +161,8 @@ describe('MetadataLoader', () => {
         isCategorical: false,
         isPrimaryKey: false,
         parentName: null,
+        labelFor: null,
+        labelFields: [],
         unit: 'ans',
         displayFormat: ',.0f',
         family: 'Démographie',
@@ -211,7 +216,40 @@ describe('MetadataLoader', () => {
       expect(result!.isPrimaryKey).toBe(true);
     });
 
-    test('projette explicitement les onze colonnes au lieu de SELECT *', async () => {
+    test('lit la colonne et ses colonnes de libellés en une seule requête', async () => {
+      // Réponse de « name = ? OR label_for = ? » : le code et ses deux libellés
+      mockConnection.all.mockResolvedValue([
+        { name: 'nc8_libelle_fr', is_categorical: 1, is_primary_key: 0, label_for: 'nc8' },
+        { name: 'nc8', is_categorical: 1, is_primary_key: 1, label_for: null },
+        { name: 'nc8_libelle_en', is_categorical: 1, is_primary_key: 0, label_for: 'nc8' },
+      ]);
+
+      const loader = createMetadataLoader('main');
+      const result = await loader.load('nc8');
+
+      expect(mockConnection.all).toHaveBeenCalledTimes(1);
+      const [query, params] = mockConnection.all.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('label_for = ?');
+      expect(params).toEqual(['nc8', 'nc8']);
+      expect(result!.name).toBe('nc8');
+      expect(result!.labelFor).toBeNull();
+      // Inverse de label_for, trié par nom
+      expect(result!.labelFields).toEqual(['nc8_libelle_en', 'nc8_libelle_fr']);
+    });
+
+    test('une colonne de libellés expose labelFor et une liste labelFields vide', async () => {
+      mockConnection.all.mockResolvedValue([
+        { name: 'nc8_libelle_fr', is_categorical: 1, is_primary_key: 0, label_for: 'nc8' },
+      ]);
+
+      const loader = createMetadataLoader('main');
+      const result = await loader.load('nc8_libelle_fr');
+
+      expect(result!.labelFor).toBe('nc8');
+      expect(result!.labelFields).toEqual([]);
+    });
+
+    test('projette explicitement les douze colonnes au lieu de SELECT *', async () => {
       mockConnection.all.mockResolvedValue([
         { name: 'field', is_categorical: 0, is_primary_key: 0 },
       ]);
@@ -223,6 +261,7 @@ describe('MetadataLoader', () => {
       expect(query).not.toContain('SELECT *');
       expect(query).toContain('default_aggregation');
       expect(query).toContain('parent_name');
+      expect(query).toContain('label_for');
     });
 
     test('utilise qualifyTable pour la table metadata', async () => {
