@@ -36,12 +36,9 @@ jobs:
       - name: Generate code reference (TypeDoc)
         run: npm run docs:typedoc
 
-      # Compile TypeScript — required for schema introspection generation
-      - name: Build TypeScript
-        run: npm run build
-
-      # Generate static schema.json for GraphQL Voyager
-      - name: Generate GraphQL schema introspection
+      # Regenerate schema.graphql from src/ (tsx, no build needed), then derive the
+      # ignored docs artifacts (static/schema.graphql + static/schema.json for Voyager)
+      - name: Generate GraphQL schema and introspection
         run: npm run docs:schema
 
       - name: Install docs-site dependencies

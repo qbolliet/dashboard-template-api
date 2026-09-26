@@ -41,16 +41,19 @@ npm run dev                   # → http://localhost:4000/graphql
 
 ## npm scripts
 
-| Script                  | Description                         |
-| ----------------------- | ----------------------------------- |
-| `npm run dev`           | Development server with auto-reload |
-| `npm run build`         | Compile TypeScript → `dist/`        |
-| `npm run start:prod`    | Run compiled output                 |
-| `npm run lint`          | ESLint                              |
-| `npm run format`        | Prettier                            |
-| `npm run test:setup`    | Load test fixtures                  |
-| `npm test`              | Run Jest test suite                 |
-| `npm run test:coverage` | Tests with coverage report          |
+| Script                    | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `npm run dev`             | Development server with auto-reload           |
+| `npm run build`           | Compile TypeScript → `dist/`                  |
+| `npm run start:prod`      | Run compiled output                           |
+| `npm run lint`            | ESLint                                        |
+| `npm run format`          | Prettier                                      |
+| `npm run test:setup`      | Load test fixtures                            |
+| `npm test`                | Run Jest test suite                           |
+| `npm run test:coverage`   | Tests with coverage report                    |
+| `npm run schema:generate` | Regenerate the versioned SDL `schema.graphql` |
+| `npm run schema:check`    | Fail if `schema.graphql` is stale             |
+| `npm run schema:diff`     | Diff the SDL against the last release         |
 
 ---
 

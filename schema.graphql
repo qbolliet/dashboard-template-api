@@ -1,0 +1,763 @@
+type Query {
+  _empty: String
+
+  """Get fact table data with pagination and filtering"""
+  getFactTable(
+    fields: [String!]
+
+    """
+    Filter tree (root = group), compiled server-side into a parameterized WHERE clause
+    """
+    structuredFilters: FilterNode
+    limit: Int! = 100
+    offset: Int! = 0
+    sort: [SortInput!]
+    catalog: String
+    schema: String
+  ): PaginatedFacts
+
+  """Get fact data optimized for D3 visualization"""
+  getFactTableWithMetadata(
+    fields: [String!]
+
+    """
+    Filter tree (root = group), compiled server-side into a parameterized WHERE clause
+    """
+    structuredFilters: FilterNode
+    limit: Int! = 100
+    offset: Int! = 0
+    sort: [SortInput!]
+    catalog: String
+    schema: String
+
+    """
+    Format de sérialisation des données : OBJECTS (défaut) ou ARRAYS (tableau de tableaux)
+    """
+    format: DataFormat = OBJECTS
+  ): DatasetWithMetadata
+
+  """Get aggregated facts for charts and summaries"""
+  getAggregatedFacts(
+    fields: [String!]
+
+    """
+    Filter tree (root = group), compiled server-side into a parameterized WHERE clause
+    """
+    structuredFilters: FilterNode
+    groupBy: String!
+
+    """Measure column to aggregate (e.g. value, lower_bound)"""
+    measure: String!
+
+    """
+    Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM
+    """
+    aggregation: Aggregation
+    limit: Int! = 100
+    offset: Int! = 0
+    sort: [SortInput!]
+    catalog: String
+    schema: String
+  ): [AggregatedFact]
+
+  """Get aggregated facts with D3 metadata"""
+  getAggregatedFactsWithMetadata(
+    fields: [String!]
+
+    """
+    Filter tree (root = group), compiled server-side into a parameterized WHERE clause
+    """
+    structuredFilters: FilterNode
+    groupBy: String!
+
+    """Measure column to aggregate (e.g. value, lower_bound)"""
+    measure: String!
+
+    """
+    Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM
+    """
+    aggregation: Aggregation
+    limit: Int! = 100
+    offset: Int! = 0
+    sort: [SortInput!]
+    catalog: String
+    schema: String
+  ): AggregatedFactsWithMetadata
+  getMetaData(name: String!, catalog: String, schema: String): Metadata
+
+  """
+  Statistiques d'une colonne, éventuellement restreintes par un arbre de filtres — le même
+  que celui des requêtes de faits. Sans filtre, mêmes valeurs (et même cache long) que
+  Metadata.stats ; avec filtre, recalibre les sliders après application des filtres courants
+  (cache court). Erreur BAD_USER_INPUT si la colonne n'existe pas.
+  """
+  getFieldStats(
+    fieldName: String!
+    catalog: String
+    schema: String
+
+    """
+    Filter tree (root = group), compiled server-side into a parameterized WHERE clause
+    """
+    structuredFilters: FilterNode
+  ): FieldStats!
+
+  """
+  Distinct values of one column, with search and limit. `label = value`,
+  except for a code column with label columns (`Metadata.labelFields`):
+  `value` is the code (cast to text), `label` its label — the code itself
+  when the label is NULL. `searchTerm` then matches the code or the label.
+  """
+  getSelectOptions(
+    fieldName: String!
+    limit: Int = 50
+    searchTerm: String = ""
+
+    """
+    Label column of fieldName to render (one of its labelFields). Defaults to the only one, or the first by alphabetical order; rejected with BAD_USER_INPUT when it is not a label column of fieldName.
+    """
+    labelField: String
+    catalog: String
+    schema: String
+  ): [SelectOption!]!
+
+  """
+  Nested option tree of a column hierarchy, `fieldName` being the deepest
+  level displayed. The chain of columns is walked up from `fieldName`
+  through `Metadata.parentName`; the tree is read with a single
+  `SELECT DISTINCT` over that chain.
+  
+  Shape: `[{ value, label, children? }]` — `children` is absent on leaves.
+  `label` equals `value` unless the level is a code column with label
+  columns (`Metadata.labelFields`): each level then reads its label from its
+  own label column, chosen by the default rule of `getSelectOptions` (the
+  only one, or the first by alphabetical order; no per-level argument), and
+  falls back to the code when the label is NULL. A node is still one code.
+  A NULL level ends its branch: the parent becomes a leaf, no empty node is
+  ever produced. A column without `parentName` yields a one-level tree (a
+  list of leaves).
+  
+  Example on the chain `region → departement → commune`:
+  `getSelectOptionsTree(fieldName: "commune", maxDepth: 2)` returns
+  `[{ value: "Côte-d'Or", label: "Côte-d'Or", children: [{ value: "Beaune",
+  label: "Beaune" }, …] }, …]` — departements holding their own communes,
+  i.e. the group-options format of a select menu. Without `maxDepth` the
+  regions are the roots and the tree has three levels.
+  
+  Example on the code chain `nc6 → nc8` (labels `nc6_libelle`,
+  `nc8_libelle_en`, `nc8_libelle_fr`):
+  `getSelectOptionsTree(fieldName: "nc8")` returns `[{ value: "010121",
+  label: "Chevaux reproducteurs de race pure", children: [{ value: "01012100",
+  label: "Pure-bred breeding horses" }] }, …]` — `nc8` takes `nc8_libelle_en`,
+  first by alphabetical order; use `getSelectOptions(labelField: …)` on the
+  leaf level for another label column.
+  
+  Trees larger than the configured node bound (API.SELECT_OPTIONS.TREE_MAX_NODES)
+  are rejected with BAD_USER_INPUT, never truncated: narrow them with
+  `searchTerm` or `maxDepth`, or use `getSelectOptions` on the leaf level.
+  """
+  getSelectOptionsTree(
+    """Deepest level displayed (the leaves of the tree)."""
+    fieldName: String!
+
+    """
+    Number of levels kept going up from fieldName (>= 1). Defaults to the whole chain.
+    """
+    maxDepth: Int
+
+    """
+    Case-insensitive filter on the fieldName level (its code, or its label when it has a label column); ancestors of matching leaves are kept, other branches pruned.
+    """
+    searchTerm: String
+    catalog: String
+    schema: String
+  ): JSON!
+
+  """
+  Liste tous les catalogues disponibles avec leurs schémas (cascade lazy via les selection sets)
+  """
+  getCatalogs: [Catalog!]!
+
+  """
+  Retourne tous les champs (métadonnées) d'un catalogue/schéma, colonnes de libellés comprises (contrat complet)
+  """
+  getCatalogSchema(catalog: String, schema: String): [Metadata!]!
+
+  """
+  Retourne les méta-données du jeu de résultats d'un catalogue/schéma (titre, fraîcheur, tri physique)
+  """
+  getDatasetInfo(catalog: String, schema: String): DatasetInfo!
+
+  """
+  Retourne les noms des champs au format {value, label} filtrés par type SQL, catégorie, clé primaire, famille thématique ou sous-chaîne du nom (pour alimenter des menus select). Les colonnes de libellés sont exclues sauf includeLabelFields: true
+  """
+  getFields(
+    catalog: String
+    schema: String
+    sqlType: String
+    isCategorical: Boolean
+    isPrimaryKey: Boolean
+    namePattern: String
+    family: String
+
+    """
+    Inclut les colonnes de libellés (labelFor renseigné), masquées par défaut : ce ne sont pas des variables à proposer dans un menu
+    """
+    includeLabelFields: Boolean = false
+  ): [SelectOption!]!
+
+  """
+  Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées ; les colonnes de libellés sont exclues (la jointure porte sur le code).
+  """
+  getSharedFields(targets: [CatalogSchemaInput!]!): [String!]!
+
+  """
+  Compare les faits de deux datasets (catalogue + schéma) sur des champs de jointure communs. La fact table porte les libellés : la jointure est directe sur les colonnes, alignées en VARCHAR pour absorber une différence de type entre catalogues.
+  """
+  compareFacts(
+    """Premier catalogue (référence)"""
+    catalogA: String!
+
+    """Second catalogue (comparaison)"""
+    catalogB: String!
+
+    """Schéma dans catalogA (défaut : schéma configuré du catalogue)"""
+    schemaA: String
+
+    """Schéma dans catalogB (défaut : schéma configuré du catalogue)"""
+    schemaB: String
+
+    """
+    Champs utilisés pour la jointure (doivent exister dans les deux datasets)
+    """
+    joinFields: [String!]!
+    limit: Int! = 100
+    offset: Int! = 0
+    sort: [SortInput!]
+  ): PaginatedComparedFacts!
+
+  """
+  Compare les faits agrégés de deux datasets (catalogue + schéma) sur un groupBy commun. Chaque côté agrège directement sur sa colonne, qui porte le libellé.
+  """
+  compareAggregatedFacts(
+    catalogA: String!
+    catalogB: String!
+
+    """Schéma dans catalogA (défaut : schéma configuré du catalogue)"""
+    schemaA: String
+
+    """Schéma dans catalogB (défaut : schéma configuré du catalogue)"""
+    schemaB: String
+
+    """Champ de regroupement commun aux deux datasets"""
+    groupBy: String!
+    aggregation: Aggregation! = SUM
+    limit: Int! = 100
+    offset: Int! = 0
+  ): PaginatedComparedFacts!
+
+  """
+  Retourne les options de sélection communes à plusieurs datasets (intersection sur les labels pour les champs catégoriels)
+  """
+  crossDatabaseSelectOptions(
+    """Nom du champ à intersecter"""
+    fieldName: String!
+
+    """Liste des catalogues à croiser (minimum 2)"""
+    catalogs: [String!]!
+
+    """
+    Schémas alignés par index sur 'catalogs' (défaut : schéma configuré de chaque catalogue)
+    """
+    schemas: [String!]
+    limit: Int! = 50
+  ): [SelectOption!]!
+}
+
+enum SortOrder {
+  ASC
+  DESC
+}
+
+enum Aggregation {
+  SUM
+  AVG
+  MAX
+  MIN
+  COUNT
+  MEDIAN
+  MODE
+}
+
+"""An aggregated fact record with key and value"""
+type AggregatedFact {
+  """Grouping key"""
+  key: String!
+
+  """Aggregated value"""
+  aggregatedValue: Float!
+
+  """Number of records in this group"""
+  count: Int!
+
+  """
+  Label of the grouping key when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise
+  """
+  keyLabel: String
+}
+
+"""
+Logical connector between a filter node and the PREVIOUS node of the same group. AND, OR, AND_NOT and OR_NOT follow SQL precedence (NOT, then AND, then OR); XOR, XNOR, NAND and NOR take everything on their left as a single operand. A NULL operand yields NULL (row not selected), except NOR which is true only when both sides are false.
+"""
+enum FilterConnector {
+  """a AND b"""
+  AND
+
+  """a OR b"""
+  OR
+
+  """a AND NOT b"""
+  AND_NOT
+
+  """a OR NOT b"""
+  OR_NOT
+
+  """Exclusive or: exactly one of the two holds"""
+  XOR
+
+  """Equivalence: both hold, or neither does"""
+  XNOR
+
+  """Not both: NOT (a AND b)"""
+  NAND
+
+  """Neither: NOT (a OR b)"""
+  NOR
+}
+
+"""
+Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL)
+"""
+enum FilterOperation {
+  """Equality / inequality (all families)"""
+  EQ
+  NEQ
+
+  """Numeric comparisons"""
+  GT
+  GTE
+  LT
+  LTE
+
+  """Range, bounds included (numeric, date) — value {min, max}"""
+  BETWEEN
+  NOT_BETWEEN
+
+  """Membership — value is a non-empty array"""
+  IN
+  NOT_IN
+
+  """Date comparisons (strict, then inclusive)"""
+  BEFORE
+  AFTER
+  ON_OR_BEFORE
+  ON_OR_AFTER
+
+  """Text matching (LIKE); wildcards % and _ in the value are escaped"""
+  CONTAINS
+  NOT_CONTAINS
+  STARTS
+  NOT_STARTS
+  ENDS
+  NOT_ENDS
+
+  """
+  Case-insensitive text matching (ILIKE); IEQ is case-insensitive equality
+  """
+  IEQ
+  ICONTAINS
+  ISTARTS
+  IENDS
+
+  """
+  Regular expression (DuckDB regexp_matches, RE2 syntax; no backreferences or lookaround)
+  """
+  MATCHES
+
+  """Value-less operations"""
+  IS_NULL
+  IS_NOT_NULL
+
+  """Boolean shortcuts; the IS_NOT_* forms also match NULL"""
+  IS_TRUE
+  IS_FALSE
+  IS_NOT_TRUE
+  IS_NOT_FALSE
+}
+
+"""A single filter criterion on one column"""
+input FilterCriterion {
+  """Column name (must exist in the metadata table)"""
+  variable: String!
+
+  """Operation to apply, compatible with the column's SQL type family"""
+  operation: FilterOperation!
+
+  """
+  Scalar (string, number, boolean) for comparisons; non-empty array for IN/NOT_IN; {min, max} for BETWEEN; omitted for IS_NULL/IS_NOT_NULL. Dates in ISO 8601; integers beyond 2^53 as strings.
+  """
+  value: JSON
+}
+
+"""
+Node of a filter tree. Exactly one of criterion (leaf) or children (group) must be set; groups must not be empty. The root node must be a group.
+"""
+input FilterNode {
+  """
+  Connector with the previous node of the parent group (ignored for the first node, defaults to AND)
+  """
+  connector: FilterConnector
+
+  """Negates this node: NOT on the leaf predicate, or on the whole group"""
+  negate: Boolean = false
+
+  """Leaf criterion (mutually exclusive with children)"""
+  criterion: FilterCriterion
+
+  """
+  Child nodes of a group (mutually exclusive with criterion; sub-groups are parenthesized)
+  """
+  children: [FilterNode!]
+}
+
+input SortInput {
+  field: String!
+  order: SortOrder = ASC
+}
+
+type SelectOption {
+  value: String!
+  label: String!
+}
+
+"""
+A single named column value of a fact row. The value preserves its original type (Float, Int, String, Boolean…) via the JSON scalar.
+"""
+type FieldValue {
+  """Name of the column (e.g. country, date, value, lower_bound)"""
+  name: String!
+
+  """Raw column value, original type preserved. NULL is returned as null."""
+  value: JSON
+}
+
+"""
+A single fact record from the fact table, split into its coordinates and its measures
+"""
+type Fact {
+  """
+  Coordinates of the row — every column with isPrimaryKey = true, NULL levels of a column hierarchy included
+  """
+  keys: [FieldValue!]!
+
+  """Measures of the row — every column with isPrimaryKey = false"""
+  measures: [FieldValue!]!
+}
+
+"""Paginated response for fact queries"""
+type PaginatedFacts {
+  """Array of fact records"""
+  data: [Fact]
+
+  """Total number of records matching the query"""
+  total: Int
+
+  """Whether there are more pages available"""
+  hasNextPage: Boolean
+
+  """Current page number (1-indexed)"""
+  currentPage: Int
+
+  """Total number of pages"""
+  totalPages: Int
+}
+
+"""Metadata about a dataset, useful for visualization"""
+type DatasetMetadata {
+  """Number of records in current page"""
+  count: Int!
+
+  """
+  Bounds of the columns of THIS PAGE (not of the whole dataset), keyed by column name: [min, max] as numbers for numeric columns (integers beyond 2^53, serialized as strings, are compared as numbers, so their bound is approximate), [min, max] as ISO 8601 strings for date and timestamp columns (chronological comparison). NULLs are ignored; a column with no value has no entry. Global bounds of a column: Metadata.stats
+  """
+  extents: JSON
+
+  """Total number of records matching the query"""
+  total: Int
+
+  """Whether there are more pages available"""
+  hasNextPage: Boolean
+
+  """Current page number (1-indexed)"""
+  currentPage: Int
+
+  """Total number of pages"""
+  totalPages: Int
+
+  """ISO 8601 timestamp of when this query was executed"""
+  generatedAt: String!
+}
+
+"""D3-optimized data format with metadata"""
+type DatasetWithMetadata {
+  """Column names in the dataset"""
+  columns: [String!]!
+
+  """
+  Metadata of the returned columns — same names, same order as columns (axis type, header label, unit, display format…). Fails explicitly when a column has no row in the metadata table
+  """
+  fields: [Metadata!]!
+
+  """
+  Rows, as JSON objects (OBJECTS) or arrays ordered as columns (ARRAYS). Value types are guaranteed, see the JSON scalar
+  """
+  data: [JSON!]!
+
+  """Metadata about the dataset"""
+  metadata: DatasetMetadata!
+}
+
+"""Statistics for aggregated data"""
+type AggregationStatistics {
+  mean: Float
+  median: Float
+  stdDev: Float
+  quartiles: [Float]
+}
+
+"""Metadata for aggregated facts optimized for D3"""
+type AggregatedFactsMetadata {
+  count: Int!
+  keyExtent: JSON
+  valueExtent: [Float!]!
+  statistics: AggregationStatistics
+  groupByFieldInfo: Metadata
+
+  """
+  Metadata of the aggregated measure (unit and display format of the aggregated value)
+  """
+  measureFieldInfo: Metadata
+
+  """ISO 8601 timestamp of when this query was executed"""
+  generatedAt: String!
+}
+
+"""Aggregated facts with D3-optimized metadata"""
+type AggregatedFactsWithMetadata {
+  data: [AggregatedFact!]!
+  metadata: AggregatedFactsMetadata!
+}
+
+"""
+Custom scalar type for JSON values. Value types coming from the fact table are
+serialized the same way on every path (rows as objects or arrays, aggregates, comparisons):
+integers (TINYINT to UBIGINT, HUGEINT) are JSON numbers when Number.isSafeInteger holds and
+their exact decimal string beyond (|value| > 2^53 - 1); DECIMAL, FLOAT and DOUBLE are JSON
+numbers (NaN and ±Infinity become null); DATE is "YYYY-MM-DD"; TIMESTAMP is ISO 8601 with a
+T separator, "YYYY-MM-DDTHH:mm:ss[.sss]", with a Z suffix (UTC) only for the types carrying a
+time zone; BOOLEAN is a boolean; NULL is null.
+"""
+scalar JSON
+
+"""Format de sérialisation des données pour getFactTableWithMetadata"""
+enum DataFormat {
+  """
+  Tableau d'objets [{col: val, ...}] — format par défaut, compatible D3 et DataTable
+  """
+  OBJECTS
+
+  """
+  Tableau de tableaux [[val1, val2, ...]] — plus compact, optimisé pour AG Grid / TanStack
+  """
+  ARRAYS
+}
+
+"""
+Métadonnées d'une colonne de la table des faits — contrat entre la base et l'interface
+"""
+type Metadata {
+  """Nom technique de la colonne"""
+  name: String!
+
+  """Libellé d'affichage (défaut : name)"""
+  label: String!
+
+  """
+  Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) — pilote les opérateurs de filtre et le choix de graphique
+  """
+  sqlType: String!
+
+  """La colonne se filtre par un menu et peut servir de groupBy"""
+  isCategorical: Boolean!
+
+  """
+  La colonne fait partie de la clé logique — coordonnée plutôt que mesure
+  """
+  isPrimaryKey: Boolean!
+
+  """
+  Colonne parente dans une hiérarchie de colonnes (chaîne region → departement → commune)
+  """
+  parentName: String
+
+  """
+  Renseigné sur une colonne de libellés : colonne de code dont elle porte le libellé de chaque valeur (nc8_libelle_fr → nc8)
+  """
+  labelFor: String
+
+  """
+  Colonnes de libellés de cette colonne de code (inverse de labelFor), triées par nom ; vide si elle n'en a pas
+  """
+  labelFields: [String!]!
+
+  """Suffixe d'axe / tooltip (« € », « % », « MW »)"""
+  unit: String
+
+  """Chaîne d3-format (« ,.2f », « .0% »)"""
+  displayFormat: String
+
+  """Famille thématique — regroupement des variables dans les menus"""
+  family: String
+
+  """Aide contextuelle"""
+  description: String
+
+  """
+  Agrégation appliquée par défaut à cette mesure quand la requête n'en précise aucune
+  """
+  defaultAggregation: Aggregation
+
+  """
+  Statistiques de la colonne sur toute la table des faits (bornes de sliders, datepickers, axes). Calculées à la demande, seulement quand ce champ est sélectionné : une requête SQL par colonne. Pour des bornes après filtrage : getFieldStats
+  """
+  stats: FieldStats
+}
+
+"""
+Statistiques d'une colonne de la table des faits, calculées à la demande (jamais lues dans le
+catalogue DuckLake, dont les statistiques par fichier sont larges après DELETE et ignorent
+les lignes inlinées).
+"""
+type FieldStats {
+  """
+  Min de la colonne (nombre ou date ISO), null si colonne vide. Sérialisation du scalaire JSON : entier au-delà de 2^53 en chaîne décimale exacte, DATE en YYYY-MM-DD, TIMESTAMP en ISO 8601. Sur une colonne texte ou booléenne, le min est calculé aussi (ordre lexical ; false < true)
+  """
+  min: JSON
+
+  """Max de la colonne, mêmes formes que min, null si colonne vide"""
+  max: JSON
+
+  """Nombre de valeurs distinctes non NULL"""
+  distinctCount: Int!
+
+  """Nombre de valeurs NULL"""
+  nullCount: Int!
+}
+
+"""
+Informations sur un schéma au sein d'un catalogue (chargement à la demande)
+"""
+type CatalogSchemaInfo {
+  """Nom du schéma DuckLake (ex: 'main', 'staging')"""
+  name: String!
+
+  """Liste des champs et leurs métadonnées (chargé seulement si demandé)"""
+  fields: [Metadata!]!
+
+  """Méta-données du jeu de résultats (chargé seulement si demandé)"""
+  info: DatasetInfo!
+}
+
+"""
+Méta-données d'un jeu de résultats — une ligne de dataset_metadata par schéma
+"""
+type DatasetInfo {
+  """Titre du jeu de résultats"""
+  label: String
+
+  """Sous-titre / description"""
+  description: String
+
+  """Provenance (modèle, pipeline)"""
+  source: String
+
+  """Horodatage ISO 8601 de la dernière écriture réussie"""
+  updatedAt: String!
+
+  """Version du format de schéma de la base"""
+  schemaVersion: Int!
+
+  """
+  Colonnes de tri physique (cluster_by décodé) — ordre de pagination par défaut
+  """
+  clusterBy: [String!]!
+}
+
+"""Informations sur un catalogue DuckLake disponible"""
+type Catalog {
+  """Identifiant du catalogue"""
+  id: String!
+
+  """
+  Schéma utilisé par défaut quand aucun schéma n'est précisé (1er élément de schemas)
+  """
+  defaultSchema: String!
+
+  """
+  Schémas DuckLake hébergés par ce catalogue (1er = schéma par défaut). Le sous-champ fields est chargé à la demande.
+  """
+  schemas: [CatalogSchemaInfo!]!
+}
+
+"""
+Paire (catalogue, schéma) — schema null/absent utilise le schéma par défaut du catalogue
+"""
+input CatalogSchemaInput {
+  """Identifiant du catalogue ciblé"""
+  catalog: String!
+
+  """Nom du schéma ; absent ou null pour utiliser le schéma par défaut"""
+  schema: String
+}
+
+"""Comparaison d'une valeur entre deux catalogues sur une clé commune"""
+type ComparedFact {
+  """Valeur de la clé commune (libellé porté par la colonne de jointure)"""
+  key: String!
+
+  """
+  Libellé de la clé quand la comparaison porte sur un seul champ doté de colonnes de libellés (règle par défaut, COALESCE des deux côtés, même requête) ; null sinon
+  """
+  keyLabel: String
+
+  """Valeur dans le catalogue A"""
+  valueA: Float
+
+  """Valeur dans le catalogue B"""
+  valueB: Float
+
+  """Différence absolue (valueB - valueA)"""
+  delta: Float
+
+  """Différence relative en % ((valueB - valueA) / valueA * 100)"""
+  deltaPercent: Float
+}
+
+"""Résultat paginé pour les comparaisons cross-database"""
+type PaginatedComparedFacts {
+  data: [ComparedFact!]!
+  total: Int!
+  hasNextPage: Boolean!
+  currentPage: Int!
+  totalPages: Int!
+}

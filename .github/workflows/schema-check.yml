@@ -1,0 +1,99 @@
+name: Schema Check
+
+# Guards the GraphQL contract (schema.graphql, versioned at the repository root):
+#   1. the tracked SDL must match src/ (schema:check);
+#   2. it is diffed against the SDL of the last release tag (schema:diff). A breaking
+#      change fails the job unless a commit since that tag carries a conventional
+#      breaking marker (feat!: / fix!: / BREAKING CHANGE) — release-please then bumps
+#      the version accordingly (minor while the API is 0.x).
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  # Needed only to post the diff as a PR comment (skipped silently on fork PRs,
+  # whose token is read-only).
+  pull-requests: write
+
+concurrency:
+  group: schema-check-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history and tags: schema:diff resolves the last release tag and the
+          # breaking-marker scan reads every commit since it.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Check schema.graphql is up to date
+        run: npm run schema:check
+
+      - name: Diff schema against the last release
+        id: diff
+        run: |
+          set +e
+          npm run schema:diff --silent -- --markdown "$RUNNER_TEMP/schema-diff.md" | tee "$RUNNER_TEMP/schema-diff.txt"
+          echo "status=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # Commits since the last tag, not only the PR's own: the diff is cumulative
+      # (it also contains changes already merged and not yet released), so a breaking
+      # change flagged on main must not fail every later PR.
+      - name: Look for a breaking-change marker
+        id: marker
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)
+          range=${tag:+$tag..}HEAD
+          if git log "$range" --format=%B | grep -qE '^[a-z]+(\([^)]*\))?!:|^BREAKING[ -]CHANGE'; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish the diff (summary)
+        if: steps.diff.outputs.status != '0'
+        run: cat "$RUNNER_TEMP/schema-diff.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment the diff on the PR
+        if: steps.diff.outputs.status != '0' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          marker='<!-- schema-diff -->'
+          { echo "$marker"; cat "$RUNNER_TEMP/schema-diff.md"; } > "$RUNNER_TEMP/comment.md"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -F body=@"$RUNNER_TEMP/comment.md"
+          else
+            gh pr comment "$PR" --body-file "$RUNNER_TEMP/comment.md"
+          fi
+
+      - name: Enforce the breaking-change policy
+        if: steps.diff.outputs.status != '0'
+        run: |
+          if [ "${{ steps.marker.outputs.found }}" = "true" ]; then
+            echo "::warning title=Breaking schema change::Breaking changes against the last release, announced by a feat!:/fix!:/BREAKING CHANGE commit. See the job summary."
+          else
+            echo "::error title=Unannounced breaking schema change::Breaking changes against the last release and no commit since that tag carries feat!: / fix!: / BREAKING CHANGE. Mark the commit as breaking, or restore compatibility (@deprecated first — see docs-site/docs/api-versioning.md)."
+            exit 1
+          fi
