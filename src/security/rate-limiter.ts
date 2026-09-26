@@ -54,6 +54,38 @@ interface RateLimitDecision {
   info: RateLimitInfo;
 }
 
+// ─── Identification du client ────────────────────────────────────────────────
+
+/**
+ * Resolves the IP address of the client that issued a request.
+ *
+ * Trusts x-forwarded-for only when the connecting IP is listed in
+ * trustedProxies (or when '*' is listed), preventing IP spoofing by
+ * arbitrary clients. Shared by the rate limiter and the export concurrency
+ * gate, so both identify a client the same way.
+ *
+ * @param req - Incoming HTTP request.
+ * @param trustedProxies - Proxy IPs allowed to forward the client IP.
+ * @returns The client IP, or 'unknown' when the socket exposes none.
+ */
+// Adresse IP du client, x-forwarded-for n'étant lu que derrière un proxy de confiance
+const resolveClientIp = (req: HttpRequest, trustedProxies: ReadonlySet<string>): string => {
+  // Extraction de l'adresse
+  const remoteIp = req.connection?.remoteAddress ?? req.socket?.remoteAddress ?? 'unknown';
+  let ip = req.ip ?? remoteIp;
+
+  // Validation du proxy
+  if (trustedProxies.has(remoteIp) || trustedProxies.has('*')) {
+    const forwarded = req.headers['x-forwarded-for'];
+    if (forwarded) {
+      const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+      ip = raw.split(',')[0].trim();
+    }
+  }
+
+  return ip;
+};
+
 // ─── Classe de limitation de taux ───────────────────────────────────────────
 
 /**
@@ -203,19 +235,7 @@ class RateLimiter {
    * @returns SHA-256 hex hash of "{ip}:{user-agent}".
    */
   private defaultKeyGenerator(req: HttpRequest): string {
-    const remoteIp = req.connection?.remoteAddress ?? req.socket?.remoteAddress ?? 'unknown';
-    let ip = req.ip ?? remoteIp;
-
-    // Lecture de x-forwarded-for uniquement depuis un proxy de confiance
-    const trustedProxies = this.config.trustedProxies;
-    if (trustedProxies.has(remoteIp) || trustedProxies.has('*')) {
-      const forwarded = req.headers['x-forwarded-for'];
-      if (forwarded) {
-        const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-        ip = raw.split(',')[0].trim();
-      }
-    }
-
+    const ip = resolveClientIp(req, this.config.trustedProxies);
     const userAgent = (req.headers['user-agent'] as string | undefined) ?? 'no-user-agent';
 
     return crypto.createHash('sha256').update(`${ip}:${userAgent}`).digest('hex');
@@ -261,5 +281,5 @@ class RateLimiter {
   }
 }
 
-export { RateLimiter };
+export { RateLimiter, resolveClientIp };
 export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo, RateLimitDecision };

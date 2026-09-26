@@ -81,6 +81,28 @@ API:
     SELECT_OPTIONS_LIMIT: ${SELECT_OPTIONS_LIMIT:-50}
 ```
 
+## Export (`GET /api/export`)
+
+Guards of the bulk export endpoint (see [Bulk export](../api-guide/export.md)):
+
+```yaml
+API:
+  EXPORT:
+    MAX_ROWS: ${EXPORT_MAX_ROWS:-5000000}
+    MAX_CONCURRENT_PER_IP: ${EXPORT_MAX_CONCURRENT_PER_IP:-2}
+    MAX_CONCURRENT_TOTAL: ${EXPORT_MAX_CONCURRENT_TOTAL:-2}
+    TIMEOUT_MS: ${EXPORT_TIMEOUT_MS:-120000}
+    TMP_DIR: ${EXPORT_TMP_DIR:-}
+```
+
+| Key                     | Description                                                                                                            |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `MAX_ROWS`              | Row ceiling, applied as a `LIMIT`; a larger `limit` parameter is capped.                                               |
+| `MAX_CONCURRENT_PER_IP` | In-flight exports per client IP (`429` beyond).                                                                        |
+| `MAX_CONCURRENT_TOTAL`  | In-flight exports overall. Keep it below `DATABASE.POOL.MAX_CONNECTIONS` so that GraphQL keeps connections of its own. |
+| `TIMEOUT_MS`            | Maximum export duration: the query is interrupted and the stream ended.                                                |
+| `TMP_DIR`               | Directory of the csv/parquet temporary files; empty = `<system tmp>/dashboard-api-export`.                             |
+
 ## Timeouts (ms)
 
 Per-operation query timeouts:

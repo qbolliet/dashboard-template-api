@@ -17,8 +17,11 @@ A production-ready **GraphQL API template** that connects to one or more [DuckLa
 | ------------------ | --------------------------------------------------------- |
 | **Authentication** | None — fully public                                       |
 | **Operations**     | Read-only (no mutations)                                  |
+| **Bulk export**    | `GET /api/export` — Arrow · CSV · Parquet, no JSON        |
 | **Protection**     | Rate limiting · complexity limits · depth limits          |
 | **Stack**          | Apollo Server 5 · DuckDB · Express 5 · Redis · TypeScript |
+
+Whole datasets are exported over REST rather than paginated through GraphQL: `GET /api/export?catalog=…&schema=…&format=arrow|csv|parquet` streams the fact table with its types preserved. It uses the same filter tree as GraphQL and has its own row ceiling, per-IP concurrency limit and timeout. See the [bulk export guide](https://qbolliet.github.io/dashboard-template-api/api-guide/export).
 
 The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query complexity analysis, and input sanitization protect against abuse.
 
@@ -89,6 +92,7 @@ dashboard-template-api/
 │   │   ├── typedefs/         # GraphQL type definitions
 │   │   └── resolvers/        # Query resolvers
 │   ├── loaders/              # DataLoader implementations
+│   ├── export/               # REST bulk export (Arrow / CSV / Parquet)
 │   ├── security/             # Rate limiter, complexity, sanitization
 │   ├── cache/                # Redis cache helpers
 │   └── utils/                # Config loader, logger, utilities
@@ -119,6 +123,7 @@ The full documentation is published at **https://qbolliet.github.io/dashboard-te
 
 - [Getting started](https://qbolliet.github.io/dashboard-template-api/getting-started/installation) — installation, configuration, running tests
 - [API guide](https://qbolliet.github.io/dashboard-template-api/api-guide/overview) — all queries with parameters and examples
+- [Bulk export](https://qbolliet.github.io/dashboard-template-api/api-guide/export) — `GET /api/export` in Arrow, CSV or Parquet
 - [Configuration reference](https://qbolliet.github.io/dashboard-template-api/configuration/overview) — every YAML key documented
 - [Architecture](https://qbolliet.github.io/dashboard-template-api/architecture/overview) — security layers, caching, data loading
 - [Schema explorer](https://qbolliet.github.io/dashboard-template-api/schema) — interactive GraphQL Voyager

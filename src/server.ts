@@ -24,6 +24,7 @@ import { createDepthLimitRule } from './security/depth-limit.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 import { createCatalogRoutes } from './db/catalog-routes.js';
+import { createExportRoutes } from './export/export-routes.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -426,10 +427,14 @@ async function startServer(): Promise<void> {
 
   // Limitation de taux par IP — montée AVANT le middleware Apollo : une requête
   // refusée ne coûte ni parsing GraphQL, ni resolver, ni accès à la base.
-  // Portée volontairement limitée à /graphql : les sondes /health, /ready et
-  // /metrics ne sont jamais limitées. Le futur /api/export réutilisera la même
-  // fabrique, donc le même budget par client.
+  // Portée volontairement limitée à /graphql et /api/export : les sondes
+  // /health, /ready et /metrics ne sont jamais limitées. Les deux routes
+  // partagent le limiteur du SecurityManager, donc le même budget par client.
   app.use('/graphql', securityManager.createRateLimitMiddleware());
+
+  // Export REST volumineux (arrow/csv/parquet) : rate limiter partagé, puis ses
+  // propres gardes (plafond de lignes, concurrence par IP, timeout)
+  createExportRoutes(app, { rateLimit: securityManager.createRateLimitMiddleware() });
 
   // Application du middleware Apollo via Express
   app.use(

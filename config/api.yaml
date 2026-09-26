@@ -45,6 +45,20 @@ API:
     # à utiliser searchTerm ou maxDepth (aucune troncature silencieuse)
     TREE_MAX_NODES: 5000
 
+  # Export REST volumineux (GET /api/export) — garde-fous propres, hors GraphQL
+  EXPORT:
+    # Plafond de lignes, appliqué par LIMIT dans la requête
+    MAX_ROWS: ${EXPORT_MAX_ROWS:-5000000}
+    # Exports simultanés par IP (429 au-delà)
+    MAX_CONCURRENT_PER_IP: ${EXPORT_MAX_CONCURRENT_PER_IP:-2}
+    # Exports simultanés tous clients confondus : chaque export occupe une
+    # connexion du pool pendant toute sa durée, GraphQL doit garder les autres
+    MAX_CONCURRENT_TOTAL: ${EXPORT_MAX_CONCURRENT_TOTAL:-2}
+    # Durée maximale d'un export (ms) : interruption de la requête puis fin du flux
+    TIMEOUT_MS: ${EXPORT_TIMEOUT_MS:-120000}
+    # Répertoire des fichiers temporaires csv/parquet (vide = <tmp système>/dashboard-api-export)
+    TMP_DIR: ${EXPORT_TMP_DIR:-}
+
   # Query timeouts by operation type (ms)
   TIMEOUTS:
     FACT_SIMPLE: 10000

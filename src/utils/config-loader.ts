@@ -161,6 +161,25 @@ interface SelectOptionsConfig {
   TREE_MAX_NODES: number;
 }
 
+/**
+ * Guards of the REST export endpoint (GET /api/export).
+ *
+ * Values may arrive as strings when overridden by environment variables; the
+ * export module coerces them with Number().
+ */
+interface ExportConfig {
+  /** Hard ceiling on exported rows, applied as a LIMIT. */
+  MAX_ROWS: number | string;
+  /** Concurrent exports allowed per client IP. */
+  MAX_CONCURRENT_PER_IP: number | string;
+  /** Concurrent exports allowed across all clients (each holds a pool connection). */
+  MAX_CONCURRENT_TOTAL: number | string;
+  /** Maximum duration of one export, in milliseconds. */
+  TIMEOUT_MS: number | string;
+  /** Directory of the csv/parquet temporary files; empty uses the system tmp dir. */
+  TMP_DIR?: string;
+}
+
 /** Redis configuration — reconnection back-off strategy. */
 interface CacheRetryStrategyConfig {
   BASE_DELAY: number;
@@ -295,6 +314,7 @@ interface AppConfig {
     LOADERS: LoadersConfig;
     PAGINATION: PaginationConfig;
     SELECT_OPTIONS?: SelectOptionsConfig;
+    EXPORT?: ExportConfig;
   };
   DATABASE: {
     POOL: {
@@ -693,4 +713,5 @@ export type {
   RequestLimitsConfig,
   CompressionConfig,
   GraphqlConfig,
+  ExportConfig,
 };
