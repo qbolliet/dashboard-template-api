@@ -15,9 +15,46 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+# Two static sites, one Pages artifact: "API & Data" at the root of the project site and
+# "Toolbox" under /toolbox/ (see docs-site/docusaurus.config.*.ts and
+# docs-site/scripts/assemble-site.mjs).
+#
+# The data dictionary of the API & Data site is generated from a running API:
+#   - repository variable API_URL set (GraphQL endpoint of the deployed API): that API;
+#   - otherwise: an API started on the test catalogs for the duration of the build
+#     (needs Redis and `npm run test:setup`), so the site always ships a demo dictionary.
+# An unreachable API never fails the build: the generator warns and keeps the previous pages.
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      NODE_ENV: development
+      ENVIRONMENT: development
+      REDIS_HOST: localhost
+      REDIS_PORT: '6379'
+      REDIS_PASSWORD: ''
+      ADMIN_API_KEY: ci-test-key
+      LOG_TO_FILE: 'false'
+      DEFAULT_CATALOG_PATH: /tmp/test.ducklake
+      DEFAULT_DATA_PATH: /tmp/test_data/
+      DEFAULT_READ_ONLY: 'false'
+      DEFAULT_SCHEMAS: '["main"]'
+      DEFAULT_CATALOG: default
+      ALLOWED_CATALOGS: '["default"]'
+      S3_ENABLED: 'false'
+
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -28,30 +65,30 @@ jobs:
           node-version: 20
           cache: npm
 
-      # Install API dependencies (TypeDoc, schema generation)
+      # Install API dependencies (TypeDoc, schema generation, test-API launcher)
       - name: Install API dependencies
         run: npm ci
-
-      # Generate TypeDoc code reference (outputs to docs-site/docs/code-reference/)
-      - name: Generate code reference (TypeDoc)
-        run: npm run docs:typedoc
-
-      # Regenerate schema.graphql from src/ (tsx, no build needed), then derive the
-      # ignored docs artifacts (static/schema.graphql + static/schema.json for Voyager)
-      - name: Generate GraphQL schema and introspection
-        run: npm run docs:schema
 
       - name: Install docs-site dependencies
         working-directory: docs-site
         run: npm ci
 
-      # Generate GraphQL API docs from schema.graphql (outputs to docs-site/graphql-api/)
-      - name: Generate GraphQL API docs
-        run: npm run docs:graphql
+      # Test catalogs, only needed when no deployed API is configured
+      - name: Set up test data
+        if: ${{ vars.API_URL == '' }}
+        run: npm run test:setup
 
-      - name: Build documentation site
-        working-directory: docs-site
-        run: npm run build
+      # TypeDoc + Toolbox site, then SDL + GraphQL reference + data dictionary + API & Data
+      # site, then merge into docs-site/build/site (see the docs:* scripts)
+      - name: Build documentation (deployed API)
+        if: ${{ vars.API_URL != '' }}
+        env:
+          API_URL: ${{ vars.API_URL }}
+        run: npm run docs:build
+
+      - name: Build documentation (test API)
+        if: ${{ vars.API_URL == '' }}
+        run: npm run docs:build:test-api
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v6
@@ -59,7 +96,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5
         with:
-          path: docs-site/build
+          path: docs-site/build/site
 
   deploy:
     environment:

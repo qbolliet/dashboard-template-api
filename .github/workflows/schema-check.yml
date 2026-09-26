@@ -1,7 +1,8 @@
 name: Schema Check
 
 # Guards the GraphQL contract (schema.graphql, versioned at the repository root):
-#   1. the tracked SDL must match src/ (schema:check);
+#   1. the tracked SDL must match src/ (schema:check), and the resolver types generated
+#      from it too (codegen:check);
 #   2. it is diffed against the SDL of the last release tag (schema:diff). A breaking
 #      change fails the job unless a commit since that tag carries a conventional
 #      breaking marker (feat!: / fix!: / BREAKING CHANGE) — release-please then bumps
@@ -45,6 +46,11 @@ jobs:
 
       - name: Check schema.graphql is up to date
         run: npm run schema:check
+
+      # Resolver types generated from the SDL (src/generated/graphql.ts) must be committed
+      # with any typedef change: the Docker build has no codegen step.
+      - name: Check generated resolver types are up to date
+        run: npm run codegen:check
 
       - name: Diff schema against the last release
         id: diff

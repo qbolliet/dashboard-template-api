@@ -27,18 +27,6 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'API Guide',
-      collapsed: false,
-      items: [
-        'api-guide/overview',
-        'api-guide/queries',
-        'api-guide/examples',
-        'api-guide/export',
-        'api-versioning',
-      ],
-    },
-    {
-      type: 'category',
       label: 'Configuration Reference',
       items: [
         'configuration/overview',
@@ -59,6 +47,7 @@ const sidebars: SidebarsConfig = {
         'architecture/data-loading',
       ],
     },
+    'api-versioning',
   ],
 };
 

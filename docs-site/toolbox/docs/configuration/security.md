@@ -13,7 +13,7 @@ Controls all application-level security checks.
 SECURITY:
   RATE_LIMIT:
     MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
-    WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}        # 15 minutes
+    WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000} # 15 minutes
     MAX_BURST_REQUESTS: ${RATE_LIMIT_BURST:-20}
     BURST_WINDOW_MS: ${RATE_LIMIT_BURST_WINDOW:-60000} # 1 minute
     SKIP_FAILED_REQUESTS: false
@@ -22,10 +22,10 @@ SECURITY:
 
 Two independent sliding windows are applied per client IP:
 
-| Window | Default limit | Purpose |
-|--------|---------------|---------|
+| Window    | Default limit    | Purpose               |
+| --------- | ---------------- | --------------------- |
 | Sustained | 100 req / 15 min | Prevent data scraping |
-| Burst | 20 req / 1 min | Prevent sudden spikes |
+| Burst     | 20 req / 1 min   | Prevent sudden spikes |
 
 **`TRUSTED_PROXIES`** — set to `['127.0.0.1']` if a local nginx / Caddy reverse proxy is in front of the API so that the real client IP is read from `x-forwarded-for`.
 
@@ -80,6 +80,7 @@ SECURITY:
 ```
 
 All string inputs are:
+
 1. Truncated to `MAX_STRING_LENGTH`
 2. Stripped of XSS payloads via the `xss` library
 3. Checked for SQL injection patterns

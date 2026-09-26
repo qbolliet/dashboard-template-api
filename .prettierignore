@@ -1,8 +1,11 @@
 dist/
 coverage/
 node_modules/
+src/generated/
 docs-site/build/
-docs-site/code-reference/
+docs-site/toolbox/code-reference/
+docs-site/api/graphql-api/
+docs-site/api/data-dictionary/
 docs-site/.docusaurus/
 docs-site/node_modules/
 helm/dashboard-template-api/charts/

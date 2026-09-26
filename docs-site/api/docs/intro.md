@@ -51,4 +51,13 @@ npm run dev
 
 Open [http://localhost:4000/graphql](http://localhost:4000/graphql) for Apollo Sandbox.
 
-See [Installation](./getting-started/installation) for the full setup guide.
+See [Installation](https://qbolliet.github.io/dashboard-template-api/toolbox/getting-started/installation) in the Toolbox for the full setup guide.
+
+## Where to go next
+
+This documentation is published as two sites:
+
+| Site                                                                      | Content                                                                                                                                                                                                                                                                                                           |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **API & Data** (this site)                                                | [API guide](./api-guide/overview), [bulk export](./api-guide/export), [consuming the API in TypeScript](./typescript-client), the [data dictionary](./data-dictionary) of the served datasets, the generated [GraphQL reference](./graphql-api/graphql-api) and the [Schema Explorer](/schema)                    |
+| [**Toolbox**](https://qbolliet.github.io/dashboard-template-api/toolbox/) | Setup, configuration reference, deployment, architecture, the [versioning policy](https://qbolliet.github.io/dashboard-template-api/toolbox/api-versioning) and the TypeScript [code reference](https://qbolliet.github.io/dashboard-template-api/toolbox/code-reference/) — reusable from one project to another |

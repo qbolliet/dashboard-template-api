@@ -7,7 +7,7 @@
 
 A production-ready **GraphQL API template** that connects to one or more [DuckLake](https://ducklake.select/) databases and exposes their content through a unified, read-only endpoint.
 
-**[Full documentation →](https://qbolliet.github.io/dashboard-template-api/)**
+**[Full documentation →](https://qbolliet.github.io/dashboard-template-api/)** — [API & Data](https://qbolliet.github.io/dashboard-template-api/) (GraphQL reference, export, data dictionary) and [Toolbox](https://qbolliet.github.io/dashboard-template-api/toolbox/) (setup, deployment, architecture, code reference)
 
 ---
 
@@ -76,10 +76,10 @@ helm install api dta/dashboard-template-api -f values.prod.yaml
 
 The full deployment guide — Dockerfile internals, `values.yaml` reference, ingress + TLS, autoscaling, and how to invalidate the Redis cache from an external updater — lives at:
 
-- [Deployment overview](https://qbolliet.github.io/dashboard-template-api/deployment/overview)
-- [Docker](https://qbolliet.github.io/dashboard-template-api/deployment/docker)
-- [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/deployment/kubernetes-helm)
-- [Data refresh](https://qbolliet.github.io/dashboard-template-api/deployment/data-refresh)
+- [Deployment overview](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/overview)
+- [Docker](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/docker)
+- [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/kubernetes-helm)
+- [Data refresh](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/data-refresh)
 
 ---
 
@@ -94,6 +94,7 @@ dashboard-template-api/
 │   ├── schema/
 │   │   ├── typedefs/         # GraphQL type definitions
 │   │   └── resolvers/        # Query resolvers
+│   ├── generated/            # Resolver types generated from schema.graphql (codegen)
 │   ├── loaders/              # DataLoader implementations
 │   ├── export/               # REST bulk export (Arrow / CSV / Parquet)
 │   ├── security/             # Rate limiter, complexity, sanitization
@@ -110,7 +111,9 @@ dashboard-template-api/
 │   ├── setup/                # Jest setup and DI container
 │   ├── unit/                 # Unit tests mirroring src/
 │   └── integration/          # End-to-end GraphQL tests
-├── docs-site/                # Docusaurus documentation site
+├── docs-site/                # Docusaurus docs: API & Data site + Toolbox site
+├── codegen.ts                # GraphQL Code Generator config (src/generated/)
+├── schema.graphql            # Versioned GraphQL SDL (the API contract)
 ├── scripts/                  # Database update handler
 ├── docs/                     # Additional operational docs
 ├── helm/                     # Helm chart for Kubernetes deployment
@@ -122,21 +125,30 @@ dashboard-template-api/
 
 ## Documentation
 
-The full documentation is published at **https://qbolliet.github.io/dashboard-template-api/** and covers:
+The documentation is published as two sites at **https://qbolliet.github.io/dashboard-template-api/**:
 
-- [Getting started](https://qbolliet.github.io/dashboard-template-api/getting-started/installation) — installation, configuration, running tests
+**API & Data** (root) — specific to a deployment:
+
 - [API guide](https://qbolliet.github.io/dashboard-template-api/api-guide/overview) — all queries with parameters and examples
 - [Bulk export](https://qbolliet.github.io/dashboard-template-api/api-guide/export) — `GET /api/export` in Arrow, CSV or Parquet
-- [Configuration reference](https://qbolliet.github.io/dashboard-template-api/configuration/overview) — every YAML key documented
-- [Architecture](https://qbolliet.github.io/dashboard-template-api/architecture/overview) — security layers, caching, data loading
-- [Schema explorer](https://qbolliet.github.io/dashboard-template-api/schema) — interactive GraphQL Voyager
+- [Consuming the API in TypeScript](https://qbolliet.github.io/dashboard-template-api/typescript-client) — GraphQL Code Generator setup for clients
+- [Data dictionary](https://qbolliet.github.io/dashboard-template-api/data-dictionary) — columns, labels and hierarchies of every served dataset (generated from the API)
+- [GraphQL reference](https://qbolliet.github.io/dashboard-template-api/graphql-api/graphql-api) and [Schema explorer](https://qbolliet.github.io/dashboard-template-api/schema) — interactive GraphQL Voyager
 
-To build the docs locally:
+**Toolbox** ([`/toolbox/`](https://qbolliet.github.io/dashboard-template-api/toolbox/)) — reusable from one project to another:
+
+- [Getting started](https://qbolliet.github.io/dashboard-template-api/toolbox/getting-started/installation) — installation, configuration, running tests
+- [Configuration reference](https://qbolliet.github.io/dashboard-template-api/toolbox/configuration/overview) — every YAML key documented
+- [Architecture](https://qbolliet.github.io/dashboard-template-api/toolbox/architecture/overview) — security layers, caching, data loading
+- [API versioning](https://qbolliet.github.io/dashboard-template-api/toolbox/api-versioning) and [code reference](https://qbolliet.github.io/dashboard-template-api/toolbox/code-reference/)
+
+To build the docs locally (see [Building the documentation](https://qbolliet.github.io/dashboard-template-api/toolbox/getting-started/building-the-docs)):
 
 ```bash
-npm run build                                    # compile TypeScript first
-node docs-site/scripts/generate-schema.mjs      # generate schema.json for Voyager
-cd docs-site && npm install && npm run start
+npm install && npm --prefix docs-site install
+npm run test:setup                # test catalogs, for the data dictionary
+npm run docs:build:test-api       # both sites, dictionary from the test API → docs-site/build/site/
+npm --prefix docs-site run serve
 ```
 
 ---

@@ -23,8 +23,8 @@ In production the default level is `warn`. Set `LOG_LEVEL=info` or `LOG_LEVEL=de
 ```yaml
 LOGGING:
   FORMAT:
-    development: simple    # human-readable with colors
-    production: json       # structured JSON for log aggregators
+    development: simple # human-readable with colors
+    production: json # structured JSON for log aggregators
 ```
 
 ## Transports

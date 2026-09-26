@@ -20,10 +20,10 @@ Applied by Express before any GraphQL processing:
 
 Two sliding-window counters are maintained in Redis per client IP:
 
-| Window | Purpose |
-|--------|---------|
+| Window             | Purpose                                    |
+| ------------------ | ------------------------------------------ |
 | Sustained (15 min) | Prevents data scraping and bulk harvesting |
-| Burst (1 min) | Prevents sudden request spikes |
+| Burst (1 min)      | Prevents sudden request spikes             |
 
 When either limit is exceeded the request is rejected with HTTP `429` before it reaches GraphQL.
 
@@ -65,6 +65,7 @@ Validates structured filter arguments against the regex rules defined in `config
 ## Layer 6 — Field-level middleware
 
 Registered as an Apollo Server plugin, the field middleware:
+
 - Records per-field execution time
 - Logs slow resolvers
 - Enforces per-field access rules (extensible for future per-field authorization)

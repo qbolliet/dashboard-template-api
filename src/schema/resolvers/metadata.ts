@@ -2,16 +2,7 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { attachScope, contextScope } from './scope.js';
-import type { GraphQLContext } from './types.js';
-
-// ─── Interfaces des arguments ─────────────────────────────────────────────────
-
-/** Arguments for the getMetaData query. */
-export interface MetadataArgs {
-  name: string;
-  catalog?: string | null;
-  schema?: string | null;
-}
+import type { QueryResolvers } from '../../generated/graphql.js';
 
 // Construction d'un resolver pour les méta-données
 /**
@@ -20,22 +11,18 @@ export interface MetadataArgs {
  * Handles the retrieval of metadata information from the database
  * using the per-request DataLoader for batching and caching.
  */
-const metadataResolvers = {
+const metadataResolvers: { Query: Pick<QueryResolvers, 'getMetaData'> } = {
   Query: {
     /**
      * Fetches metadata for a given field name.
-     * Arguments follow {@link MetadataArgs}.
+     * Arguments follow the generated `QueryGetMetaDataArgs`.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param context - GraphQL context with loaders.
      * @returns Metadata row for the requested field (carrying its catalog and
      *   schema for the lazy `stats` field), or null if not found.
      */
-    getMetaData: async (
-      _: unknown,
-      { name, catalog, schema }: MetadataArgs,
-      context: GraphQLContext,
-    ) => {
+    getMetaData: async (_, { name, catalog, schema }, context) => {
       // Sélection du loader adapté au catalogue/schéma cible
       const targetLoaders = context.getLoadersForCatalog(catalog, schema);
       const loader = targetLoaders ? targetLoaders.metadata : context.loaders.metadata;

@@ -15,12 +15,7 @@ If you are seeing this placeholder it means the generator has not run yet.
 To populate the section, from the repository root:
 
 ```bash
-npm run build && npm run docs:schema
-cd docs-site && npm run build
+npm run docs:schema && npm run docs:graphql
 ```
 
-Or run the docusaurus generator manually:
-
-```bash
-cd docs-site && npx docusaurus graphql-to-doc
-```
+or build the whole "API & Data" site (`npm run docs:build:api`).

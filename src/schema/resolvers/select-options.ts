@@ -3,30 +3,8 @@ import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
-import type { GraphQLContext } from './types.js';
 import type { SelectOptionNode } from '../../loaders/select-options.js';
-
-// ─── Interfaces des arguments ─────────────────────────────────────────────────
-
-/** Arguments for the getSelectOptions query. */
-export interface SelectOptionsArgs {
-  fieldName: string;
-  limit?: number;
-  searchTerm?: string;
-  /** Label column of fieldName to render; absent, the default rule applies. */
-  labelField?: string | null;
-  catalog?: string | null;
-  schema?: string | null;
-}
-
-/** Arguments for the getSelectOptionsTree query. */
-export interface SelectOptionsTreeArgs {
-  fieldName: string;
-  maxDepth?: number | null;
-  searchTerm?: string | null;
-  catalog?: string | null;
-  schema?: string | null;
-}
+import type { QueryResolvers } from '../../generated/graphql.js';
 
 // Resolver pour la sélection des options
 /**
@@ -36,11 +14,13 @@ export interface SelectOptionsTreeArgs {
  * nested option trees of column hierarchies, both with optional
  * case-insensitive search via searchTerm.
  */
-const selectOptionsResolvers = {
+const selectOptionsResolvers: {
+  Query: Pick<QueryResolvers, 'getSelectOptions' | 'getSelectOptionsTree'>;
+} = {
   Query: {
     /**
      * Fetches available options for a single field.
-     * Arguments follow {@link SelectOptionsArgs}.
+     * Arguments follow the generated `QueryGetSelectOptionsArgs`.
      *
      * The effective label column is resolved here, by resolveLabelField on the
      * metadata of the field (read with its label columns): it is then part of
@@ -59,8 +39,8 @@ const selectOptionsResolvers = {
         labelField = null,
         catalog,
         schema,
-      }: SelectOptionsArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
+      },
+      { loaders, getLoadersForCatalog },
     ) => {
       // Sélection des loaders adaptés au catalogue/schéma cible
       const activeLoaders = getLoadersForCatalog(catalog, schema) ?? loaders;
@@ -89,15 +69,15 @@ const selectOptionsResolvers = {
 
     /**
      * Fetches the nested option tree of a column hierarchy.
-     * Arguments follow {@link SelectOptionsTreeArgs}.
+     * Arguments follow the generated `QueryGetSelectOptionsTreeArgs`.
      *
      * @param _ - Parent resolver result (unused at root).
      * @returns Forest of `{ value, label, children? }` nodes.
      */
     getSelectOptionsTree: async (
       _: unknown,
-      { fieldName, maxDepth = null, searchTerm = null, catalog, schema }: SelectOptionsTreeArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
+      { fieldName, maxDepth = null, searchTerm = null, catalog, schema },
+      { loaders, getLoadersForCatalog },
     ): Promise<SelectOptionNode[]> => {
       // Sélection du loader adapté au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(catalog, schema);

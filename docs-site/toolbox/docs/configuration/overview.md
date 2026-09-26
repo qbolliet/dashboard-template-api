@@ -9,13 +9,13 @@ All configuration files live in `config/` and are loaded and deep-merged by `src
 
 ## Files
 
-| File | Covers |
-|------|--------|
-| [`config/api.yaml`](./api) | Port, CORS, pagination limits, timeouts, data loaders |
-| [`config/database.yaml`](./database) | DuckLake catalog paths, connection pool, S3 |
+| File                                 | Covers                                                |
+| ------------------------------------ | ----------------------------------------------------- |
+| [`config/api.yaml`](./api)           | Port, CORS, pagination limits, timeouts, data loaders |
+| [`config/database.yaml`](./database) | DuckLake catalog paths, connection pool, S3           |
 | [`config/security.yaml`](./security) | Rate limiting, complexity, depth limits, sanitization |
-| [`config/cache.yaml`](./cache) | Redis connection, TTL values, cache invalidation |
-| [`config/logging.yaml`](./logging) | Log levels, transports, sampling, sanitized fields |
+| [`config/cache.yaml`](./cache)       | Redis connection, TTL values, cache invalidation      |
+| [`config/logging.yaml`](./logging)   | Log levels, transports, sampling, sanitized fields    |
 
 `config/security-patterns.yaml` holds the regex patterns used by `src/security/pattern-validator.ts` for input validation and is not documented here as it rarely needs modification.
 

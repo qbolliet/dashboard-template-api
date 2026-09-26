@@ -7,6 +7,7 @@ import { fieldResolvers } from './field-resolvers.js';
 import { catalogResolvers } from './catalog.js';
 import { fieldStatsResolvers } from './field-stats.js';
 import { crossDatabaseResolvers } from './cross-database.js';
+import { JSONScalar } from '../scalars.js';
 
 // Combinaison des différents resolvers
 /**
@@ -25,6 +26,8 @@ const resolvers = {
     ...fieldStatsResolvers.Query,
     ...crossDatabaseResolvers.Query,
   },
+  // Scalaire JSON
+  JSON: JSONScalar,
   // Field resolvers : partition clés/mesures de Fact + cascade lazy sur CatalogSchemaInfo
   ...fieldResolvers,
   DatasetWithMetadata: factResolvers.DatasetWithMetadata,

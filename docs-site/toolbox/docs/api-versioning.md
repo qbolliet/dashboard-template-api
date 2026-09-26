@@ -23,14 +23,23 @@ releases.
 | `npm run schema:diff`     | Diffs `schema.graphql` against the SDL of the last release tag: breaking / dangerous / non-breaking. Exit code 1 on a breaking change. |
 
 **Any change to `src/schema/typedefs/` must ship with the regenerated
-`schema.graphql`.** Commit both together.
+`schema.graphql` and the resolver types generated from it.** Commit them together.
+
+| Command                 | Purpose                                                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run codegen`       | Rewrites `src/generated/graphql.ts` (resolver types, [GraphQL Code Generator](https://the-guild.dev/graphql/codegen)) from `schema.graphql`. |
+| `npm run codegen:check` | Regenerates, then fails if `src/generated/graphql.ts` differs from what is committed. Run by CI next to `schema:check`.                      |
+
+`src/generated/graphql.ts` is committed because the Docker build has no codegen step.
+Clients generate their own types from the same SDL: see
+[Consuming the API in TypeScript](https://qbolliet.github.io/dashboard-template-api/typescript-client).
 
 Every GitHub Release carries `schema.graphql` and `schema.json` (introspection) as
 assets.
 
 :::note
 `docs-site/static/schema.graphql` and `schema.json` are a different thing: ignored
-build artifacts of this documentation site, derived from the root `schema.graphql` by
+build artifacts of the API & Data documentation site, derived from the root `schema.graphql` by
 `npm run docs:schema`. Never commit them.
 :::
 
@@ -91,7 +100,8 @@ BREAKING CHANGE: use `after` instead of `offset`.
 The `Schema Check` workflow runs on every pull request:
 
 1. `npm run schema:check` — `schema.graphql` is up to date.
-2. `npm run schema:diff` — the diff against the last release tag.
+2. `npm run codegen:check` — `src/generated/graphql.ts` is up to date with it.
+3. `npm run schema:diff` — the diff against the last release tag.
 
 A breaking change **fails the job**, unless a commit since that tag carries a breaking
 marker (`feat!:`, `fix!:` or a `BREAKING CHANGE` footer). In that case the diff is

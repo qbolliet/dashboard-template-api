@@ -33,8 +33,8 @@ query {
   getCatalogSchema(catalog: "macroeconomics") {
     name
     label
-    sql_type
-    is_categorical
+    sqlType
+    isCategorical
   }
 }
 ```
@@ -58,8 +58,8 @@ query {
       fields {
         name
         label
-        sql_type
-        is_categorical
+        sqlType
+        isCategorical
       }
     }
   }
@@ -75,8 +75,8 @@ query {
   getCatalogSchema(catalog: "default", schema: "staging") {
     name
     label
-    is_categorical
-    sql_type
+    isCategorical
+    sqlType
   }
 }
 ```
@@ -98,8 +98,8 @@ query {
   getMetaData(name: "gdp_growth", catalog: "macroeconomics", schema: "staging") {
     name
     label
-    sql_type
-    is_categorical
+    sqlType
+    isCategorical
   }
 }
 ```
@@ -128,7 +128,14 @@ query {
   ) {
     total
     data {
-      value
+      keys {
+        name
+        value
+      }
+      measures {
+        name
+        value
+      }
     }
   }
 }
@@ -140,6 +147,7 @@ query {
 query {
   getAggregatedFacts(
     groupBy: "country"
+    measure: "gdp_growth"
     aggregation: AVG
     limit: 20
     catalog: "macroeconomics"
@@ -171,7 +179,9 @@ query {
 ## Browse the modalities of a column
 
 The fact table stores labels, so a menu is a `SELECT DISTINCT` over the
-column and `label` always equals `value`.
+column and `label` equals `value` — except on a code column that has label
+columns (`Metadata.labelFields`), where `value` is the code and `label` its
+label (see [Codes and labels](./queries)).
 
 ```graphql
 query {
@@ -259,6 +269,7 @@ query {
 query {
   getAggregatedFacts(
     groupBy: "country"
+    measure: "gdp_growth"
     aggregation: AVG
     structuredFilters: {
       children: [{ criterion: { variable: "year", operation: GTE, value: 2010 } }]
@@ -280,6 +291,7 @@ query {
 query {
   getAggregatedFactsWithMetadata(
     groupBy: "country"
+    measure: "gdp_growth"
     aggregation: SUM
     limit: 50
     catalog: "public_finance"
@@ -311,9 +323,9 @@ query {
   getMetaData(name: "gdp_growth", catalog: "macroeconomics") {
     name
     label
-    sql_type
-    is_categorical
-    is_primary_key
+    sqlType
+    isCategorical
+    isPrimaryKey
   }
 }
 ```

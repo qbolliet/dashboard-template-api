@@ -1,9 +1,9 @@
 {
   "entryPoints": ["src"],
   "entryPointStrategy": "expand",
-  "exclude": ["src/index.ts"],
+  "exclude": ["src/index.ts", "src/generated/**"],
   "tsconfig": "tsconfig.json",
-  "out": "docs-site/code-reference",
+  "out": "docs-site/toolbox/code-reference",
   "plugin": ["typedoc-plugin-markdown"],
   "readme": "none",
   "hideGenerator": true,

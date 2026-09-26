@@ -83,7 +83,7 @@ API:
 
 ## Export (`GET /api/export`)
 
-Guards of the bulk export endpoint (see [Bulk export](../api-guide/export.md)):
+Guards of the bulk export endpoint (see [Bulk export](https://qbolliet.github.io/dashboard-template-api/api-guide/export)):
 
 ```yaml
 API:

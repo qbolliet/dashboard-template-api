@@ -52,7 +52,7 @@ The API can serve multiple DuckLake catalogs simultaneously. The active catalog 
 
 When neither is provided, the `DEFAULT_CATALOG` is used (configurable in `config/database.yaml`).
 
-Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two explicit catalog IDs (and optional per-side schemas) and execute against both in a single request. They resolve categorical IDs to dim\_\* labels before joining, so a match is on the modality, never the raw ID.
+Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two explicit catalog IDs (and optional per-side schemas) and execute against both in a single request. The fact table stores labels directly, so they join on the columns themselves (cast to `VARCHAR` to absorb a type difference between catalogs): a match is on the label.
 
 ## HTTP cache headers
 
