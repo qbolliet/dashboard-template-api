@@ -49,7 +49,17 @@ interface RateLimitConfig {
   MAX_BURST_REQUESTS: number;
   BURST_WINDOW_MS: number;
   SKIP_FAILED_REQUESTS: boolean;
-  TRUSTED_PROXIES: string[];
+  /** YAML list, or JSON-array / comma-separated string from an env override. */
+  TRUSTED_PROXIES: string[] | string;
+}
+
+/** Strict rate limiter of the admin endpoints (/api/cache/*, /api/catalog/*). */
+interface AdminRateLimitConfig {
+  ENABLED?: boolean;
+  MAX_REQUESTS?: number;
+  WINDOW_MS?: number;
+  MAX_BURST_REQUESTS?: number;
+  BURST_WINDOW_MS?: number;
 }
 
 /** Query complexity analysis configuration. */
@@ -81,6 +91,7 @@ interface FilterTreeConfig {
 interface SecurityConfig {
   MAX_QUERY_DEPTH: number;
   RATE_LIMIT: RateLimitConfig;
+  ADMIN_RATE_LIMIT?: AdminRateLimitConfig;
   COMPLEXITY: ComplexityConfig;
   MONITORING: SecurityMonitoringConfig;
   FILTER_TREE?: FilterTreeConfig;
@@ -707,6 +718,7 @@ export type {
   SecurityPatternEntry,
   SecurityThresholdsConfig,
   RateLimitConfig,
+  AdminRateLimitConfig,
   ComplexityConfig,
   SecurityMonitoringConfig,
   CorsConfig,

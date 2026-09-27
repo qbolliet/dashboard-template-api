@@ -4,7 +4,7 @@
 
 import { describe, test, expect } from '@jest/globals';
 import { ExportConcurrencyGate } from '../../../src/export/concurrency-gate.js';
-import { resolveClientIp } from '../../../src/security/rate-limiter.js';
+import { clientIp } from '../../../src/security/rate-limiter.js';
 
 describe('ExportConcurrencyGate', () => {
   test('refuses a client beyond its ceiling, other clients unaffected', () => {
@@ -41,19 +41,20 @@ describe('ExportConcurrencyGate', () => {
   });
 });
 
-describe('resolveClientIp (key of the gate)', () => {
-  const viaProxy = {
-    socket: { remoteAddress: '10.0.0.1' },
-    headers: { 'x-forwarded-for': '203.0.113.9, 10.0.0.1', 'user-agent': 'a' },
-  };
-
-  test('reads x-forwarded-for only behind a trusted proxy', () => {
-    expect(resolveClientIp(viaProxy, new Set(['10.0.0.1']))).toBe('203.0.113.9');
-    expect(resolveClientIp(viaProxy, new Set())).toBe('10.0.0.1');
+// Résolution de x-forwarded-for couverte par tests/integration/rate-limit.test.ts
+// (trust proxy réel d'Express) : clientIp ne fait que lire req.ip
+describe('clientIp (key of the gate)', () => {
+  test('uses req.ip as computed by Express, whatever x-forwarded-for says', () => {
+    const req = {
+      ip: '203.0.113.9',
+      socket: { remoteAddress: '10.0.0.1' },
+      headers: { 'x-forwarded-for': '6.6.6.6', 'user-agent': 'a' },
+    };
+    expect(clientIp(req)).toBe('203.0.113.9');
   });
 
-  test('ignores the User-Agent: one IP, one key', () => {
-    const other = { ...viaProxy, headers: { ...viaProxy.headers, 'user-agent': 'b' } };
-    expect(resolveClientIp(other, new Set())).toBe(resolveClientIp(viaProxy, new Set()));
+  test('falls back to the socket address, then to "unknown"', () => {
+    expect(clientIp({ socket: { remoteAddress: '10.0.0.1' }, headers: {} })).toBe('10.0.0.1');
+    expect(clientIp({ headers: {} })).toBe('unknown');
   });
 });

@@ -20,14 +20,56 @@ SECURITY:
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
 ```
 
-Two independent sliding windows are applied per client IP:
+Two independent sliding windows are applied per client IP on `/graphql` and `/api/export` (one shared budget):
 
 | Window    | Default limit    | Purpose               |
 | --------- | ---------------- | --------------------- |
 | Sustained | 100 req / 15 min | Prevent data scraping |
 | Burst     | 20 req / 1 min   | Prevent sudden spikes |
 
-**`TRUSTED_PROXIES`** — set to `['127.0.0.1']` if a local nginx / Caddy reverse proxy is in front of the API so that the real client IP is read from `x-forwarded-for`.
+The client is identified by **its IP alone**. The User-Agent is not part of the key, so rotating it does not reset the budget. The flip side is that clients behind the same NAT share one budget.
+
+### Trusted proxies (`TRUSTED_PROXIES`)
+
+`TRUSTED_PROXIES` is the single source of Express's [`trust proxy`](https://expressjs.com/en/guide/behind-proxies.html) setting. It is applied before any middleware, and `req.ip` is the client identity used by the rate limiters and by the export concurrency gate. Express walks `x-forwarded-for` from right to left, skips the trusted hops and keeps the **rightmost untrusted address**. Addresses a client prepends to the header are never used.
+
+Accepted forms:
+
+- a YAML list (`['127.0.0.1']`);
+- the JSON string of an environment override (`TRUSTED_PROXIES='["10.0.0.0/8"]'`);
+- a comma-separated string (`TRUSTED_PROXIES=10.0.0.0/8,127.0.0.1`).
+
+Each entry is an IP, a CIDR block (`10.0.0.0/8`, `fc00::/7`) or a named range (`loopback`, `linklocal`, `uniquelocal`). `'*'` trusts every hop. It is not recommended, because any client reaching the API directly could then choose its IP. **An invalid entry stops the server at startup** rather than being silently ignored.
+
+| Deployment                      | Expected value                                                              |
+| ------------------------------- | --------------------------------------------------------------------------- |
+| API exposed directly            | `[]` (default): `x-forwarded-for` is ignored                                |
+| Local nginx / Caddy on the host | `['127.0.0.1']` or `['loopback']`                                           |
+| Kubernetes, behind the ingress  | CIDR of the ingress controller pods, e.g. `'["10.0.0.0/8"]'` (Helm default) |
+
+Behind the ingress, the TCP peer of the API is an ingress controller pod. It must be covered by the list, or every client is counted under that pod's IP. Narrow the CIDR to the pod network of your cluster when you can. If the ingress controller itself sits behind a load balancer, `x-forwarded-for` must carry the real client IP up to that point (for ingress-nginx: `use-forwarded-headers` / `compute-full-forwarded-for`), and the load balancer addresses must be trusted as well.
+
+### Per-pod counters
+
+Counters are kept **in memory, per process**. With `N` replicas, a client spread across pods by the load balancer can send up to `N ×` the configured limit, and a pod restart resets its counters. A Redis-backed shared store is a possible future evolution; it is not implemented.
+
+## Admin endpoints
+
+`/api/cache/*` and `/api/catalog/*` require the `x-admin-key` header, which must match `ADMIN_API_KEY`. When the variable is not set, these routes answer 503. The key is compared in constant time (`crypto.timingSafeEqual` on SHA-256 digests), and a repeated header is rejected.
+
+These routes are behind a dedicated, strict limiter with a budget separate from the public one. It is mounted **before** the key check, so every attempt counts, including rejected keys:
+
+```yaml
+SECURITY:
+  ADMIN_RATE_LIMIT:
+    ENABLED: ${ADMIN_RATE_LIMIT_ENABLED:-true}
+    MAX_REQUESTS: 10 # per IP and per minute
+    WINDOW_MS: 60000
+    MAX_BURST_REQUESTS: 10
+    BURST_WINDOW_MS: 60000
+```
+
+The 11th request from one IP within a minute gets a `429` with `Retry-After`. The nightly data update (`/api/catalog/reload` then `/api/cache/invalidate-all`) fits well within this budget. Raise it if you script many per-catalog reloads in a row. The counters are per pod, as for the public limiter.
 
 ## Query complexity
 

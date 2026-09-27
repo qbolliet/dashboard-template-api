@@ -77,11 +77,13 @@ interface MockRequest {
 interface SecurityManagerTest {
   config: Record<string, unknown>;
   rateLimiter: { checkLimit: jest.Mock | ((req: unknown) => Promise<unknown>) };
+  adminRateLimiter: { cleanupInterval: unknown };
   complexityAnalyzer: {
     calculateForOperation: jest.Mock | ((op: unknown, fr?: unknown, va?: unknown) => number);
   };
   patternValidator: { validateQuery: jest.Mock | ((query: unknown) => Promise<void>) };
   createRateLimitMiddleware: () => (req: unknown, res: unknown, next: unknown) => void;
+  createAdminRateLimitMiddleware: () => (req: unknown, res: unknown, next: unknown) => void;
   validateRequest: (op: MockOperation, req: MockRequest, ctx: MockContext) => Promise<void>;
   validateComplexity: (
     document: DocumentNode,
@@ -226,6 +228,8 @@ describe('SecurityManager', () => {
 
     test('creates sub-modules of the correct classes', () => {
       expect(securityManager.rateLimiter).toBeInstanceOf(RateLimiter);
+      expect(securityManager.adminRateLimiter).toBeInstanceOf(RateLimiter);
+      expect(securityManager.adminRateLimiter).not.toBe(securityManager.rateLimiter);
       expect(securityManager.complexityAnalyzer).toBeInstanceOf(QueryComplexityAnalyzer);
       expect(securityManager.patternValidator).toBeInstanceOf(PatternValidator);
     });
@@ -236,6 +240,27 @@ describe('SecurityManager', () => {
       const middleware = securityManager.createRateLimitMiddleware();
       expect(typeof middleware).toBe('function');
       expect(middleware.length).toBe(3);
+    });
+  });
+
+  describe('createAdminRateLimitMiddleware', () => {
+    test('applies the 10 req/min default budget when ADMIN_RATE_LIMIT is absent', async () => {
+      const middleware = securityManager.createAdminRateLimitMiddleware();
+      const req = { ip: '127.0.0.1', headers: {} };
+      const res = { set: jest.fn(), status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+
+      for (let i = 0; i < 11; i++) {
+        middleware(req, res, next);
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      expect(next).toHaveBeenCalledTimes(10);
+      expect(res.status).toHaveBeenCalledWith(429);
+    });
+
+    test('cleanup also stops the admin limiter', async () => {
+      await securityManager.cleanup();
+      expect(securityManager.adminRateLimiter.cleanupInterval).toBeNull();
     });
   });
 

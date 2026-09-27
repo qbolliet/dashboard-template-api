@@ -20,7 +20,7 @@ import type { LoadersCollection } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeAllConnections, databaseManager } from './db/index.js';
 import { redis } from './cache/index.js';
-import { initializeSecurityManager } from './security/index.js';
+import { initializeSecurityManager, configuredTrustProxy } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
 import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
@@ -295,6 +295,11 @@ async function createContext({
 async function startServer(): Promise<void> {
   const app = express();
 
+  // Proxys de confiance, réglés avant tout middleware : req.ip est l'adresse
+  // la plus à droite de x-forwarded-for qui n'est pas un proxy de confiance
+  // (identité unique du client pour les limiteurs et l'export)
+  app.set('trust proxy', configuredTrustProxy());
+
   // En-têtes de sécurité et configuration CORS
   app.use((req: Request, res: Response, next: NextFunction): void => {
     // Détermination des origines autorisées selon l'environnement
@@ -352,6 +357,13 @@ async function startServer(): Promise<void> {
     }
     next();
   });
+
+  // Création du gestionnaire de sécurité
+  const securityManager = initializeSecurityManager(config.SECURITY);
+
+  // Limitation stricte des routes d'administration, avant la vérification de la
+  // clé : chaque tentative compte, ce qui borne la recherche de x-admin-key
+  app.use(['/api/cache', '/api/catalog'], securityManager.createAdminRateLimitMiddleware());
 
   // Configuration des routes d'invalidation de cache
   createCacheInvalidationRoutes(app);
@@ -432,9 +444,6 @@ async function startServer(): Promise<void> {
       memory: process.memoryUsage(),
     });
   });
-
-  // Création du gestionnaire de sécurité
-  const securityManager = initializeSecurityManager(config.SECURITY);
 
   // Création du serveur Apollo
   const server = createApolloServer(securityManager, metrics);

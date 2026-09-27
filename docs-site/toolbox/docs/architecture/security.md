@@ -18,7 +18,7 @@ Applied by Express before any GraphQL processing:
 
 ## Layer 2 — Rate limiter (`src/security/rate-limiter.ts`)
 
-Two sliding-window counters are maintained in Redis per client IP:
+Two sliding-window counters are kept in memory (per pod) for each client IP:
 
 | Window             | Purpose                                    |
 | ------------------ | ------------------------------------------ |
@@ -27,7 +27,7 @@ Two sliding-window counters are maintained in Redis per client IP:
 
 When either limit is exceeded the request is rejected with HTTP `429` before it reaches GraphQL.
 
-If the API runs behind a reverse proxy, configure `TRUSTED_PROXIES` so that the real IP is read from `x-forwarded-for` rather than the proxy IP.
+If the API runs behind a reverse proxy, configure `TRUSTED_PROXIES` (IPs or CIDR blocks, fed to Express's `trust proxy`) so that the real IP is read from `x-forwarded-for` rather than the proxy IP. The admin routes (`/api/cache/*`, `/api/catalog/*`) have their own strict limiter (`ADMIN_RATE_LIMIT`, 10 req/min/IP). See [security.yaml](../configuration/security.md#trusted-proxies-trusted_proxies).
 
 ## Layer 3 — GraphQL validation rules
 

@@ -22,7 +22,7 @@ interface MockLogger {
 /** Requête HTTP minimale utilisée dans les tests du rate limiter. */
 interface MockRequest {
   ip?: string;
-  connection?: { remoteAddress?: string };
+  socket?: { remoteAddress?: string };
   headers: Record<string, string>;
 }
 
@@ -229,55 +229,29 @@ describe('RateLimiter', () => {
       expect(key.length).toBeGreaterThan(0);
     });
 
-    test('uses x-forwarded-for only for trusted proxies', () => {
-      const trustedLimiter = new RateLimiter({
-        MAX_REQUESTS: 10,
-        WINDOW_MS: 60000,
-        MAX_BURST_REQUESTS: 5,
-        BURST_WINDOW_MS: 60000,
-        TRUSTED_PROXIES: ['10.0.0.1'],
-      }) as unknown as RateLimiterTest;
-
-      // Requête via proxy de confiance — utilisation de x-forwarded-for
-      const reqFromProxy = {
-        ip: '10.0.0.1',
-        connection: { remoteAddress: '10.0.0.1' },
-        headers: { 'user-agent': 'test', 'x-forwarded-for': '203.0.113.1' },
-      };
-      // Requête via proxy non approuvé — x-forwarded-for ignoré
-      const reqNonTrusted = {
-        ip: '8.8.8.8',
-        connection: { remoteAddress: '8.8.8.8' },
-        headers: { 'user-agent': 'test', 'x-forwarded-for': '203.0.113.1' },
-      };
-      const trustedKey = trustedLimiter.defaultKeyGenerator(reqFromProxy);
-      const untrustedKey = trustedLimiter.defaultKeyGenerator(reqNonTrusted);
-      expect(trustedKey).not.toBe(untrustedKey);
-      trustedLimiter.stop();
+    test('ignores the User-Agent: one IP, one key', () => {
+      const req1: MockRequest = { ip: '192.168.1.1', headers: { 'user-agent': 'browser-a' } };
+      const req2: MockRequest = { ip: '192.168.1.1', headers: { 'user-agent': 'browser-b' } };
+      expect(rateLimiter.defaultKeyGenerator(req1)).toBe(rateLimiter.defaultKeyGenerator(req2));
     });
 
-    test('ignores x-forwarded-for for untrusted IPs', () => {
-      const limiter = new RateLimiter({
-        MAX_REQUESTS: 10,
-        WINDOW_MS: 60000,
-        MAX_BURST_REQUESTS: 5,
-        BURST_WINDOW_MS: 60000,
-        TRUSTED_PROXIES: [],
-      }) as unknown as RateLimiterTest;
+    test('keys on req.ip and never reads x-forwarded-for itself', () => {
+      // La résolution de x-forwarded-for relève d'Express (trust proxy)
+      const forged: MockRequest = {
+        ip: '8.8.8.8',
+        socket: { remoteAddress: '8.8.8.8' },
+        headers: { 'x-forwarded-for': '1.2.3.4' },
+      };
+      const plain: MockRequest = { ip: '8.8.8.8', headers: {} };
+      expect(rateLimiter.defaultKeyGenerator(forged)).toBe(rateLimiter.defaultKeyGenerator(plain));
+    });
 
-      const req = {
-        ip: '8.8.8.8',
-        connection: { remoteAddress: '8.8.8.8' },
-        headers: { 'user-agent': 'test', 'x-forwarded-for': '1.2.3.4' },
-      };
-      const reqNoForward = {
-        ip: '8.8.8.8',
-        connection: { remoteAddress: '8.8.8.8' },
-        headers: { 'user-agent': 'test' },
-      };
-      // Sans proxy de confiance, x-forwarded-for est ignoré → même clé
-      expect(limiter.defaultKeyGenerator(req)).toBe(limiter.defaultKeyGenerator(reqNoForward));
-      limiter.stop();
+    test('falls back to the socket address when req.ip is absent', () => {
+      const viaSocket: MockRequest = { socket: { remoteAddress: '8.8.8.8' }, headers: {} };
+      const viaIp: MockRequest = { ip: '8.8.8.8', headers: {} };
+      expect(rateLimiter.defaultKeyGenerator(viaSocket)).toBe(
+        rateLimiter.defaultKeyGenerator(viaIp),
+      );
     });
   });
 

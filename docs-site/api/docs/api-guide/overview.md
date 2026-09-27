@@ -29,7 +29,7 @@ When a limit is hit the server returns HTTP `429 Too Many Requests`.
 
 Failed requests are not counted by default (`SKIP_FAILED_REQUESTS: false` means failed requests ARE counted — set to `true` to only count successful ones).
 
-If you deploy behind a reverse proxy, configure `TRUSTED_PROXIES` so that the real client IP is read from the `x-forwarded-for` header.
+Limits apply per client IP. If you deploy behind a reverse proxy, configure `TRUSTED_PROXIES` (IPs or CIDR blocks, e.g. `'["10.0.0.0/8"]'`) so that the real client IP is read from the `x-forwarded-for` header.
 
 ## Query protection
 

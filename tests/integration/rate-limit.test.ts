@@ -5,6 +5,11 @@
  * /graphql only, health probes outside of it — and drives it with supertest to
  * assert real status codes and headers: 429 with Retry-After on exhaustion,
  * recovery once the window elapses, burst enforcement, and probe exemption.
+ *
+ * Client identification goes through Express's real `trust proxy` setting
+ * (built by parseTrustedProxies from the JSON string of an env override): only
+ * the socket address of the proxy hop is simulated, since supertest always
+ * connects from the loopback.
  */
 
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
@@ -13,6 +18,7 @@ import type { Express } from 'express';
 import request from 'supertest';
 import { RateLimiter } from '../../src/security/rate-limiter.js';
 import { createRateLimitMiddleware } from '../../src/security/rate-limit-middleware.js';
+import { parseTrustedProxies } from '../../src/security/trusted-proxies.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -34,17 +40,45 @@ interface TestApp {
 
 // ─── Utilitaires ─────────────────────────────────────────────────────────────
 
+/** Network options of the test app. */
+interface NetworkOptions {
+  /** Raw TRUSTED_PROXIES value, as it arrives from the configuration. */
+  trustedProxies?: unknown;
+  /** Address of the connecting peer (the proxy hop); loopback when omitted. */
+  socketAddress?: string;
+}
+
 /**
  * Builds a minimal Express app wired like the real server.
  *
  * @param limitConfig - Rate-limit configuration for the shared limiter.
  * @param enabled - Whether enforcement is active.
+ * @param network - Trusted proxies and simulated peer address.
  * @returns The app, its limiter and the spied /graphql handler.
  */
-const buildApp = (limitConfig: TestLimitConfig, enabled = true): TestApp => {
+const buildApp = (
+  limitConfig: TestLimitConfig,
+  enabled = true,
+  network: NetworkOptions = {},
+): TestApp => {
   const limiter = new RateLimiter(limitConfig as unknown as Record<string, unknown>);
   const graphqlHandler = jest.fn();
   const app = express();
+
+  // Réglage réel de trust proxy, avant tout middleware — comme dans src/server.ts
+  app.set('trust proxy', parseTrustedProxies(network.trustedProxies));
+
+  // Adresse du pair TCP (le proxy) : seule partie simulée, req.ip reste calculé par Express
+  if (network.socketAddress) {
+    const socketAddress = network.socketAddress;
+    app.use((req, _res, next) => {
+      Object.defineProperty(req.socket, 'remoteAddress', {
+        value: socketAddress,
+        configurable: true,
+      });
+      next();
+    });
+  }
 
   // Sondes montées hors du préfixe limité — comme dans src/server.ts
   app.get('/health', (_req, res) => {
@@ -179,20 +213,116 @@ describe('Rate limiting (HTTP)', () => {
     });
   });
 
-  describe('Isolation des clients', () => {
-    test('keeps a separate budget per user-agent', async () => {
-      testApp = buildApp(windowConfig);
+  describe('Identification derrière un proxy de confiance', () => {
+    // Ingress du cluster : pair 10.42.0.7, couvert par le CIDR de confiance
+    const behindIngress: NetworkOptions = {
+      trustedProxies: '["10.0.0.0/8"]',
+      socketAddress: '10.42.0.7',
+    };
 
-      for (let i = 0; i < 4; i++) {
-        await request(testApp.app).post('/graphql').set('user-agent', 'client-a');
+    test('keeps a distinct counter per forwarded client IP', async () => {
+      testApp = buildApp(windowConfig, true, behindIngress);
+
+      for (let i = 0; i < 3; i++) {
+        const ok = await request(testApp.app).post('/graphql').set('x-forwarded-for', '1.1.1.1');
+        expect(ok.status).toBe(200);
       }
-      expect(
-        (await request(testApp.app).post('/graphql').set('user-agent', 'client-a')).status,
-      ).toBe(429);
+      const refused = await request(testApp.app).post('/graphql').set('x-forwarded-for', '1.1.1.1');
+      expect(refused.status).toBe(429);
 
-      // Un autre client dispose de son propre budget
-      const other = await request(testApp.app).post('/graphql').set('user-agent', 'client-b');
+      // Autre client derrière le même ingress : compteur neuf
+      const other = await request(testApp.app).post('/graphql').set('x-forwarded-for', '2.2.2.2');
       expect(other.status).toBe(200);
+      expect(other.headers['x-ratelimit-remaining']).toBe('3');
+    });
+
+    test('keys on the rightmost untrusted address, not a forged leftmost one', async () => {
+      testApp = buildApp(windowConfig, true, behindIngress);
+
+      // Le client préfixe x-forwarded-for d'une adresse différente à chaque requête ;
+      // l'ingress ajoute l'adresse réelle 1.1.1.1 à droite
+      for (let i = 0; i < 3; i++) {
+        const ok = await request(testApp.app)
+          .post('/graphql')
+          .set('x-forwarded-for', `6.6.6.${i}, 1.1.1.1`);
+        expect(ok.status).toBe(200);
+      }
+      const refused = await request(testApp.app)
+        .post('/graphql')
+        .set('x-forwarded-for', '6.6.6.99, 1.1.1.1');
+      expect(refused.status).toBe(429);
+    });
+  });
+
+  describe('x-forwarded-for usurpé', () => {
+    test('is ignored when no proxy is trusted', async () => {
+      testApp = buildApp(windowConfig, true, { trustedProxies: '[]', socketAddress: '10.42.0.7' });
+
+      for (let i = 1; i <= 3; i++) {
+        const ok = await request(testApp.app).post('/graphql').set('x-forwarded-for', `${i}.1.1.1`);
+        expect(ok.status).toBe(200);
+      }
+      // Une 4e adresse inventée ne donne pas de nouveau budget : clé = IP du pair
+      const refused = await request(testApp.app).post('/graphql').set('x-forwarded-for', '4.1.1.1');
+      expect(refused.status).toBe(429);
+    });
+
+    test('is ignored when the peer is outside the trusted list', async () => {
+      testApp = buildApp(windowConfig, true, {
+        trustedProxies: '["10.0.0.0/8"]',
+        socketAddress: '203.0.113.5',
+      });
+
+      for (let i = 1; i <= 3; i++) {
+        await request(testApp.app).post('/graphql').set('x-forwarded-for', `${i}.1.1.1`);
+      }
+      const refused = await request(testApp.app).post('/graphql').set('x-forwarded-for', '4.1.1.1');
+      expect(refused.status).toBe(429);
+    });
+  });
+
+  describe('User-Agent tournant', () => {
+    /**
+     * Sends 25 requests from one IP, each with a distinct User-Agent.
+     *
+     * @param app - Application under test.
+     * @returns The status codes, in order.
+     */
+    const sendRotatingAgents = async (app: Express): Promise<number[]> => {
+      const statuses: number[] = [];
+      for (let i = 0; i < 25; i++) {
+        const response = await request(app).post('/graphql').set('user-agent', `agent-${i}`);
+        statuses.push(response.status);
+      }
+      return statuses;
+    };
+
+    test('is limited after MAX_REQUESTS', async () => {
+      testApp = buildApp({
+        MAX_REQUESTS: 20,
+        WINDOW_MS: 60000,
+        MAX_BURST_REQUESTS: 1000,
+        BURST_WINDOW_MS: 60000,
+        TRUSTED_PROXIES: [],
+      });
+
+      const statuses = await sendRotatingAgents(testApp.app);
+      expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
+      expect(statuses.slice(20).every((s) => s === 429)).toBe(true);
+    });
+
+    test('is limited after MAX_BURST_REQUESTS', async () => {
+      testApp = buildApp({
+        MAX_REQUESTS: 1000,
+        WINDOW_MS: 60000,
+        MAX_BURST_REQUESTS: 20,
+        BURST_WINDOW_MS: 60000,
+        TRUSTED_PROXIES: [],
+      });
+
+      const statuses = await sendRotatingAgents(testApp.app);
+      expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
+      expect(statuses.slice(20).every((s) => s === 429)).toBe(true);
     });
   });
 

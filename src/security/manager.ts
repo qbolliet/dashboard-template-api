@@ -35,6 +35,14 @@ interface GraphQLRequest {
 
 // ─── Classe gestionnaire de sécurité ────────────────────────────────────────
 
+// Budget par défaut des routes d'administration : 10 requêtes par minute et par IP
+const ADMIN_RATE_LIMIT_DEFAULTS: Record<string, unknown> = {
+  MAX_REQUESTS: 10,
+  WINDOW_MS: 60_000,
+  MAX_BURST_REQUESTS: 10,
+  BURST_WINDOW_MS: 60_000,
+};
+
 // Pas de sanitization XSS/SQL sur le chemin GraphQL — décision assumée :
 //  - les valeurs de filtre ne sont jamais concaténées au SQL (treeToSQL produit
 //    { sql, params } et DuckDB reçoit des paramètres liés) ;
@@ -57,6 +65,7 @@ class SecurityManager {
   private config: SecurityConfig;
   private logger: ContextLogger;
   private rateLimiter: RateLimiter;
+  private adminRateLimiter: RateLimiter;
   private complexityAnalyzer: QueryComplexityAnalyzer;
   private patternValidator: PatternValidator;
 
@@ -73,6 +82,11 @@ class SecurityManager {
     this.rateLimiter = new RateLimiter(
       this.config.RATE_LIMIT as unknown as Record<string, unknown>,
     );
+    // Limiteur distinct et strict des routes d'administration (budget séparé)
+    this.adminRateLimiter = new RateLimiter({
+      ...ADMIN_RATE_LIMIT_DEFAULTS,
+      ...(this.config.ADMIN_RATE_LIMIT ?? {}),
+    });
     this.complexityAnalyzer = new QueryComplexityAnalyzer(
       this.config.COMPLEXITY as unknown as Record<string, unknown>,
     );
@@ -80,7 +94,7 @@ class SecurityManager {
 
     // Journalisation de l'initialisation complète
     this.logger.operation('SecurityManager initialized', {
-      modules: ['rateLimiter', 'complexityAnalyzer', 'patternValidator'],
+      modules: ['rateLimiter', 'adminRateLimiter', 'complexityAnalyzer', 'patternValidator'],
     });
   }
 
@@ -96,6 +110,21 @@ class SecurityManager {
   createRateLimitMiddleware(): RequestHandler {
     const enabled = (this.config.RATE_LIMIT as { ENABLED?: boolean })?.ENABLED ?? true;
     return createRateLimitMiddleware(this.rateLimiter, { enabled });
+  }
+
+  /**
+   * Builds the strict rate-limiting middleware of the admin endpoints.
+   *
+   * Mount it on /api/cache and /api/catalog before `requireAdminKey`: every
+   * request counts, rejected keys included, which bounds brute force on
+   * x-admin-key. Its budget is separate from the public one
+   * (SECURITY.ADMIN_RATE_LIMIT, default 10 requests per minute per IP).
+   *
+   * @returns Express request handler replying 429 when the limit is exceeded.
+   */
+  createAdminRateLimitMiddleware(): RequestHandler {
+    const enabled = this.config.ADMIN_RATE_LIMIT?.ENABLED ?? true;
+    return createRateLimitMiddleware(this.adminRateLimiter, { enabled });
   }
 
   /**
@@ -257,7 +286,7 @@ class SecurityManager {
    */
   async cleanup(): Promise<void> {
     this.logger.security('Cleaning up SecurityManager resources');
-    await this.rateLimiter.cleanup();
+    await Promise.all([this.rateLimiter.cleanup(), this.adminRateLimiter.cleanup()]);
   }
 }
 

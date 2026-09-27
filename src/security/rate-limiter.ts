@@ -7,8 +7,8 @@ import type { ContextLogger } from '../utils/logger.js';
 
 /** Minimal representation of an HTTP request required by the rate limiter. */
 interface HttpRequest {
+  /** Client IP computed by Express from the socket and the `trust proxy` setting. */
   ip?: string;
-  connection?: { remoteAddress?: string };
   socket?: { remoteAddress?: string };
   headers: Record<string, string | string[] | undefined>;
 }
@@ -22,7 +22,6 @@ interface RateLimiterConfig {
   skipFailedRequests: boolean;
   keyGenerator: (req: HttpRequest) => string;
   skip: (req: HttpRequest) => boolean;
-  trustedProxies: Set<string>;
 }
 
 /** Tracking data associated with a client entry in the store. */
@@ -57,43 +56,28 @@ interface RateLimitDecision {
 // ─── Identification du client ────────────────────────────────────────────────
 
 /**
- * Resolves the IP address of the client that issued a request.
+ * Returns the IP address identifying the client of a request.
  *
- * Trusts x-forwarded-for only when the connecting IP is listed in
- * trustedProxies (or when '*' is listed), preventing IP spoofing by
- * arbitrary clients. Shared by the rate limiter and the export concurrency
- * gate, so both identify a client the same way.
+ * Relies on `req.ip`, computed by Express from the `trust proxy` setting
+ * (SECURITY.RATE_LIMIT.TRUSTED_PROXIES): x-forwarded-for is only read through
+ * trusted hops and the rightmost untrusted address is kept, so a forged header
+ * sent straight to the API is ignored. Shared by the rate limiter and the
+ * export concurrency gate, so both identify a client the same way.
  *
  * @param req - Incoming HTTP request.
- * @param trustedProxies - Proxy IPs allowed to forward the client IP.
  * @returns The client IP, or 'unknown' when the socket exposes none.
  */
-// Adresse IP du client, x-forwarded-for n'étant lu que derrière un proxy de confiance
-const resolveClientIp = (req: HttpRequest, trustedProxies: ReadonlySet<string>): string => {
-  // Extraction de l'adresse
-  const remoteIp = req.connection?.remoteAddress ?? req.socket?.remoteAddress ?? 'unknown';
-  let ip = req.ip ?? remoteIp;
-
-  // Validation du proxy
-  if (trustedProxies.has(remoteIp) || trustedProxies.has('*')) {
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-      const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-      ip = raw.split(',')[0].trim();
-    }
-  }
-
-  return ip;
-};
+// Adresse IP du client telle que résolue par Express (trust proxy)
+const clientIp = (req: HttpRequest): string => req.ip ?? req.socket?.remoteAddress ?? 'unknown';
 
 // ─── Classe de limitation de taux ───────────────────────────────────────────
 
 /**
  * Implements a sliding-window rate limiter for GraphQL requests.
  *
- * Tracks requests per client in memory using a key derived from the
- * client's IP address and User-Agent header. Enforces both a sustained
- * request limit over a long window and a burst limit over a short window.
+ * Tracks requests per client IP in memory (per process: counters are not
+ * shared between pods). Enforces both a sustained request limit over a long
+ * window and a burst limit over a short window.
  */
 class RateLimiter {
   private config: RateLimiterConfig;
@@ -118,8 +102,6 @@ class RateLimiter {
         (rateLimitConfig['KEY_GENERATOR'] as (req: HttpRequest) => string) ??
         this.defaultKeyGenerator.bind(this),
       skip: (rateLimitConfig['SKIP'] as (req: HttpRequest) => boolean) ?? (() => false),
-      // Ensemble des IPs de proxy autorisées à transmettre x-forwarded-for
-      trustedProxies: new Set<string>((rateLimitConfig['TRUSTED_PROXIES'] as string[]) ?? []),
     };
 
     // Initialisation du store en mémoire
@@ -226,19 +208,13 @@ class RateLimiter {
   }
 
   /**
-   * Generates a rate-limit store key from the client's IP and User-Agent.
-   *
-   * Trusts x-forwarded-for only when the connecting IP is listed in
-   * trustedProxies, preventing IP spoofing by arbitrary clients.
+   * Generates a rate-limit store key from the client's IP alone.
    *
    * @param req - Incoming HTTP request.
-   * @returns SHA-256 hex hash of "{ip}:{user-agent}".
+   * @returns SHA-256 hex hash of the client IP (masked in the logs).
    */
   private defaultKeyGenerator(req: HttpRequest): string {
-    const ip = resolveClientIp(req, this.config.trustedProxies);
-    const userAgent = (req.headers['user-agent'] as string | undefined) ?? 'no-user-agent';
-
-    return crypto.createHash('sha256').update(`${ip}:${userAgent}`).digest('hex');
+    return crypto.createHash('sha256').update(clientIp(req)).digest('hex');
   }
 
   /**
@@ -281,5 +257,5 @@ class RateLimiter {
   }
 }
 
-export { RateLimiter, resolveClientIp };
+export { RateLimiter, clientIp };
 export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo, RateLimitDecision };

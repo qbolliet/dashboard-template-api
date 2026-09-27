@@ -2,8 +2,7 @@
 import type { Express, Request, RequestHandler, Response } from 'express';
 import { databaseManager } from '../db/index.js';
 import type { ConnectionWrapper, DuckDBPool } from '../db/pool.js';
-import { resolveClientIp } from '../security/rate-limiter.js';
-import type { HttpRequest } from '../security/rate-limiter.js';
+import { clientIp } from '../security/rate-limiter.js';
 import { config } from '../utils/config-loader.js';
 import { createContextLogger } from '../utils/logger.js';
 import { buildExportQuery, resolveExportTarget } from './build-export-query.js';
@@ -31,8 +30,6 @@ interface ExportRoutesOptions {
   settings?: ExportSettings;
   /** Concurrency gate; defaults to one built from the settings. */
   gate?: ExportConcurrencyGate;
-  /** Proxies allowed to forward the client IP; defaults to RATE_LIMIT.TRUSTED_PROXIES. */
-  trustedProxies?: ReadonlySet<string>;
 }
 
 /** Handles returned to the caller, for diagnostics and tests. */
@@ -47,28 +44,6 @@ class ClientAbortError extends Error {
     super('Client closed the connection');
     this.name = 'ClientAbortError';
   }
-}
-
-/**
- * Reads the trusted proxy list of the rate limiter configuration.
- *
- * Accepts both the parsed array and the JSON string form of an environment
- * override (`TRUSTED_PROXIES='["10.0.0.1"]'`).
- *
- * @returns The set of trusted proxy IPs.
- */
-// Liste des proxys de confiance, tolérante à la forme chaîne JSON des variables d'env
-function configuredTrustedProxies(): ReadonlySet<string> {
-  const raw: unknown = config.SECURITY?.RATE_LIMIT?.TRUSTED_PROXIES;
-  let list: unknown = raw;
-  if (typeof raw === 'string') {
-    try {
-      list = JSON.parse(raw);
-    } catch {
-      list = [];
-    }
-  }
-  return new Set(Array.isArray(list) ? list.map(String) : []);
 }
 
 /**
@@ -156,7 +131,6 @@ const createExportRoutes = (
   const gate =
     options.gate ??
     new ExportConcurrencyGate(settings.maxConcurrentPerIp, settings.maxConcurrentTotal);
-  const trustedProxies = options.trustedProxies ?? configuredTrustedProxies();
 
   // Purge des fichiers temporaires laissés par un arrêt brutal (non bloquante)
   void purgeStaleExports(settings.tmpDir, settings.timeoutMs).then((removed) => {
@@ -186,9 +160,8 @@ const createExportRoutes = (
       const target = resolveExportTarget(params);
       const query = await buildExportQuery(params, target);
 
-      // 2. Garde de concurrence (IP seule)
-      const clientIp = resolveClientIp(req as unknown as HttpRequest, trustedProxies);
-      const slot = gate.tryAcquire(clientIp);
+      // 2. Garde de concurrence (IP seule, résolue par Express via trust proxy)
+      const slot = gate.tryAcquire(clientIp(req));
       if (!slot.ok) {
         throw new ExportHttpError(
           429,

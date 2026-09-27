@@ -17,9 +17,21 @@ SECURITY:
     SKIP_FAILED_REQUESTS: false
     # Activation de la limitation (false = passe-plat, réservé aux tests)
     ENABLED: ${RATE_LIMIT_ENABLED:-true}
-    # IPs de proxy de confiance autorisées à transmettre x-forwarded-for
-    # Ex: ['127.0.0.1'] pour un reverse-proxy local, ['*'] pour faire confiance à tous (déconseillé)
+    # Proxys de confiance (réglage Express « trust proxy ») : IPs, blocs CIDR ou plages
+    # nommées (loopback, linklocal, uniquelocal). Liste YAML, chaîne JSON ('["10.0.0.0/8"]')
+    # ou liste à virgules. Derrière l'ingress : le CIDR des pods de l'ingress controller.
+    # ['*'] fait confiance à tous (déconseillé). Une entrée invalide empêche le démarrage.
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
+
+  # Limitation stricte des routes d'administration (/api/cache/*, /api/catalog/*),
+  # budget distinct de RATE_LIMIT ; toute requête compte, clé refusée comprise
+  ADMIN_RATE_LIMIT:
+    ENABLED: ${ADMIN_RATE_LIMIT_ENABLED:-true}
+    # 10 requêtes par minute et par IP
+    MAX_REQUESTS: 10
+    WINDOW_MS: 60000
+    MAX_BURST_REQUESTS: 10
+    BURST_WINDOW_MS: 60000
 
   # Configuration de la complexité — évaluée avant exécution (didResolveOperation)
   COMPLEXITY:
