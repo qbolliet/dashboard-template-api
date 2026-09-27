@@ -105,8 +105,7 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
   try {
     const loaders = createLoaders(catalog, schema);
 
-    // Colonnes projetées contrôlées contre la table metadata (le tri explicite
-    // l'est par resolveEffectiveSort) ; BAD_USER_INPUT devient un 400
+    // Colonnes projetées contrôlées contre la table metadata
     const columns = await loaders.catalogMetadata.load({ catalog, schema });
     assertColumns(params.fields ?? [], indexMetadataByName(columns), 'field');
 

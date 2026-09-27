@@ -75,7 +75,7 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
 
 // Agrégations qui exigent une mesure numérique (ou booléenne, sommée comme 0/1)
-const NUMERIC_AGGREGATIONS: readonly AggregationType[] = ['SUM', 'AVG'];
+const NUMERIC_AGGREGATIONS: readonly AggregationType[] = ['SUM', 'AVG', 'MAX', 'MIN', 'MEDIAN'];
 
 /**
  * Builds a GraphQL error flagged as a client input error.
