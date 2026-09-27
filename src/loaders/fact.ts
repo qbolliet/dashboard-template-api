@@ -88,18 +88,16 @@ class FactLoader extends FactQueryLoader {
    *
    * Builds a parameterized SQL query and returns results in the requested
    * format. When includeCount is true, a separate COUNT query is issued
-   * and the result is wrapped with pagination metadata.
+   * and the result is wrapped with pagination metadata. Pagination bounds and
+   * column names are validated by the resolver before the load
+   * (validatePagination, assertColumns).
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Query parameters controlling fields, filters, and format.
    * @returns Query results in the requested format, optionally with count.
-   * @throws {Error} When pagination parameters exceed configured limits.
    */
   async loadFacts(connection: DuckDBConnection, params: FactQueryParams): Promise<FactQueryResult> {
     const { fields, where, limit, offset, sort, format = 'default', includeCount = false } = params;
-
-    // Validation des paramètres de pagination
-    this.validatePagination(limit, offset);
 
     // Construction des clauses SQL
     const selectClause = this.buildSelectClause(fields);

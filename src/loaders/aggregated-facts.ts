@@ -1,7 +1,7 @@
 // Importation des modules
 import { FactQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { validateIdentifier } from '../utils/utils.js';
+import { quoteIdent } from '../utils/identifiers.js';
 import {
   METADATA_FIELD_WITH_LABELS_WHERE,
   METADATA_SELECT,
@@ -156,12 +156,13 @@ class AggregatedFactsLoader extends FactQueryLoader {
    * `ANY_VALUE` — licit because the writer guarantees the functional
    * dependency code → label. When
    * includeMetadata or includeCount are true, additional queries are
-   * issued to compute statistics and total group count.
+   * issued to compute statistics and total group count. Pagination bounds
+   * and column names are validated by the resolver before the load; the
+   * columns are quoted here.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Query parameters controlling grouping, aggregation, and format.
    * @returns Aggregated results in the requested format.
-   * @throws {Error} When pagination parameters exceed configured limits.
    */
   async loadAggregatedFacts(
     connection: DuckDBConnection,
@@ -181,17 +182,11 @@ class AggregatedFactsLoader extends FactQueryLoader {
       includeMetadata = false,
     } = params;
 
-    // Validation des paramètres de pagination
-    this.validatePagination(limit, offset);
-
-    // Validation du nom de la colonne mesure avant interpolation SQL (anti-injection)
-    const measureColumn = validateIdentifier(measure, 'measure');
-    // Validation de la colonne de regroupement (interpolée dans SELECT et GROUP BY)
-    const groupByColumn = validateIdentifier(groupBy, 'groupBy');
+    // Colonnes contrôlées contre metadata par le resolver, quotées ici
+    const measureColumn = quoteIdent(measure);
+    const groupByColumn = quoteIdent(groupBy);
     // Libellé de la clé lu dans la même requête (dépendance fonctionnelle code → libellé)
-    const keyLabelSelect = labelField
-      ? `ANY_VALUE(${validateIdentifier(labelField, 'labelField')}) as keyLabel,`
-      : '';
+    const keyLabelSelect = labelField ? `ANY_VALUE(${quoteIdent(labelField)}) as keyLabel,` : '';
 
     // Construction de la condition de filtre paramétrée
     const whereClause = buildWhere(where);
@@ -291,7 +286,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
     params: Pick<AggregatedQueryParams, 'where' | 'groupBy'>,
   ): Promise<number> {
     const { where } = params;
-    const groupBy = validateIdentifier(params.groupBy, 'groupBy');
+    const groupBy = quoteIdent(params.groupBy);
     const whereClause = buildWhere(where);
 
     const countQuery = `

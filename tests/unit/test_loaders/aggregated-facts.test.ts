@@ -219,19 +219,30 @@ describe('AggregatedFactsLoader', () => {
       expect(params).toEqual([1, 2]);
     });
 
-    test('rejette un groupBy malformé avant toute requête', async () => {
+    test('quote groupBy et mesure : un nom hostile reste un identifiant inerte', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      // L'existence des colonnes est contrôlée par le resolver (assertColumns)
       const loader = createAggregatedFactsLoader('main');
-      await expect(
-        loader.load({ ...baseParams, groupBy: 'a; DROP TABLE fact_table' }),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
-      expect(mockConnection.all).not.toHaveBeenCalled();
+      await loader.load({ ...baseParams, groupBy: 'zone d"emploi', measure: 'value) FROM x; --' });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('"zone d""emploi" as key');
+      expect(query).toContain('SUM("value) FROM x; --") as aggregatedValue');
+      expect(query).toContain('GROUP BY "zone d""emploi"');
     });
 
-    test('rejette une mesure malformée', async () => {
+    test('une erreur de binder DuckDB (SUM sur VARCHAR) devient BAD_USER_INPUT', async () => {
+      mockConnection.all.mockRejectedValueOnce(
+        new Error(
+          "Binder Error: No function matches the given name and argument types 'sum(VARCHAR)'.",
+        ),
+      );
+
       const loader = createAggregatedFactsLoader('main');
-      await expect(
-        loader.load({ ...baseParams, measure: 'value) FROM x; --' }),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      await expect(loader.load({ ...baseParams, measure: 'indicator' })).rejects.toMatchObject({
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     });
 
     test('convertit les valeurs en nombres', async () => {
@@ -261,7 +272,7 @@ describe('AggregatedFactsLoader', () => {
       await loader.load({ ...baseParams, aggregation: 'AVG' });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('AVG(value)');
+      expect(query).toContain('AVG("value")');
     });
 
     test('utilise SUM par défaut pour une agrégation inconnue', async () => {
@@ -271,7 +282,7 @@ describe('AggregatedFactsLoader', () => {
       await loader.load({ ...baseParams, aggregation: 'UNKNOWN' });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('SUM(value)');
+      expect(query).toContain('SUM("value")');
     });
 
     test('agrège la colonne mesure spécifiée', async () => {
@@ -281,7 +292,7 @@ describe('AggregatedFactsLoader', () => {
       await loader.load({ ...baseParams, measure: 'lower_bound', aggregation: 'AVG' });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('AVG(lower_bound)');
+      expect(query).toContain('AVG("lower_bound")');
     });
 
     test('inclut LIMIT et OFFSET', async () => {
@@ -321,7 +332,7 @@ describe('AggregatedFactsLoader', () => {
       await loader.load({ ...baseParams, where: { sql: '"kind" = ?', params: ['x'] } });
 
       const [countQuery, countParams] = mockConnection.all.mock.calls[1];
-      expect(countQuery).toContain('COUNT(DISTINCT country)');
+      expect(countQuery).toContain('COUNT(DISTINCT "country")');
       expect(countQuery).toContain('WHERE "kind" = ?');
       expect(countParams).toEqual(['x']);
     });

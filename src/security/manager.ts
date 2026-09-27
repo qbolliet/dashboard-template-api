@@ -38,8 +38,8 @@ interface GraphQLRequest {
 // Pas de sanitization XSS/SQL sur le chemin GraphQL — décision assumée :
 //  - les valeurs de filtre ne sont jamais concaténées au SQL (treeToSQL produit
 //    { sql, params } et DuckDB reçoit des paramètres liés) ;
-//  - les identifiants (fields, sort, groupBy, measure) passent par
-//    validateIdentifier ;
+//  - les identifiants (fields, sort, groupBy, measure…) sont contrôlés contre
+//    la table metadata (assertColumns) puis quotés (quoteIdent) ;
 //  - les motifs interdits sont rejetés en amont par PatternValidator, et les
 //    mutations/subscriptions par validateRequest.
 // Échapper en plus les valeurs corromprait des données légitimes : les libellés

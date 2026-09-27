@@ -2,7 +2,7 @@
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { buildWhere } from '../utils/filter-tree.js';
-import { validateIdentifier } from '../utils/utils.js';
+import { quoteIdent } from '../utils/identifiers.js';
 import type { DuckDBConnection } from './base-loader.js';
 import type { CompiledFilter } from '../utils/filter-tree.js';
 
@@ -10,7 +10,7 @@ import type { CompiledFilter } from '../utils/filter-tree.js';
 
 /** Parameters of a column statistics query. */
 interface FieldStatsParams {
-  /** Column of the fact table; validated as a SQL identifier before interpolation. */
+  /** Column of the fact table; checked against metadata by the resolver, quoted in the SQL. */
   fieldName: string;
   /** Filter compiled by treeToSQL (never built from raw client SQL); null = whole table. */
   where?: CompiledFilter | null;
@@ -96,11 +96,10 @@ class FieldStatsLoader extends BaseQueryLoader {
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Column name and optional compiled filter.
    * @returns Min, max, distinct count and NULL count of the column.
-   * @throws {GraphQLError} BAD_USER_INPUT when fieldName is not a valid identifier.
    */
   async loadStats(connection: DuckDBConnection, params: FieldStatsParams): Promise<FieldStats> {
-    // Identifiant validé avant toute interpolation (anti-injection)
-    const column = validateIdentifier(params.fieldName, 'field');
+    // Colonne contrôlée contre metadata par le resolver, quotée ici
+    const column = quoteIdent(params.fieldName);
     const whereClause = buildWhere(params.where);
 
     const query = `

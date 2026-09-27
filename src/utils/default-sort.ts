@@ -1,5 +1,6 @@
 // Importation des modules
-import { validateIdentifier } from './utils.js';
+import { assertColumns } from './identifiers.js';
+import { indexMetadataByName } from './metadata-mapping.js';
 import type { SortItem } from '../loaders/base-loader.js';
 import type { LoadersCollection } from '../loaders/index.js';
 
@@ -24,15 +25,17 @@ import type { LoadersCollection } from '../loaders/index.js';
  * With an explicit sort, the primary keys not already named are appended as
  * tiebreakers, so pages stay disjoint even when the sort column has ties.
  *
- * Every column is validated as a SQL identifier and checked against the
- * metadata of the schema: a stale `cluster_by`, naming a column that has since
- * been dropped, must not produce invalid SQL.
+ * Every column is checked against the metadata of the schema — whatever its
+ * name, since it is quoted in the SQL. An explicit sort on an unknown column
+ * is a client error; a stale `cluster_by`, naming a column that has since
+ * been dropped, is silently skipped so that it never produces invalid SQL.
  *
  * @param explicitSort - Sort items supplied by the client, if any.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
  * @param catalog - Catalog alias of the query.
  * @param schema - Schema of the query, or null for the catalog default.
  * @returns The effective sort items, possibly empty.
+ * @throws {GraphQLError} BAD_USER_INPUT when an explicit sort column is unknown.
  */
 // Tri effectif : cluster_by par défaut, clés primaires en départage
 async function resolveEffectiveSort(
@@ -42,20 +45,11 @@ async function resolveEffectiveSort(
   schema?: string | null,
 ): Promise<SortItem[]> {
   const fields = await activeLoaders.catalogMetadata.load({ catalog, schema });
-  const known = new Set(fields.map((f) => f.name));
+  const byName = indexMetadataByName(fields);
   const primaryKeys = fields.filter((f) => f.isPrimaryKey).map((f) => f.name);
 
-  // Colonnes retenues : connues du schéma et valides comme identifiants SQL
-  const usable = (columns: string[]): string[] =>
-    columns.filter((column) => {
-      if (!known.has(column)) return false;
-      try {
-        validateIdentifier(column, 'sortField');
-        return true;
-      } catch {
-        return false;
-      }
-    });
+  // Colonnes retenues : connues du schéma, quel que soit leur nom
+  const usable = (columns: string[]): string[] => columns.filter((column) => byName.has(column));
 
   if (!explicitSort || explicitSort.length === 0) {
     const info = await activeLoaders.datasetInfo.load({ catalog, schema });
@@ -64,6 +58,13 @@ async function resolveEffectiveSort(
     const ordering = columns.length > 0 ? columns : usable(primaryKeys);
     return ordering.map((field) => ({ field, order: 'ASC' as const }));
   }
+
+  // Tri explicite : colonnes contrôlées contre metadata
+  assertColumns(
+    explicitSort.map((s) => s.field),
+    byName,
+    'sort',
+  );
 
   // Départage : les clés primaires absentes du tri explicite, sans doublon
   const named = new Set(explicitSort.map((s) => s.field));

@@ -2,8 +2,10 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { GraphQLError } from 'graphql';
 import { config } from '../../utils/config-loader.js';
-import { compileFilterTree } from '../../utils/filter-tree.js';
+import { compileFilterTree, sqlTypeFamily } from '../../utils/filter-tree.js';
+import { assertColumns } from '../../utils/identifiers.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
+import { validatePagination } from '../../utils/pagination.js';
 import { attachScope, contextScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
@@ -72,65 +74,108 @@ const VALID_AGGREGATIONS: readonly AggregationType[] = [
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
 
+// Agrégations qui exigent une mesure numérique (ou booléenne, sommée comme 0/1)
+const NUMERIC_AGGREGATIONS: readonly AggregationType[] = ['SUM', 'AVG'];
+
 /**
- * Validates pagination and aggregation arguments for aggregated fact queries.
+ * Builds a GraphQL error flagged as a client input error.
+ *
+ * @param message - Human-readable error message.
+ * @returns GraphQLError with the BAD_USER_INPUT extension code.
+ */
+const badInput = (message: string): GraphQLError =>
+  new GraphQLError(message, { extensions: { code: 'BAD_USER_INPUT' } });
+
+/**
+ * Validates the aggregation and sort arguments for aggregated fact queries.
  *
  * Centralises argument validation to avoid duplication between the two
- * aggregated fact resolvers.
+ * aggregated fact resolvers. Pagination is validated before, by
+ * validatePagination, and the columns by validateAggregatedColumns.
  *
  * @param aggregation - Aggregation type to validate.
  * @param groupBy - Group-by field (must be non-empty).
  * @param measure - Measure column to aggregate (must be non-empty).
- * @param offset - Pagination offset to validate.
- * @param limit - Pagination limit to validate.
  * @param sort - Sort items to validate (field and order).
- * @throws {GraphQLError} When any argument fails validation.
+ * @throws {GraphQLError} BAD_USER_INPUT when any argument fails validation.
  */
 // Validation centralisée des arguments des requêtes agrégées
 function validateAggregatedArgs(
   aggregation: AggregationType,
   groupBy: string | undefined,
   measure: string | undefined,
-  offset: number,
-  limit: number,
   sort: AggregatedSortItem[],
 ): void {
   // Validation des opérations d'agrégation
   if (!VALID_AGGREGATIONS.includes(aggregation)) {
-    throw new GraphQLError(
-      `Invalid aggregation type. Must be one of: ${VALID_AGGREGATIONS.join(', ')}`,
-    );
+    throw badInput(`Invalid aggregation type. Must be one of: ${VALID_AGGREGATIONS.join(', ')}`);
   }
 
   // Groupby est un élément obligatoire
   if (!groupBy) {
-    throw new GraphQLError('groupBy field is required');
+    throw badInput('groupBy field is required');
   }
 
   // La mesure à agréger est obligatoire
   if (!measure) {
-    throw new GraphQLError('measure field is required');
-  }
-
-  // Validation de l'offset de pagination
-  if (offset > config.API.PAGINATION.MAX_OFFSET) {
-    throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
-  }
-
-  // Validation de la limite de pagination
-  if (limit > config.API.PAGINATION.MAX_LIMIT) {
-    throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+    throw badInput('measure field is required');
   }
 
   // Validation des champs sur lesquels trier et des opérations de tri
   sort.forEach(({ field, order }) => {
     if (field !== 'key' && field !== 'aggregatedValue') {
-      throw new GraphQLError('Sort field must be either "key" or "aggregatedValue"');
+      throw badInput('Sort field must be either "key" or "aggregatedValue"');
     }
     if (!['ASC', 'DESC'].includes(order)) {
-      throw new GraphQLError('Sort order must be either "ASC" or "DESC"');
+      throw badInput('Sort order must be either "ASC" or "DESC"');
     }
   });
+}
+
+/**
+ * Checks groupBy and measure against the metadata table, and the aggregation
+ * against the type of the measure.
+ *
+ * Both columns are interpolated (quoted) in the SQL, so an unknown one must
+ * be a client error rather than a DuckDB binder error. SUM and AVG require a
+ * numeric (or boolean) measure; other type mismatches are reported by DuckDB
+ * and mapped to BAD_USER_INPUT by the loader.
+ *
+ * @param groupBy - Group-by column.
+ * @param measure - Measure column.
+ * @param aggregation - Effective aggregation.
+ * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @throws {GraphQLError} BAD_USER_INPUT on an unknown column or an
+ *   aggregation incompatible with the measure type.
+ */
+// Colonnes contrôlées contre metadata, agrégation contre le type de la mesure
+async function validateAggregatedColumns(
+  groupBy: string,
+  measure: string,
+  aggregation: AggregationType,
+  activeLoaders: LoadersCollection,
+): Promise<void> {
+  const rows = await activeLoaders.metadata.loadMany([groupBy, measure]);
+  const failure = rows.find((row): row is Error => row instanceof Error);
+  if (failure) throw failure;
+  const byName = indexMetadataByName(rows as (FieldMetadata | null)[]);
+  assertColumns([groupBy], byName, 'groupBy');
+  assertColumns([measure], byName, 'measure');
+
+  if (NUMERIC_AGGREGATIONS.includes(aggregation)) {
+    const sqlType = byName.get(measure)?.sqlType ?? '';
+    let family: string;
+    try {
+      family = sqlTypeFamily(sqlType);
+    } catch {
+      family = 'unsupported';
+    }
+    if (family !== 'numeric' && family !== 'boolean') {
+      throw badInput(
+        `Aggregation ${aggregation} requires a numeric measure; "${measure}" is ${sqlType || 'untyped'}.`,
+      );
+    }
+  }
 }
 
 /**
@@ -223,6 +268,9 @@ const aggregatedFactsResolvers = {
       }: AggregatedFactsArgs,
       { loaders, getLoadersForCatalog }: GraphQLContext,
     ) => {
+      // Pagination validée avant tout accès à la base
+      validatePagination(limit, offset);
+
       const targetLoaders = getLoadersForCatalog(catalog, schema);
       const activeLoaders = targetLoaders ?? loaders;
 
@@ -230,7 +278,8 @@ const aggregatedFactsResolvers = {
       const effectiveAggregation = await resolveAggregation(aggregation, measure, activeLoaders);
 
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(effectiveAggregation, groupBy, measure, offset, limit, sort);
+      validateAggregatedArgs(effectiveAggregation, groupBy, measure, sort);
+      await validateAggregatedColumns(groupBy, measure, effectiveAggregation, activeLoaders);
 
       try {
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
@@ -296,6 +345,9 @@ const aggregatedFactsResolvers = {
       }: AggregatedFactsArgs,
       context: GraphQLContext,
     ) => {
+      // Pagination validée avant tout accès à la base
+      validatePagination(limit, offset);
+
       // Instanciation des loaders
       const targetLoaders = context.getLoadersForCatalog(catalog, schema);
       const activeLoaders = targetLoaders ?? context.loaders;
@@ -304,7 +356,8 @@ const aggregatedFactsResolvers = {
       const effectiveAggregation = await resolveAggregation(aggregation, measure, activeLoaders);
 
       // Validation centralisée des paramètres de la requête
-      validateAggregatedArgs(effectiveAggregation, groupBy, measure, offset, limit, sort);
+      validateAggregatedArgs(effectiveAggregation, groupBy, measure, sort);
+      await validateAggregatedColumns(groupBy, measure, effectiveAggregation, activeLoaders);
 
       try {
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible

@@ -426,6 +426,27 @@ describe('GET /api/export — query shaping', () => {
     expect(table.schema.fields.map((f) => f.name)).toEqual(['population', 'region']);
   });
 
+  test('columns named with spaces and accents are exported, filtered and sorted', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'emploi',
+      fields: 'taux chômage,Année',
+      sort: 'taux chômage:desc',
+      filters: JSON.stringify({
+        children: [{ criterion: { variable: 'taux chômage', operation: 'GT', value: 7 } }],
+      }),
+      format: 'arrow',
+    });
+
+    expect(res.status).toBe(200);
+    const table = tableFromIPC(res.body as Buffer);
+    expect(table.schema.fields.map((f) => f.name)).toEqual(['taux chômage', 'Année']);
+    const rates = table.toArray().map((row) => Number(row['taux chômage']));
+    // Fixture : 5 + 2 × rang de zone + 0,5 × (année − 2022), rangs 0 à 2
+    expect(rates).toEqual([10, 9.5, 9, 8, 7.5]);
+  });
+
   test('default order is cluster_by, explicit sort is honoured', async () => {
     const { app } = buildApp();
     const base = { catalog: 'default', schema: 'geography', format: 'csv' };
@@ -468,8 +489,10 @@ describe('GET /api/export — query shaping', () => {
 describe('GET /api/export — errors', () => {
   test.each([
     [{ format: 'xml' }, 'Unknown format'],
-    [{ fields: 'commune;DROP' }, 'Invalid field name'],
-    [{ fields: 'no_such_column' }, 'Unknown column'],
+    // Tout nom est quoté : seule son absence de metadata le fait refuser
+    [{ fields: 'commune;DROP' }, 'Unknown field column(s): "commune;DROP"'],
+    [{ fields: 'no_such_column' }, 'Unknown field column(s): "no_such_column"'],
+    [{ sort: 'no_such_column:desc' }, 'Unknown sort column(s): "no_such_column"'],
     [{ sort: 'population:sideways' }, 'Invalid sort direction'],
     [{ filters: '{not json' }, 'not valid JSON'],
     [

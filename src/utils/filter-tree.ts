@@ -1,7 +1,7 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
 import { config } from './config-loader.js';
-import { validateIdentifier } from './utils.js';
+import { quoteIdent } from './identifiers.js';
 
 // ─── Types du contrat de filtre ──────────────────────────────────────────────
 
@@ -376,6 +376,82 @@ const isValidCalendarDate = (match: RegExpExecArray): boolean => {
 const escapeLike = (value: string): string => value.replace(/[\\%_]/g, (c) => `\\${c}`);
 
 /**
+ * Validates a filter variable before any metadata lookup.
+ *
+ * Any column name the database accepts is allowed (it is quoted in the SQL);
+ * only a non-string or empty value is rejected here. Existence is checked
+ * afterwards against the metadata table.
+ *
+ * @param variable - Column name sent by the client.
+ * @returns The column name, unchanged.
+ * @throws {GraphQLError} BAD_USER_INPUT when the variable is not a non-empty string.
+ */
+// Contrôle de forme d'une variable de filtre (l'existence est vérifiée contre metadata)
+const filterVariable = (variable: unknown): string => {
+  if (typeof variable !== 'string' || variable === '') {
+    throw badInput(`Invalid filter variable ${JSON.stringify(variable) ?? 'undefined'}.`);
+  }
+  return variable;
+};
+
+/**
+ * Rejects the regular expression constructs RE2 does not support.
+ *
+ * DuckDB's `regexp_matches` runs RE2, which has no lookaround, no atomic
+ * group, no back-reference, and (in the bundled version) no `(?<name>…)`
+ * named group — `(?P<name>…)` is the supported spelling. These constructs are
+ * valid JavaScript regexes, so they are detected here with a message naming
+ * them; any other syntax error is raised by DuckDB itself and mapped to
+ * BAD_USER_INPUT by the loader. Escaped characters and character classes are
+ * skipped, so `\\1` or `[(?=]` are not false positives.
+ *
+ * @param pattern - Regular expression sent by the client.
+ * @param column - Column name, quoted in the error message.
+ * @throws {GraphQLError} BAD_USER_INPUT when an unsupported construct is found.
+ */
+// Refus des constructions non supportées par RE2 (lookaround, rétro-références…)
+const assertRe2Compatible = (pattern: string, column: string): void => {
+  const reject = (construct: string): never => {
+    throw badInput(
+      `Operation MATCHES on column "${column}": ${construct} is not supported ` +
+        '(RE2 syntax: no lookaround, atomic group or back-reference).',
+    );
+  };
+
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i += 1) {
+    const char = pattern[i];
+    if (char === '\\') {
+      const next = pattern[i + 1] ?? '';
+      if (/[1-9]/.test(next)) reject(`back-reference "\\${next}"`);
+      if (next === 'k' && pattern[i + 2] === '<') reject('named back-reference "\\k<…>"');
+      i += 1;
+      continue;
+    }
+    if (inClass) {
+      if (char === ']') inClass = false;
+      continue;
+    }
+    if (char === '[') {
+      inClass = true;
+      // Un « ] » placé juste après « [ » ou « [^ » est littéral
+      if (pattern[i + 1] === '^') i += 1;
+      if (pattern[i + 1] === ']') i += 1;
+      continue;
+    }
+    if (char === '(' && pattern[i + 1] === '?') {
+      const head = pattern.slice(i + 2, i + 4);
+      if (head.startsWith('=')) reject('lookahead "(?="');
+      if (head.startsWith('!')) reject('negative lookahead "(?!"');
+      if (head === '<=') reject('lookbehind "(?<="');
+      if (head === '<!') reject('negative lookbehind "(?<!"');
+      if (head.startsWith('<')) reject('named group "(?<name>…)" (use "(?P<name>…)")');
+      if (head.startsWith('>')) reject('atomic group "(?>"');
+    }
+  }
+};
+
+/**
  * Validates and normalizes a single filter value for the column type.
  *
  * @param value - Raw value sent by the client.
@@ -479,7 +555,8 @@ const coerceValue = (
  * Checks that the root is a non-empty group, that every node sets exactly one
  * of criterion/children, that no group is empty, that connectors are valid,
  * and that the depth and criteria count stay within the configured bounds.
- * Column names are validated as SQL identifiers. No metadata is needed.
+ * Column names must be non-empty strings; their existence is checked later
+ * against the metadata table. No metadata is needed here.
  *
  * @param root - Root node of the filter tree.
  * @returns Distinct column names, in order of first appearance.
@@ -543,7 +620,7 @@ function collectFilterVariables(root: FilterNodeInput): string[] {
     if (!FILTER_OPERATIONS.includes(criterion.operation)) {
       throw badInput(`Invalid filter operation "${String(criterion.operation)}".`);
     }
-    names.add(validateIdentifier(criterion.variable, 'filter variable'));
+    names.add(filterVariable(criterion.variable));
   };
 
   walk(root, 0, true);
@@ -568,7 +645,7 @@ const compileCriterion = (
   params: unknown[],
 ): string => {
   const { variable, operation, value } = criterion;
-  const column = validateIdentifier(variable, 'filter variable');
+  const column = filterVariable(variable);
 
   // Colonne connue de la table metadata
   const meta = metadataByName.get(column);
@@ -597,7 +674,7 @@ const compileCriterion = (
     );
   }
 
-  const quoted = `"${column}"`;
+  const quoted = quoteIdent(column);
   const { maxInValues, maxPatternLength } = getLimits();
 
   // Ajout d'une valeur aux paramètres et retour du placeholder adapté au type
@@ -636,7 +713,10 @@ const compileCriterion = (
   switch (operation) {
     case 'MATCHES': {
       // Expression régulière RE2 (DuckDB) : pas de backtracking catastrophique,
-      // mais la longueur reste bornée et la syntaxe pré-validée.
+      // mais la longueur reste bornée. Les constructions absentes de RE2 sont
+      // refusées ici ; toute autre erreur de syntaxe est levée par DuckDB et
+      // convertie en BAD_USER_INPUT par le loader. Pas de validation par
+      // RegExp (JS) : elle accepte des lookarounds et refuse `(?i)`, valide en RE2.
       if (typeof value !== 'string' || value.length === 0) {
         throw badInput(`Operation MATCHES on column "${column}" requires a non-empty pattern.`);
       }
@@ -645,13 +725,7 @@ const compileCriterion = (
           `Operation MATCHES on column "${column}" accepts patterns of at most ${maxPatternLength} characters.`,
         );
       }
-      try {
-        new RegExp(value);
-      } catch {
-        throw badInput(
-          `Operation MATCHES on column "${column}" requires a valid regular expression.`,
-        );
-      }
+      assertRe2Compatible(value, column);
       params.push(value);
       return `regexp_matches(${quoted}, ?)`;
     }
@@ -768,13 +842,16 @@ function buildWhere(compiled: CompiledFilter | null | undefined): string {
  * Validates a filter tree, loads the metadata of its columns and compiles it.
  *
  * Structure and bounds are checked before any metadata lookup, so an abusive
- * tree never triggers database work.
+ * tree never triggers database work. A metadata row that failed to load (an
+ * Error, e.g. the catalog is unreachable) is rethrown as is: only a missing
+ * row means an unknown column.
  *
  * @param root - Root node of the filter tree, or null/undefined for no filter.
  * @param loadMetadata - Loads metadata rows for the given column names, aligned
  *   by index (typically the metadata DataLoader's loadMany).
  * @returns The compiled filter, or null when no tree was provided.
  * @throws {GraphQLError} BAD_USER_INPUT on any invalid input.
+ * @throws {Error} The loading error of a metadata row.
  */
 // Validation, chargement des métadonnées et compilation d'un arbre de filtres
 async function compileFilterTree(
@@ -786,11 +863,15 @@ async function compileFilterTree(
   const names = collectFilterVariables(root);
   const rows = await loadMetadata(names);
 
-  // Indexation par nom demandé (les erreurs/absences deviennent « colonne inconnue »)
+  // Une erreur de chargement remonte telle quelle : ce n'est pas une colonne inconnue
+  const failure = rows.find((row): row is Error => row instanceof Error);
+  if (failure) throw failure;
+
+  // Indexation par nom demandé (les absences deviennent « colonne inconnue »)
   const metadataByName = new Map<string, ColumnMetadata>();
   names.forEach((name, index) => {
     const row = rows[index];
-    if (row && !(row instanceof Error)) metadataByName.set(name, row);
+    if (row) metadataByName.set(name, row as ColumnMetadata);
   });
 
   return treeToSQL(root, metadataByName);

@@ -6,7 +6,8 @@ import { assertSchemaSupported } from '../db/schema-version.js';
 import { withCache } from '../utils/cache.js';
 import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
-import { validateIdentifier } from '../utils/utils.js';
+import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
+import { toLoaderError } from './loader-errors.js';
 
 // ─── Interfaces de la connexion DuckDB ───────────────────────────────────────
 
@@ -79,7 +80,8 @@ interface SortItem {
  * Provides common functionality for database connection management,
  * Redis caching, and DataLoader creation. All concrete loaders extend
  * this class and use createLoader or createBatchLoader to build
- * their DataLoader instances.
+ * their DataLoader instances. A load error is never turned into null:
+ * it rejects the key(s) concerned (see toLoaderError).
  */
 class BaseQueryLoader {
   batchSize: number;
@@ -157,16 +159,16 @@ class BaseQueryLoader {
    * Returns a fully qualified table name for the current catalog and schema.
    *
    * With the DuckLake multi-catalog / multi-schema setup, all table names must
-   * be prefixed as "{catalogId}".{schema}.{tableName}. The schema is the one
-   * bound to this loader (per-request), falling back to the catalog's configured
-   * default schema when none was provided.
+   * be prefixed as "{catalogId}"."{schema}"."{tableName}", each part quoted.
+   * The schema is the one bound to this loader (per-request), falling back to
+   * the catalog's configured default schema when none was provided.
    *
    * @param tableName - Bare table name (e.g. 'fact_table', 'metadata').
    * @returns Fully qualified table name string.
    */
   qualifyTable(tableName: string): string {
     const catalog = this.catalogId || databaseManager.getDefaultCatalog();
-    return `"${catalog}".${this.resolvedSchema()}.${tableName}`;
+    return qualifiedTable(catalog, this.resolvedSchema(), tableName);
   }
 
   // Point d'extension : contrôle d'une clé avant toute lecture, cache compris
@@ -269,6 +271,13 @@ class BaseQueryLoader {
    * createBatchLoader when the underlying query can handle multiple
    * keys in a single round-trip.
    *
+   * An error never becomes null: it is classified by toLoaderError and
+   * returned as the value of the failing key, so DataLoader rejects that key
+   * alone while the other keys of the batch resolve. A GraphQLError reaches
+   * the client unchanged, a DuckDB error caused by the request becomes
+   * BAD_USER_INPUT, and any other error is reported as INTERNAL_SERVER_ERROR
+   * (with an errorId) by the server's formatError.
+   *
    * @param loadFn - Function that fetches data for a single key.
    * @param options - Additional DataLoader options (overrides defaults).
    * @returns Configured DataLoader instance.
@@ -281,7 +290,7 @@ class BaseQueryLoader {
       async (keys) => {
         return this.executeWithConnection(async (connection) => {
           return Promise.all(
-            keys.map(async (key) => {
+            keys.map(async (key): Promise<V | Error> => {
               try {
                 // Contrôle de la clé avant le cache (garde de version)
                 this.assertKeyAllowed(key);
@@ -291,13 +300,10 @@ class BaseQueryLoader {
                 }
                 return await this.loadWithCache(key, async () => await loadFn(connection, key));
               } catch (error) {
-                // Les erreurs GraphQL (validation métier explicite) doivent
-                // remonter au client ; sinon le filet ci-dessous masque le
-                // vrai message en renvoyant null pour un champ non-nullable.
-                if (error instanceof GraphQLError) throw error;
+                // L'erreur devient la valeur de la clé : DataLoader ne rejette
+                // que cette clé, jamais de null silencieux
                 logger.error(`Error loading ${this.cachePrefix} for key:`, key, error);
-                // Retourne null ou tableau vide selon le contexte
-                return (Array.isArray(key) ? [] : null) as unknown as V;
+                return toLoaderError(error);
               }
             }),
           );
@@ -317,7 +323,9 @@ class BaseQueryLoader {
    * Creates a DataLoader optimized for batch database operations.
    *
    * Passes all queued keys to batchLoadFn in a single call, allowing
-   * the implementation to issue one efficient SQL query per batch.
+   * the implementation to issue one efficient SQL query per batch. A key
+   * without a result resolves to null (no row); an error rejects every key
+   * of the batch, classified by toLoaderError as in createLoader.
    *
    * @param batchLoadFn - Function that loads data for multiple keys at once.
    * @param options - Additional DataLoader options (overrides defaults).
@@ -333,14 +341,13 @@ class BaseQueryLoader {
           try {
             // Optimisation en une seule requête pour toutes les clés
             const results = await batchLoadFn(connection, keys);
-            // Alignement du résultat sur l'ordre des clés d'entrée
+            // Alignement du résultat sur l'ordre des clés d'entrée ; une clé
+            // sans ligne vaut null (absence de donnée, pas une erreur)
             return keys.map((_, index) => results[index] ?? (null as unknown as V));
           } catch (error) {
-            // Mêmes règles que createLoader : les GraphQLError remontent.
-            if (error instanceof GraphQLError) throw error;
+            // Mêmes règles que createLoader : l'erreur rejette les clés du lot
             logger.error(`Batch error in ${this.cachePrefix} loader:`, error);
-            // Valeurs par défaut pour chaque clé en cas d'erreur
-            return keys.map(() => null as unknown as V);
+            throw toLoaderError(error);
           }
         });
       },
@@ -359,41 +366,41 @@ class BaseQueryLoader {
  * Base class for fact-related loaders.
  *
  * Extends BaseQueryLoader with SQL-building helpers specific to
- * fact table queries (SELECT clause, ORDER BY clause, pagination
- * validation).
+ * fact table queries (SELECT clause, ORDER BY clause). Pagination bounds
+ * are validated by the resolvers (utils/pagination.ts).
  */
 class FactQueryLoader extends BaseQueryLoader {
   // Méthode de construction de la sélection des colonnes en SQL
   /**
    * Builds a SQL SELECT clause from a list of field names.
    *
-   * Every field name is validated as a SQL identifier before interpolation.
+   * Every field name is quoted; its existence was checked upstream against
+   * the metadata table (assertColumns), so any column name works.
    *
    * @param fields - Array of column names to include in the SELECT.
    * @returns Comma-separated field list, or '*' when fields is empty or null.
-   * @throws {GraphQLError} When a field name is not a valid identifier.
    */
   buildSelectClause(fields: string[] | null | undefined): string {
     if (!fields || fields.length === 0) return '*';
-    // Validation de chaque colonne avant interpolation (anti-injection)
-    return fields.map((f) => validateIdentifier(f, 'field')).join(', ');
+    return fields.map(quoteIdent).join(', ');
   }
 
   // Méthode de construction de la clause d'ordonnancement SQL
   /**
    * Builds a SQL ORDER BY clause from sort configuration.
    *
-   * Field names are validated as SQL identifiers and the direction is
-   * restricted to ASC / DESC before interpolation.
+   * Field names are quoted (their existence was checked upstream against the
+   * metadata table, or against the output aliases of the query) and the
+   * direction is restricted to ASC / DESC before interpolation.
    *
    * @param sort - Array of sort items, each with a field name and direction.
    * @returns ORDER BY clause string, or empty string when sort is empty or null.
-   * @throws {GraphQLError} When a field name or direction is invalid.
+   * @throws {GraphQLError} When a direction is invalid.
    */
   buildSortClause(sort: SortItem[] | null | undefined): string {
     if (!sort || sort.length === 0) return '';
     const items = sort.map((s) => {
-      const field = validateIdentifier(s.field, 'sortField');
+      const field = quoteIdent(s.field);
       // Direction restreinte à ASC / DESC (défaut ASC)
       const order = s.order ?? 'ASC';
       if (order !== 'ASC' && order !== 'DESC') {
@@ -404,23 +411,6 @@ class FactQueryLoader extends BaseQueryLoader {
       return `${field} ${order}`;
     });
     return `ORDER BY ${items.join(', ')}`;
-  }
-
-  // Méthode de validation des paramètres de pagination
-  /**
-   * Validates that pagination parameters are within configured bounds.
-   *
-   * @param limit - Maximum number of rows to return.
-   * @param offset - Number of rows to skip.
-   * @throws {Error} When limit exceeds MAX_LIMIT or offset exceeds MAX_OFFSET.
-   */
-  validatePagination(limit: number, offset: number): void {
-    if (limit > globalConfig.API.PAGINATION.MAX_LIMIT) {
-      throw new Error(`Limit cannot exceed ${globalConfig.API.PAGINATION.MAX_LIMIT}`);
-    }
-    if (offset > globalConfig.API.PAGINATION.MAX_OFFSET) {
-      throw new Error(`Offset cannot exceed ${globalConfig.API.PAGINATION.MAX_OFFSET}`);
-    }
   }
 }
 

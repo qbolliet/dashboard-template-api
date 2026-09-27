@@ -482,7 +482,8 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
     ['ENDS with empty string', leaf('label', 'ENDS', '')],
     ['ICONTAINS with a number', leaf('label', 'ICONTAINS', 3)],
     ['IS_TRUE with a value', leaf('flag', 'IS_TRUE', true)],
-    ['MATCHES with an invalid regex', leaf('label', 'MATCHES', '([a-z')],
+    // Une syntaxe RE2 invalide (« ([a-z ») est refusée par DuckDB, et l'erreur
+    // convertie en BAD_USER_INPUT par le loader (voir loader-errors.test.ts)
     ['MATCHES with an empty pattern', leaf('label', 'MATCHES', '')],
     ['MATCHES with a non-string', leaf('label', 'MATCHES', 5)],
   ])('incomplete or malformed criterion: %s', (_label, node) => {
@@ -587,15 +588,72 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
     expectBadInput(() => one(leaf('country', 'IN', values)), `at most ${maxIn} values`);
   });
 
-  test.each(['a; DROP TABLE fact_table', 'country" OR 1=1 --', '1abc', 'x.y'])(
-    'malformed variable %p is rejected before any metadata lookup',
+  test.each([[''], [42], [null]])(
+    'non-string or empty variable %p is rejected before any metadata lookup',
     (variable) => {
       expectBadInput(
-        () => collectFilterVariables(group([leaf(variable, 'EQ', 1)])),
+        () => collectFilterVariables(group([leaf(variable as string, 'EQ', 1)])),
         'Invalid filter variable',
       );
     },
   );
+
+  test.each(['a; DROP TABLE fact_table', 'country" OR 1=1 --', '1abc', 'x.y'])(
+    'any other variable name %p is collected, then checked against metadata',
+    (variable) => {
+      expect(collectFilterVariables(group([leaf(variable, 'EQ', 1)]))).toEqual([variable]);
+      expectBadInput(() => one(leaf(variable, 'EQ', 1)), 'Unknown filter column');
+    },
+  );
+
+  test('a declared column with spaces, accents or quotes is quoted', () => {
+    const metadata = new Map<string, ColumnMetadata>([
+      ['taux chômage', { sqlType: 'DOUBLE' }],
+      ['a"b', { sqlType: 'VARCHAR' }],
+    ]);
+    const compiled = treeToSQL(
+      group([leaf('taux chômage', 'GT', 5), leaf('a"b', 'EQ', 'x')]),
+      metadata,
+    );
+    expect(compiled).toEqual({
+      sql: '"taux chômage" > CAST(? AS DOUBLE) AND "a""b" = ?',
+      params: [5, 'x'],
+    });
+  });
+});
+
+// ─── MATCHES et RE2 ───────────────────────────────────────────────────────────
+
+describe('MATCHES — RE2 compatibility', () => {
+  test.each([
+    ['(?<=a)b', 'lookbehind'],
+    ['(?<!a)b', 'negative lookbehind'],
+    ['a(?=b)', 'lookahead'],
+    ['a(?!b)', 'negative lookahead'],
+    ['(?<year>\\d{4})', 'named group'],
+    ['(?>a+)b', 'atomic group'],
+    ['(a)\\1', 'back-reference'],
+    ['(?<n>a)\\k<n>', 'named group'],
+    ['\\k<n>', 'named back-reference'],
+  ])('%p is rejected with BAD_USER_INPUT (%s)', (pattern, construct) => {
+    expectBadInput(() => one(leaf('label', 'MATCHES', pattern)), construct);
+  });
+
+  test.each([
+    '(?i)france',
+    '(?P<name>a)',
+    '\\\\1',
+    '[(?=]x',
+    '[]a]',
+    '^Fr[ae]nce$',
+    '\\p{L}+',
+    '[[:alpha:]]',
+  ])('valid RE2 pattern %p is accepted', (pattern) => {
+    expect(one(leaf('label', 'MATCHES', pattern))).toEqual({
+      sql: 'regexp_matches("label", ?)',
+      params: [pattern],
+    });
+  });
 });
 
 // ─── compileFilterTree ────────────────────────────────────────────────────────
@@ -625,14 +683,22 @@ describe('compileFilterTree', () => {
     });
   });
 
-  test('missing or failed metadata rows surface as an unknown column', async () => {
-    const loadMetadata = async () => [null, new Error('db down')];
+  test('a missing metadata row surfaces as an unknown column', async () => {
+    const loadMetadata = async () => [null, { sqlType: 'VARCHAR' }];
     await expect(
       compileFilterTree(group([leaf('value', 'GT', 1), leaf('label', 'EQ', 'a')]), loadMetadata),
     ).rejects.toMatchObject({
       message: expect.stringContaining('Unknown filter column "value"'),
       extensions: { code: 'BAD_USER_INPUT' },
     });
+  });
+
+  test('a failed metadata row is rethrown as is, never reported as an unknown column', async () => {
+    const failure = new Error('IO Error: catalog unreachable');
+    const loadMetadata = async () => [null, failure];
+    await expect(
+      compileFilterTree(group([leaf('value', 'GT', 1), leaf('label', 'EQ', 'a')]), loadMetadata),
+    ).rejects.toBe(failure);
   });
 
   test('structure is validated before loading metadata', async () => {

@@ -3,6 +3,7 @@ import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
+import { qualifiedTable } from '../utils/identifiers.js';
 import type { DuckDBConnection } from './base-loader.js';
 import type { CatalogSchemaKey } from './catalog.js';
 
@@ -110,7 +111,7 @@ class DatasetInfoLoader extends BaseQueryLoader {
     { catalog, schema }: CatalogSchemaKey,
   ): Promise<DatasetInfo> {
     const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
-    const query = `SELECT ${DATASET_METADATA_SELECT} FROM "${catalog}".${resolvedSchema}.dataset_metadata LIMIT 1`;
+    const query = `SELECT ${DATASET_METADATA_SELECT} FROM ${qualifiedTable(catalog, resolvedSchema, 'dataset_metadata')} LIMIT 1`;
     const rows = await connection.all(query);
 
     // La spec §2.3 garantit exactement une ligne ; une table vide est traitée

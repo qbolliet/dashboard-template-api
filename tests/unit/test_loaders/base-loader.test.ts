@@ -2,7 +2,8 @@
  * Unit tests for BaseQueryLoader and FactQueryLoader (src/loaders/base-loader.ts).
  *
  * Verifies constructor defaults, connection lifecycle in executeWithConnection,
- * table qualification logic, and cache key generation in loadWithCache.
+ * table qualification logic, cache key generation in loadWithCache, and the
+ * propagation of load errors by the DataLoaders (never a silent null).
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -27,6 +28,12 @@ interface BaseQueryLoaderInstance {
   executeWithConnection: (fn: (conn: unknown) => Promise<unknown>) => Promise<unknown>;
   qualifyTable: (tableName: string) => string;
   loadWithCache: (key: unknown, loaderFn: () => Promise<unknown>) => Promise<unknown>;
+  createLoader: <K, V>(
+    loadFn: (connection: unknown, key: K) => Promise<V>,
+  ) => { load: (key: K) => Promise<V> };
+  createBatchLoader: <K, V>(
+    batchLoadFn: (connection: unknown, keys: readonly K[]) => Promise<(V | null)[]>,
+  ) => { load: (key: K) => Promise<V> };
 }
 
 /** Options de construction d'un BaseQueryLoader. */
@@ -48,7 +55,6 @@ interface BaseQueryLoaderConstructor {
 interface FactQueryLoaderInstance {
   buildSelectClause: (fields: string[] | null) => string;
   buildSortClause: (sort: Array<{ field: string; order: string }> | null) => string;
-  validatePagination: (limit: number, offset: number) => void;
 }
 
 /** Constructeur de FactQueryLoader. */
@@ -226,7 +232,7 @@ describe('BaseQueryLoader', () => {
       mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
 
       const result = loader.qualifyTable('fact_table');
-      expect(result).toBe('"mydb".main.fact_table');
+      expect(result).toBe('"mydb"."main"."fact_table"');
       expect(mockDatabaseManager.getDefaultSchema).toHaveBeenCalledWith('mydb');
     });
 
@@ -236,15 +242,79 @@ describe('BaseQueryLoader', () => {
       mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
 
       const result = loader.qualifyTable('metadata');
-      expect(result).toBe('"defaultdb".main.metadata');
+      expect(result).toBe('"defaultdb"."main"."metadata"');
     });
 
-    test('formate correctement les noms de tables avec les guillemets', () => {
+    test('quote catalogue, schéma et table, guillemets internes doublés', () => {
       const loader = new BaseQueryLoader({ catalogId: 'catalog1' });
-      mockDatabaseManager.getDefaultSchema.mockReturnValue('myschema');
+      mockDatabaseManager.getDefaultSchema.mockReturnValue('mon "schéma"');
 
-      const result = loader.qualifyTable('dim_country');
-      expect(result).toBe('"catalog1".myschema.dim_country');
+      const result = loader.qualifyTable('fact_table');
+      expect(result).toBe('"catalog1"."mon ""schéma"""."fact_table"');
+    });
+  });
+
+  // ── Propagation des erreurs par les DataLoaders ───────────────────────────
+
+  describe('createLoader — propagation des erreurs', () => {
+    test('une erreur du chargement rejette la clé au lieu de renvoyer null', async () => {
+      const loader = new BaseQueryLoader({ cache: false });
+      const dataLoader = loader.createLoader<string, string>(async () => {
+        throw new Error('IO Error: S3 unreachable');
+      });
+
+      await expect(dataLoader.load('k')).rejects.toThrow('IO Error: S3 unreachable');
+      expect(mockPool.release).toHaveBeenCalledWith(mockConnection);
+    });
+
+    test('seule la clé en échec est rejetée, les autres clés du lot aboutissent', async () => {
+      const loader = new BaseQueryLoader({ cache: false });
+      const dataLoader = loader.createLoader<string, string>(async (_conn, key) => {
+        if (key === 'bad') throw new Error('boom');
+        return `ok:${key}`;
+      });
+
+      // Même tick : les deux clés partent dans le même lot
+      const [good, bad] = await Promise.allSettled([
+        dataLoader.load('good'),
+        dataLoader.load('bad'),
+      ]);
+
+      expect(good).toEqual({ status: 'fulfilled', value: 'ok:good' });
+      expect(bad.status).toBe('rejected');
+      expect((bad as PromiseRejectedResult).reason.message).toBe('boom');
+    });
+
+    test('une erreur de binder DuckDB due à la requête devient BAD_USER_INPUT', async () => {
+      const loader = new BaseQueryLoader({ cache: false });
+      const dataLoader = loader.createLoader<string, string>(async () => {
+        throw new Error(
+          'Binder Error: Referenced column "nope" not found in FROM clause!\n\nLINE 1: ...',
+        );
+      });
+
+      await expect(dataLoader.load('k')).rejects.toMatchObject({
+        message: 'Binder Error: Referenced column "nope" not found in FROM clause!',
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
+    });
+
+    test('createBatchLoader rejette toutes les clés du lot sur erreur', async () => {
+      const loader = new BaseQueryLoader({ cache: false });
+      const dataLoader = loader.createBatchLoader<string, string>(async () => {
+        throw new Error('IO Error: disk');
+      });
+
+      await expect(dataLoader.load('a')).rejects.toThrow('IO Error: disk');
+    });
+
+    test('createBatchLoader : une clé sans ligne vaut null (absence, pas erreur)', async () => {
+      const loader = new BaseQueryLoader({ cache: false });
+      const dataLoader = loader.createBatchLoader<string, string>(async () => ['x']);
+
+      const [first, second] = await Promise.all([dataLoader.load('a'), dataLoader.load('b')]);
+      expect(first).toBe('x');
+      expect(second).toBeNull();
     });
   });
 
@@ -372,14 +442,19 @@ describe('FactQueryLoader', () => {
       expect(loader.buildSelectClause(null)).toBe('*');
     });
 
-    test('joint les champs par virgule', () => {
+    test('joint les champs quotés par virgule', () => {
       const loader = new FactQueryLoader();
-      expect(loader.buildSelectClause(['id', 'name', 'value'])).toBe('id, name, value');
+      expect(loader.buildSelectClause(['id', 'name', 'value'])).toBe('"id", "name", "value"');
     });
 
     test('gère un seul champ', () => {
       const loader = new FactQueryLoader();
-      expect(loader.buildSelectClause(['id'])).toBe('id');
+      expect(loader.buildSelectClause(['id'])).toBe('"id"');
+    });
+
+    test('accepte tout nom de colonne : espace, accent, guillemet', () => {
+      const loader = new FactQueryLoader();
+      expect(loader.buildSelectClause(['taux chômage', 'a"b'])).toBe('"taux chômage", "a""b"');
     });
   });
 
@@ -402,36 +477,19 @@ describe('FactQueryLoader', () => {
         { field: 'name', order: 'ASC' },
         { field: 'value', order: 'DESC' },
       ]);
-      expect(result).toBe('ORDER BY name ASC, value DESC');
+      expect(result).toBe('ORDER BY "name" ASC, "value" DESC');
     });
 
     test('gère un seul critère de tri', () => {
       const loader = new FactQueryLoader();
-      expect(loader.buildSortClause([{ field: 'id', order: 'ASC' }])).toBe('ORDER BY id ASC');
-    });
-  });
-
-  // ── Validation de la pagination ───────────────────────────────────────────
-
-  describe('validatePagination', () => {
-    test('lève une erreur si limit dépasse MAX_LIMIT', () => {
-      const loader = new FactQueryLoader();
-      expect(() => loader.validatePagination(1001, 0)).toThrow('Limit cannot exceed 1000');
+      expect(loader.buildSortClause([{ field: 'id', order: 'ASC' }])).toBe('ORDER BY "id" ASC');
     });
 
-    test('lève une erreur si offset dépasse MAX_OFFSET', () => {
+    test('refuse une direction hors ASC / DESC', () => {
       const loader = new FactQueryLoader();
-      expect(() => loader.validatePagination(10, 10001)).toThrow('Offset cannot exceed 10000');
-    });
-
-    test("ne lève pas d'erreur pour une pagination valide", () => {
-      const loader = new FactQueryLoader();
-      expect(() => loader.validatePagination(100, 1000)).not.toThrow();
-    });
-
-    test("ne lève pas d'erreur aux valeurs limites exactes", () => {
-      const loader = new FactQueryLoader();
-      expect(() => loader.validatePagination(1000, 10000)).not.toThrow();
+      expect(() => loader.buildSortClause([{ field: 'id', order: 'SIDEWAYS' }])).toThrow(
+        'Sort order must be either "ASC" or "DESC"',
+      );
     });
   });
 });

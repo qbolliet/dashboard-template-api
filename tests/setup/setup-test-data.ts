@@ -25,6 +25,13 @@ const __dirname = path.dirname(__filename);
 
 type Connection = Awaited<ReturnType<InstanceType<typeof DuckDBInstance>['connect']>>;
 
+// Identifiant quoté, guillemets internes doublés — même règle que
+// src/utils/identifiers.ts, recopiée ici : le globalSetup de Jest charge ce
+// fichier sans la résolution .js → .ts des sources.
+const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+const qualifiedTable = (catalog: string, schema: string, table: string): string =>
+  [catalog, schema, table].map(quoteIdent).join('.');
+
 // ─── Interfaces et types ───────────────────────────────────────────────────────
 
 /**
@@ -253,6 +260,51 @@ const GEOGRAPHY_TREE: Array<[string, string, string | null]> = [
   ['Île-de-France', 'Seine-et-Marne', 'Melun'],
   ['Occitanie', 'Hérault', 'Montpellier'],
 ];
+
+// ─── Schéma « emploi » : noms de colonnes non réduits à [A-Za-z0-9_] ────────────
+
+// La base accepte tout nom de colonne : espace, accent, apostrophe. Ce schéma
+// vérifie que l'API les projette, filtre, trie et regroupe (identifiants quotés
+// et contrôlés contre metadata), y compris dans le tri par défaut (cluster_by).
+
+/** Column order of the `emploi` fact_table. */
+const EMPLOI_COLUMNS = `
+  "zone d'emploi" VARCHAR,
+  "Année"         INTEGER,
+  "taux chômage"  DOUBLE
+`;
+
+const EMPLOI_METADATA: MetadataRow[] = [
+  meta("zone d'emploi", "Zone d'emploi", 'VARCHAR', true, true, { family: 'Géographie' }),
+  meta('Année', 'Année', 'INTEGER', true, false, { family: 'Temps' }),
+  meta('taux chômage', 'Taux de chômage', 'DOUBLE', false, false, {
+    unit: '%',
+    displayFormat: '.1f',
+    family: 'Emploi',
+    defaultAggregation: 'AVG',
+  }),
+];
+
+const EMPLOI_CLUSTER_BY = EMPLOI_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+// Zones d'emploi (l'apostrophe vérifie le passage des valeurs en paramètre)
+const EMPLOI_ZONES = ['Lyon', 'Paris', "Val-d'Oise"];
+const EMPLOI_YEARS = [2022, 2023, 2024];
+
+/**
+ * Builds the fact rows of the `emploi` schema.
+ *
+ * Values are deterministic: `5 + 2 × zone rank + 0.5 × (year − 2022)`, so the
+ * tests can assert exact filters, orderings and averages.
+ *
+ * @returns Rows aligned with EMPLOI_COLUMNS.
+ */
+// Lignes déterministes du schéma « emploi »
+function buildEmploiRows(): unknown[][] {
+  return EMPLOI_ZONES.flatMap((zone, rank) =>
+    EMPLOI_YEARS.map((year) => [zone, year, 5 + 2 * rank + 0.5 * (year - 2022)]),
+  );
+}
 
 // ─── Schéma « trade » : codes et libellés (spec §2.6) ────────────────────────────
 
@@ -714,7 +766,7 @@ async function insertFactRows(
   }
 
   await conn.run(
-    `INSERT INTO ${qualified} SELECT * FROM staging_fact ORDER BY ${clusterBy.join(', ')}`,
+    `INSERT INTO ${qualified} SELECT * FROM staging_fact ORDER BY ${clusterBy.map(quoteIdent).join(', ')}`,
   );
   await conn.run('DROP TABLE staging_fact');
 }
@@ -739,10 +791,10 @@ async function createSchema(
   spec: SchemaSpec,
   withDatasetMetadata: boolean = true,
 ): Promise<void> {
-  const qualify = (table: string): string => `"${alias}".${schema}.${table}`;
+  const qualify = (table: string): string => qualifiedTable(alias, schema, table);
 
   if (schema !== 'main') {
-    await conn.run(`CREATE SCHEMA IF NOT EXISTS "${alias}".${schema}`);
+    await conn.run(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(alias)}.${quoteIdent(schema)}`);
   }
 
   // Table metadata — contrat entre la base et l'interface (spec §2.2)
@@ -917,7 +969,7 @@ async function createCatalog(
  *
  * Creates a shared in-memory DuckDB instance, installs the DuckLake extension
  * if needed, then creates the default (main + predictions + geography +
- * trade), macroeconomics (main + trade), and public_finance catalogs.
+ * trade + emploi), macroeconomics (main + trade), and public_finance catalogs.
  */
 async function setupTestData(): Promise<void> {
   // Création du répertoire de données de test si absent
@@ -991,6 +1043,21 @@ async function setupTestData(): Promise<void> {
       TRADE_COLUMNS,
       tradeSpec('default', buildTradeRows(TRADE_CODES_DEFAULT, TRADE_PARTNERS, [2023, 2024], 1.0)),
     );
+
+    // Cinquième schéma `emploi` : noms de colonnes avec espace, accent et
+    // apostrophe, y compris dans cluster_by
+    await createSchema(conn, 'default', 'emploi', EMPLOI_COLUMNS, {
+      metadata: EMPLOI_METADATA,
+      datasetMetadata: {
+        label: 'Emploi',
+        description: 'Taux de chômage par zone d’emploi et par année',
+        source: 'test-fixture:default.emploi',
+        updatedAt: '2026-09-01 04:36:00',
+        schemaVersion: 1,
+        clusterBy: EMPLOI_CLUSTER_BY,
+      },
+      rows: buildEmploiRows(),
+    });
 
     // Deux schémas VOLONTAIREMENT non conformes, réservés au test de la garde
     // de version. Ils ne décrivent aucun format réel : le premier annonce une

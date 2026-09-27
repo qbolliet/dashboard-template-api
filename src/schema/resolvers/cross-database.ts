@@ -3,7 +3,10 @@ import { GraphQLError } from 'graphql';
 import { withTimeout } from '../../utils/timeout.js';
 import { databaseManager } from '../../db/index.js';
 import { config } from '../../utils/config-loader.js';
+import { assertColumns } from '../../utils/identifiers.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
+import { validatePagination } from '../../utils/pagination.js';
+import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { GraphQLContext } from './types.js';
 import type { LoadersCollection } from '../../loaders/index.js';
 import type {
@@ -94,28 +97,28 @@ function assertValidCatalog(catalog: string): void {
   }
 }
 
+// Colonnes projetées par compareFacts, seules cibles possibles de son tri
+const COMPARISON_SORT_FIELDS = ['key', 'keyLabel', 'valueA', 'valueB', 'delta', 'deltaPercent'];
+
 /**
- * Resolves the label column of a field on one side of a comparison.
+ * Loads the metadata of one side of a cross-dataset query.
  *
  * Reads the side's metadata through the catalogMetadata loader (same cache as
- * getCatalogSchema) and applies the default rule of resolveLabelField. The
- * schema is checked against the catalog's allow-list first: the metadata
- * loader interpolates it into SQL.
+ * getCatalogSchema). The schema is checked against the catalog's allow-list
+ * first: the metadata loader interpolates it into SQL.
  *
  * @param loaders - Request loaders (catalogMetadata is catalog-independent).
  * @param catalog - Catalog alias of the side, already validated.
  * @param schema - Schema of the side; null uses the catalog default.
- * @param field - Join or group-by field whose label column is looked up.
- * @returns The effective label column, or null when the field has none.
+ * @returns The side's metadata rows keyed by column name.
  * @throws {GraphQLError} When the schema is not available for the catalog.
  */
-// Colonne de libellés d'un champ, d'un côté de la comparaison
-async function resolveSideLabelField(
+// Métadonnées d'un côté de la requête cross-dataset
+async function loadSideMetadata(
   loaders: LoadersCollection,
   catalog: string,
   schema: string | null,
-  field: string,
-): Promise<string | null> {
+): Promise<Map<string, FieldMetadata>> {
   if (schema && !databaseManager.isValidSchema(catalog, schema)) {
     throw new GraphQLError(
       `Schema '${schema}' is not available for catalog '${catalog}'. ` +
@@ -123,7 +126,38 @@ async function resolveSideLabelField(
     );
   }
   const rows = await loaders.catalogMetadata.load({ catalog, schema });
-  return resolveLabelField(field, indexMetadataByName(rows));
+  return indexMetadataByName(rows);
+}
+
+/**
+ * Checks columns against one side's metadata and returns the label column of
+ * the key field on that side.
+ *
+ * Every column interpolated in the SQL of a comparison must exist on BOTH
+ * sides: the check runs once per side, naming it in the message.
+ *
+ * @param loaders - Request loaders.
+ * @param catalog - Catalog alias of the side, already validated.
+ * @param schema - Schema of the side; null uses the catalog default.
+ * @param columns - Columns the query interpolates for this side.
+ * @param role - Role of the columns, quoted in the message (e.g. 'joinField').
+ * @param keyField - Field whose label column is looked up, or null for none.
+ * @returns The effective label column of keyField, or null.
+ * @throws {GraphQLError} BAD_USER_INPUT when a column is unknown on this side.
+ */
+// Contrôle des colonnes d'un côté, puis colonne de libellés de la clé
+async function checkSide(
+  loaders: LoadersCollection,
+  catalog: string,
+  schema: string | null,
+  columns: string[],
+  role: string,
+  keyField: string | null,
+): Promise<string | null> {
+  const byName = await loadSideMetadata(loaders, catalog, schema);
+  const side = `${catalog}.${schema ?? databaseManager.getDefaultSchema(catalog)}`;
+  assertColumns(columns, byName, `${role} (${side})`);
+  return keyField ? resolveLabelField(keyField, byName) : null;
 }
 
 // Resolver pour les requêtes cross-catalog
@@ -171,22 +205,31 @@ const crossDatabaseResolvers = {
 
       // Vérification de la présence des champs de jointure
       if (!joinFields || joinFields.length === 0) {
-        throw new GraphQLError('At least one joinField is required');
+        throw new GraphQLError('At least one joinField is required', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
       }
 
-      // Validation de la limite de pagination
-      if (limit > config.API.PAGINATION.MAX_LIMIT) {
-        throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
+      // Validation de la pagination
+      validatePagination(limit, offset);
+
+      // Tri limité aux colonnes projetées par la comparaison
+      const badSort = sort.filter(({ field }) => !COMPARISON_SORT_FIELDS.includes(field));
+      if (badSort.length > 0) {
+        throw new GraphQLError(
+          `Invalid sort field(s): ${badSort.map(({ field }) => `"${field}"`).join(', ')}. ` +
+            `Allowed: ${COMPARISON_SORT_FIELDS.join(', ')}.`,
+          { extensions: { code: 'BAD_USER_INPUT' } },
+        );
       }
 
-      // Libellé de la clé : seulement pour un champ de jointure unique
-      const [labelFieldA, labelFieldB] =
-        joinFields.length === 1
-          ? await Promise.all([
-              resolveSideLabelField(loaders, catalogA, schemaA, joinFields[0]),
-              resolveSideLabelField(loaders, catalogB, schemaB, joinFields[0]),
-            ])
-          : [null, null];
+      // Champs de jointure contrôlés des deux côtés ; libellé de la clé
+      // seulement pour un champ de jointure unique
+      const keyField = joinFields.length === 1 ? joinFields[0] : null;
+      const [labelFieldA, labelFieldB] = await Promise.all([
+        checkSide(loaders, catalogA, schemaA, joinFields, 'joinField', keyField),
+        checkSide(loaders, catalogB, schemaB, joinFields, 'joinField', keyField),
+      ]);
 
       return withTimeout(
         loaders.compareFacts.load({
@@ -241,22 +284,22 @@ const crossDatabaseResolvers = {
         throw new GraphQLError('groupBy is required');
       }
 
-      // Validation de la limite de pagination
-      if (limit > config.API.PAGINATION.MAX_LIMIT) {
-        throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
-      }
+      // Validation de la pagination
+      validatePagination(limit, offset);
 
       // Validation du type d'agrégation
       if (!VALID_AGGREGATIONS.includes(aggregation)) {
         throw new GraphQLError(
           `Invalid aggregation. Must be one of: ${VALID_AGGREGATIONS.join(', ')}`,
+          { extensions: { code: 'BAD_USER_INPUT' } },
         );
       }
 
-      // Libellé de la clé de groupe de chaque côté, même règle que getAggregatedFacts
+      // groupBy contrôlé des deux côtés ; libellé de la clé de groupe de chaque
+      // côté, même règle que getAggregatedFacts
       const [labelFieldA, labelFieldB] = await Promise.all([
-        resolveSideLabelField(loaders, catalogA, schemaA, groupBy),
-        resolveSideLabelField(loaders, catalogB, schemaB, groupBy),
+        checkSide(loaders, catalogA, schemaA, [groupBy], 'groupBy', groupBy),
+        checkSide(loaders, catalogB, schemaB, [groupBy], 'groupBy', groupBy),
       ]);
 
       return withTimeout(
@@ -302,6 +345,16 @@ const crossDatabaseResolvers = {
 
       // Validation de chaque identifiant de catalogue
       catalogs.forEach(assertValidCatalog);
+
+      // Validation de la limite
+      validatePagination(limit);
+
+      // Champ contrôlé contre les métadonnées de chaque cible
+      await Promise.all(
+        catalogs.map((catalog, i) =>
+          checkSide(loaders, catalog, schemas?.[i] ?? null, [fieldName], 'fieldName', null),
+        ),
+      );
 
       return withTimeout(
         loaders.crossDatabaseSelectOptions.load({

@@ -123,8 +123,11 @@ Allowed operations per column type family:
 The `I*` operations (`IEQ`, `ICONTAINS`, `ISTARTS`, `IENDS`) are the case-insensitive
 twins of their `LIKE` counterparts (SQL `ILIKE`); `IEQ` adds no wildcard, so it is a
 case-insensitive equality. `MATCHES` compiles to DuckDB's `regexp_matches` (RE2
-syntax: no backreferences, no lookaround); patterns are capped at
-`MAX_PATTERN_LENGTH` (200 characters) and must be syntactically valid. On a nullable
+syntax, e.g. `(?i)` for case-insensitivity, `(?P<name>…)` for named groups);
+lookaround (`(?=`, `(?!`, `(?<=`, `(?<!`), atomic groups `(?>`, `(?<name>…)` and
+back-references (`\1`, `\k<name>`) are rejected with `BAD_USER_INPUT` naming the
+construct, and any other RE2 syntax error comes back as `BAD_USER_INPUT` too.
+Patterns are capped at `MAX_PATTERN_LENGTH` (200 characters). On a nullable
 column, `IS_NOT_TRUE` / `IS_NOT_FALSE` also match `NULL`, unlike `NEQ`.
 
 Value shapes:
@@ -140,6 +143,22 @@ All `LIKE` / `ILIKE` operations match the value literally (`%` and `_` are escap
 Any invalid tree, unknown column, incompatible operation or malformed value is
 rejected with a `BAD_USER_INPUT` error naming the column, its type and the
 allowed operations.
+
+Column names are not restricted to `[A-Za-z0-9_]`: any column declared in the
+`metadata` table (`"taux chômage"`, `"Année"`, `"zone d'emploi"`) can be used in
+`fields`, `sort`, `groupBy`, `measure`, filter variables and the export. Every
+such name is checked against `metadata` — an unknown one is a `BAD_USER_INPUT`
+error listing all offending names — then quoted in the SQL.
+
+### Pagination and errors
+
+`limit` must be between 1 and `API.PAGINATION.MAX_LIMIT` (1000) and `offset`
+between 0 and `MAX_OFFSET` (10000), on every paginated query (fact, aggregated,
+comparison and select-option queries); anything else is rejected with
+`BAD_USER_INPUT` before any database work. No error is ever turned into a silent
+`null`: an input the database refuses (type mismatch such as `SUM` on a `VARCHAR`
+measure, invalid regex) is a `BAD_USER_INPUT`, and a server-side failure is an
+`INTERNAL_SERVER_ERROR` carrying an `errorId` to quote when reporting it.
 
 Example — `kind = 1 AND NOT (country = 1 OR country = 2)`:
 

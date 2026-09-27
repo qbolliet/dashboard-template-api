@@ -162,7 +162,7 @@ describe('CatalogMetadataLoader', () => {
       await loader.load({ catalog: 'mydb', schema: 'staging' });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"mydb".staging.metadata');
+      expect(query).toContain('"mydb"."staging"."metadata"');
       // Pas de fallback : getDefaultSchema ne doit pas être appelé quand schema est fourni
       expect(mockDatabaseManager.getDefaultSchema).not.toHaveBeenCalled();
     });
@@ -182,8 +182,8 @@ describe('CatalogMetadataLoader', () => {
       expect(mockConnection.all).toHaveBeenCalledTimes(2);
       const sqlA = mockConnection.all.mock.calls[0][0] as string;
       const sqlB = mockConnection.all.mock.calls[1][0] as string;
-      expect(sqlA).toContain('"mydb".main.metadata');
-      expect(sqlB).toContain('"mydb".staging.metadata');
+      expect(sqlA).toContain('"mydb"."main"."metadata"');
+      expect(sqlB).toContain('"mydb"."staging"."metadata"');
     });
 
     test('retourne un tableau vide si aucune métadonnée', async () => {

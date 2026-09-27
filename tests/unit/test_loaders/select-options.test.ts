@@ -195,7 +195,7 @@ describe('SelectOptionsLoader', () => {
 
       const [sql, params] = distinctCall();
       expect(sql).toContain('IS NOT NULL');
-      expect(sql).toContain('ORDER BY country');
+      expect(sql).toContain('ORDER BY "country"');
       // La limite passe en paramètre lié, jamais interpolée
       expect(params).toEqual([50]);
     });
@@ -250,26 +250,26 @@ describe('SelectOptionsLoader', () => {
       expect(mockConnection.all).toHaveBeenCalledTimes(1);
     });
 
-    test('erreur SQL non masquée en tableau vide', async () => {
+    test('erreur SQL non masquée : la clé est rejetée', async () => {
       mockConnection.all.mockRejectedValue(new Error('DB error'));
 
       const loader = createSelectOptionsLoader('main');
-      const result = await loader.load({ fieldName: 'country', limit: 50, searchTerm: null });
 
-      // L'ancien catch { return []; } présentait l'échec comme « aucune option ».
-      // Le loader n'avale plus rien : la politique commune de BaseQueryLoader
-      // (journalisation + null pour une erreur non métier) s'applique, et le
-      // champ non-nullable du SDL transforme ce null en erreur côté client.
-      expect(result).toBeNull();
+      // Ni tableau vide (« aucune option ») ni null : l'erreur remonte au client
+      await expect(
+        loader.load({ fieldName: 'country', limit: 50, searchTerm: null }),
+      ).rejects.toThrow('DB error');
     });
 
-    test('nom de champ invalide rejeté avant toute requête', async () => {
-      const loader = createSelectOptionsLoader('main');
-      await expect(
-        loader.load({ fieldName: 'bad field!', limit: 50, searchTerm: null }),
-      ).rejects.toThrow();
+    test('un nom de colonne quelconque est quoté après contrôle contre metadata', async () => {
+      mockDeclaredField([{ value: 'Lyon' }]);
 
-      expect(mockConnection.all).not.toHaveBeenCalled();
+      const loader = createSelectOptionsLoader('main');
+      await loader.load({ fieldName: "zone d'emploi", limit: 50, searchTerm: null });
+
+      const [sql] = distinctCall();
+      expect(sql).toContain(`SELECT DISTINCT "zone d'emploi" AS value`);
+      expect(sql).toContain(`ORDER BY "zone d'emploi" LIMIT ?`);
     });
   });
 });
@@ -329,10 +329,10 @@ describe('SelectOptionsTreeLoader', () => {
     await loadTree({ maxNodes: 100 });
 
     const [sql, params] = distinctCall();
-    expect(sql).toContain('SELECT DISTINCT region, departement, commune');
+    expect(sql).toContain('SELECT DISTINCT "region", "departement", "commune"');
     expect(sql).toContain('fact_table');
-    expect(sql).toContain('WHERE region IS NOT NULL');
-    expect(sql).toContain('ORDER BY region, departement, commune LIMIT ?');
+    expect(sql).toContain('WHERE "region" IS NOT NULL');
+    expect(sql).toContain('ORDER BY "region", "departement", "commune" LIMIT ?');
     // Plafond maxNodes + 1 en paramètre lié
     expect(params).toEqual([101]);
     // Métadonnées + DISTINCT : deux requêtes au total
@@ -345,8 +345,8 @@ describe('SelectOptionsTreeLoader', () => {
     await loadTree({ maxDepth: 2 });
 
     const [sql] = distinctCall();
-    expect(sql).toContain('SELECT DISTINCT departement, commune');
-    expect(sql).toContain('WHERE departement IS NOT NULL');
+    expect(sql).toContain('SELECT DISTINCT "departement", "commune"');
+    expect(sql).toContain('WHERE "departement" IS NOT NULL');
   });
 
   test('searchTerm filtre le niveau fieldName, jokers échappés', async () => {
@@ -355,7 +355,7 @@ describe('SelectOptionsTreeLoader', () => {
     await loadTree({ searchTerm: 'Me_%' });
 
     const [sql, params] = distinctCall();
-    expect(sql).toContain("LOWER(CAST(commune AS VARCHAR)) LIKE ? ESCAPE '\\'");
+    expect(sql).toContain(`LOWER(CAST("commune" AS VARCHAR)) LIKE ? ESCAPE '\\'`);
     expect(params[0]).toBe('%me\\_\\%%');
   });
 
@@ -397,7 +397,7 @@ describe('SelectOptionsTreeLoader', () => {
     await loadTree({ fieldName: 'c' });
 
     const [sql] = distinctCall();
-    expect(sql).toContain('SELECT DISTINCT a, b, c');
+    expect(sql).toContain('SELECT DISTINCT "a", "b", "c"');
   });
 
   test('une parente non déclarée arrête la remontée', async () => {
@@ -406,14 +406,17 @@ describe('SelectOptionsTreeLoader', () => {
     await loadTree();
 
     const [sql] = distinctCall();
-    expect(sql).toContain('SELECT DISTINCT commune FROM');
+    expect(sql).toContain('SELECT DISTINCT "commune" FROM');
   });
 
-  test('une parente au nom invalide est rejetée avant la requête DISTINCT', async () => {
-    mockHierarchy({ commune: 'bad name', 'bad name': null });
+  test('une parente au nom quelconque (lue dans metadata) est quotée', async () => {
+    mockHierarchy({ commune: 'zone d"emploi', 'zone d"emploi': null });
 
-    await expect(loadTree()).rejects.toThrow(GraphQLError);
-    expect(mockConnection.all).toHaveBeenCalledTimes(1);
+    await loadTree();
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT "zone d""emploi", "commune"');
+    expect(sql).toContain('WHERE "zone d""emploi" IS NOT NULL');
   });
 
   test('maxDepth < 1 rejeté avant toute requête', async () => {
@@ -464,8 +467,10 @@ describe('SelectOptionsLoader — colonne de code dotée de libellés', () => {
     });
 
     const [sql, params] = distinctCall();
-    expect(sql).toContain('SELECT DISTINCT CAST(nc8 AS VARCHAR) AS value, nc8_libelle_en AS label');
-    expect(sql).toContain('WHERE nc8 IS NOT NULL');
+    expect(sql).toContain(
+      'SELECT DISTINCT CAST("nc8" AS VARCHAR) AS value, "nc8_libelle_en" AS label',
+    );
+    expect(sql).toContain('WHERE "nc8" IS NOT NULL');
     expect(sql).toContain('ORDER BY value LIMIT ?');
     expect(params).toEqual([10]);
     expect(result).toEqual([{ value: '01012100', label: 'Pure-bred breeding horses' }]);
@@ -483,7 +488,7 @@ describe('SelectOptionsLoader — colonne de code dotée de libellés', () => {
 
     const [sql, params] = distinctCall();
     expect(sql).toContain(
-      "AND (LOWER(CAST(nc8 AS VARCHAR)) LIKE ? ESCAPE '\\' OR LOWER(nc8_libelle_fr) LIKE ? ESCAPE '\\')",
+      `AND (LOWER(CAST("nc8" AS VARCHAR)) LIKE ? ESCAPE '\\' OR LOWER("nc8_libelle_fr") LIKE ? ESCAPE '\\')`,
     );
     expect(params).toEqual(['%10\\%%', '%10\\%%', 10]);
   });
@@ -501,16 +506,18 @@ describe('SelectOptionsLoader — colonne de code dotée de libellés', () => {
     expect(result).toEqual([{ value: '02013090', label: '02013090' }]);
   });
 
-  test('un nom de colonne de libellés invalide est rejeté avant toute requête', async () => {
-    await expect(
-      createSelectOptionsLoader('main').load({
-        fieldName: 'nc8',
-        limit: 10,
-        searchTerm: null,
-        labelField: 'x; DROP TABLE t',
-      }),
-    ).rejects.toThrow();
-    expect(mockConnection.all).not.toHaveBeenCalled();
+  test('la colonne de libellés (issue de metadata) est quotée', async () => {
+    mockDeclaredField([]);
+
+    await createSelectOptionsLoader('main').load({
+      fieldName: 'nc8',
+      limit: 10,
+      searchTerm: null,
+      labelField: 'libellé "court"',
+    });
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('"libellé ""court""" AS label');
   });
 
   test('deux labelField différents → deux entrées de cache distinctes', async () => {
@@ -571,11 +578,11 @@ describe('SelectOptionsTreeLoader — libellés par niveau', () => {
 
     const [sql, params] = distinctCall();
     expect(sql).toContain(
-      'SELECT DISTINCT nc6, nc6_libelle AS _label_0, nc8, nc8_libelle_en AS _label_1',
+      'SELECT DISTINCT "nc6", "nc6_libelle" AS _label_0, "nc8", "nc8_libelle_en" AS _label_1',
     );
     // Tri et recherche : codes de la chaîne, code ou libellé de la feuille
-    expect(sql).toContain('ORDER BY nc6, nc8 LIMIT ?');
-    expect(sql).toContain('OR LOWER(nc8_libelle_en) LIKE ?');
+    expect(sql).toContain('ORDER BY "nc6", "nc8" LIMIT ?');
+    expect(sql).toContain('OR LOWER("nc8_libelle_en") LIKE ?');
     expect(params).toEqual(['%slaughter%', '%slaughter%', 101]);
     expect(result).toEqual([
       {

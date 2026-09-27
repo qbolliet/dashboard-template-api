@@ -2,7 +2,6 @@
 import os from 'os';
 import path from 'path';
 import { config } from '../utils/config-loader.js';
-import { validateIdentifier } from '../utils/utils.js';
 import type { ExportConfig } from '../utils/config-loader.js';
 import type { SortItem } from '../loaders/base-loader.js';
 import type { FilterNodeInput } from '../utils/filter-tree.js';
@@ -153,19 +152,19 @@ function readString(query: Record<string, unknown>, name: string): string | null
 }
 
 /**
- * Runs validateIdentifier and turns its GraphQL error into a 400.
+ * Checks that a column name is not empty.
  *
- * @param name - Candidate identifier.
+ * Any column name the database accepts is allowed — it is quoted in the SQL
+ * and checked against the metadata table once it is loaded.
+ *
+ * @param name - Candidate column name, already trimmed.
  * @param context - Label used in the error message.
- * @returns The validated identifier.
- * @throws {ExportHttpError} 400 when the identifier is invalid.
+ * @returns The column name, unchanged.
+ * @throws {ExportHttpError} 400 when the name is empty.
  */
-function identifier(name: string, context: string): string {
-  try {
-    return validateIdentifier(name, context);
-  } catch (error) {
-    throw badParameter((error as Error).message);
-  }
+function columnName(name: string, context: string): string {
+  if (name === '') throw badParameter(`Empty ${context} name.`);
+  return name;
 }
 
 /**
@@ -182,7 +181,7 @@ function parseSort(raw: string): SortItem[] {
     if (rest.length > 0 || !column) {
       throw badParameter(`Invalid sort item "${item}": expected "column" or "column:asc|desc".`);
     }
-    const field = identifier(column, 'sort field');
+    const field = columnName(column, 'sort field');
     if (seen.has(field)) throw badParameter(`Sort column "${field}" is given twice.`);
     seen.add(field);
 
@@ -221,9 +220,9 @@ function parseFilters(raw: string): FilterNodeInput {
 /**
  * Validates the query string of an export request.
  *
- * Pure function: no database access. Column names are validated as SQL
- * identifiers here; their existence in the schema is checked once the
- * metadata is loaded.
+ * Pure function: no database access. Column names only need to be non-empty
+ * here; their existence in the schema is checked once the metadata is loaded,
+ * and catalog/schema against their allow-lists (resolveExportTarget).
  *
  * @param query - Parsed query string (`req.query`).
  * @param settings - Export guards (row ceiling).
@@ -249,11 +248,11 @@ function parseExportQuery(query: Record<string, unknown>, settings: ExportSettin
     );
   }
 
-  // Colonnes projetées : identifiants valides et sans doublon
+  // Colonnes projetées : noms non vides et sans doublon
   const fieldsRaw = readString(query, 'fields');
   let fields: string[] | null = null;
   if (fieldsRaw) {
-    fields = fieldsRaw.split(',').map((f) => identifier(f.trim(), 'field'));
+    fields = fieldsRaw.split(',').map((f) => columnName(f.trim(), 'field'));
     const duplicate = fields.find((f, i) => fields!.indexOf(f) !== i);
     if (duplicate) throw badParameter(`Field "${duplicate}" is given twice.`);
   }
@@ -272,8 +271,9 @@ function parseExportQuery(query: Record<string, unknown>, settings: ExportSettin
   const filtersRaw = readString(query, 'filters');
 
   return {
-    catalog: catalogRaw ? identifier(catalogRaw, 'catalog') : null,
-    schema: schemaRaw ? identifier(schemaRaw, 'schema') : null,
+    // Catalogue et schéma contrôlés contre leurs allow-lists par resolveExportTarget
+    catalog: catalogRaw,
+    schema: schemaRaw,
     fields,
     filters: filtersRaw ? parseFilters(filtersRaw) : null,
     sort: sortRaw ? parseSort(sortRaw) : null,

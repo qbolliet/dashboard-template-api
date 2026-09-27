@@ -4,6 +4,7 @@ import { dirname, resolve } from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
+import { qualifiedTable } from '../utils/identifiers.js';
 import { createContextLogger } from '../utils/logger.js';
 import { recordSchemaVersion, resetSchemaVersions } from './schema-version.js';
 
@@ -554,7 +555,7 @@ class DatabaseManager {
           let version: number | null = null;
           try {
             const rows = await connection.all(
-              `SELECT schema_version FROM "${catalogId}".${schema}.dataset_metadata LIMIT 1`,
+              `SELECT schema_version FROM ${qualifiedTable(catalogId, schema, 'dataset_metadata')} LIMIT 1`,
             );
             const raw = rows[0]?.schema_version;
             // Une table présente mais vide vaut une table absente (spec §2.3 :

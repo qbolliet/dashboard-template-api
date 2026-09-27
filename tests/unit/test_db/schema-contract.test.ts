@@ -22,7 +22,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Schémas de test, par catalogue. */
 const TEST_SCHEMAS: Array<[catalog: string, catalogFile: string, schemas: string[]]> = [
-  ['default', 'test-default.ducklake', ['main', 'predictions', 'geography', 'trade']],
+  ['default', 'test-default.ducklake', ['main', 'predictions', 'geography', 'trade', 'emploi']],
   ['macroeconomics', 'test-macroeconomics.ducklake', ['main', 'trade']],
   ['public_finance', 'test-public-finance.ducklake', ['main']],
 ];

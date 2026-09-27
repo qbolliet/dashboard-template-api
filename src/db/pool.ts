@@ -1,6 +1,7 @@
 // Importation des modules
 import { DuckDBInstance, DuckDBConnection, DuckDBResult, Json } from '@duckdb/node-api';
 import { config } from '../utils/config-loader.js';
+import { quoteIdent } from '../utils/identifiers.js';
 import { computeExtents, jsonValueConverter } from './json-conversion.js';
 import type { ColumnExtent } from './json-conversion.js';
 import { createContextLogger } from '../utils/logger.js';
@@ -177,13 +178,13 @@ export const buildCatalogSql = (catalog: CatalogEntry): string[] => {
       `PASSWORD '${escapeSqlString(pg.password)}')`;
     // Chaîne de connexion sans identifiants (résolus via le secret ci-dessus)
     const connStr = `postgres:dbname=${pg.database} host=${pg.host} port=${pg.port}`;
-    const attachSql = `ATTACH 'ducklake:${escapeSqlString(connStr)}' AS "${catalog.alias}"${optionClause}`;
+    const attachSql = `ATTACH 'ducklake:${escapeSqlString(connStr)}' AS ${quoteIdent(catalog.alias)}${optionClause}`;
     return [secretSql, attachSql];
   }
 
   // Catalogue fichier (.ducklake) — comportement historique
   return [
-    `ATTACH 'ducklake:${escapeSqlString(catalog.path ?? '')}' AS "${catalog.alias}"${optionClause}`,
+    `ATTACH 'ducklake:${escapeSqlString(catalog.path ?? '')}' AS ${quoteIdent(catalog.alias)}${optionClause}`,
   ];
 };
 
@@ -481,7 +482,7 @@ class DuckDBPool {
           // n'était pas attaché, on poursuit vers le ré-ATTACH ; s'il est occupé,
           // le ré-ATTACH échouera et l'erreur remontera à l'appelant (admin).
           try {
-            await conn.run(`DETACH "${catalogId}"`);
+            await conn.run(`DETACH ${quoteIdent(catalogId)}`);
           } catch (detachError) {
             dbLogger.warn('DETACH skipped during single-catalog reload (continuing)', {
               catalog: catalogId,

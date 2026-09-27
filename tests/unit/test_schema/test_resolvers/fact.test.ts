@@ -291,7 +291,7 @@ describe('getFactTable', () => {
     [
       'injection in variable',
       { children: [leaf('country = 1; DROP TABLE fact_table; --', 'EQ', 1)] },
-      'Invalid filter variable',
+      'Unknown filter column',
     ],
   ])('rejects %s with BAD_USER_INPUT', async (_label, tree, fragment) => {
     const { errors } = await countWith(tree);
@@ -458,6 +458,7 @@ describe('getFactTable', () => {
 
     expect(result.errors).toBeDefined();
     expect(result.errors![0].message).toContain('Limit cannot exceed 1000');
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
   });
 
   test('rejects offset > 10000', async () => {
@@ -466,6 +467,7 @@ describe('getFactTable', () => {
 
     expect(result.errors).toBeDefined();
     expect(result.errors![0].message).toContain('Offset cannot exceed 10000');
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
   });
 
   test('accepts explicit empty database parameter (falls back to default)', async () => {

@@ -2,7 +2,7 @@
  * Unit tests for FieldStatsLoader (src/loaders/field-stats.ts).
  *
  * Verifies the single SQL query (aggregates, qualified table, parameterized
- * filter), the identifier validation, the mapping of the row, the two cache
+ * filter), the identifier quoting, the mapping of the row, the two cache
  * TTLs (long unfiltered, short filtered), the cache key layout covered by the
  * invalidation by prefix, and that two loads of the same key run one query.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
@@ -123,11 +123,11 @@ describe('FieldStatsLoader', () => {
 
     expect(mockConnection.all).toHaveBeenCalledTimes(1);
     const [query, params] = mockConnection.all.mock.calls[0] as [string, unknown[]];
-    expect(query).toContain('MIN(population)');
-    expect(query).toContain('MAX(population)');
-    expect(query).toContain('COUNT(DISTINCT population)');
-    expect(query).toContain('COUNT(*) - COUNT(population)');
-    expect(query).toContain('"db1".geo.fact_table');
+    expect(query).toContain('MIN("population")');
+    expect(query).toContain('MAX("population")');
+    expect(query).toContain('COUNT(DISTINCT "population")');
+    expect(query).toContain('COUNT(*) - COUNT("population")');
+    expect(query).toContain('"db1"."geo"."fact_table"');
     expect(query).not.toContain('WHERE');
     expect(params).toEqual([]);
   });
@@ -156,15 +156,28 @@ describe('FieldStatsLoader', () => {
     expect(stats).toEqual({ min: null, max: null, distinctCount: 0, nullCount: 0 });
   });
 
-  test.each(['value; DROP TABLE fact_table', '1abc', 'a-b', '"quoted"', ''])(
-    "rejette l'identifiant invalide %j avant toute requête",
-    async (fieldName) => {
-      const loader = createFieldStatsLoader('db1', 'main');
+  test.each([
+    ['taux chômage', '"taux chômage"'],
+    ['a"b', '"a""b"'],
+    ['value; DROP TABLE fact_table', '"value; DROP TABLE fact_table"'],
+  ])('quote la colonne %j : %s', async (fieldName, quoted) => {
+    // L'existence de la colonne est contrôlée par le resolver contre metadata
+    const loader = createFieldStatsLoader('db1', 'main');
+    await loader.load({ fieldName });
 
-      await expect(loader.load({ fieldName })).rejects.toThrow(GraphQLError);
-      expect(mockConnection.all).not.toHaveBeenCalled();
-    },
-  );
+    const [query] = mockConnection.all.mock.calls[0] as [string, unknown[]];
+    expect(query).toContain(`MIN(${quoted})`);
+    expect(query).toContain(`COUNT(DISTINCT ${quoted})`);
+  });
+
+  test('une erreur DuckDB due à la requête remonte en BAD_USER_INPUT, jamais en null', async () => {
+    mockConnection.all.mockRejectedValue(
+      new Error('Binder Error: Referenced column "x" not found'),
+    );
+
+    const loader = createFieldStatsLoader('db1', 'main');
+    await expect(loader.load({ fieldName: 'x' })).rejects.toThrow(GraphQLError);
+  });
 
   describe('cache', () => {
     test('deux chargements de la même clé exécutent une seule requête SQL', async () => {

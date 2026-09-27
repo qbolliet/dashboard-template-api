@@ -2,7 +2,7 @@
 import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
-import { validateIdentifier } from '../utils/utils.js';
+import { quoteIdent } from '../utils/identifiers.js';
 import {
   METADATA_SELECT,
   indexMetadataByName,
@@ -229,11 +229,9 @@ class SelectOptionsLoader extends BaseQueryLoader {
     connection: DuckDBConnection,
     { fieldName, limit, searchTerm, labelField = null }: SelectOptionsParams,
   ): Promise<SelectOption[]> {
-    validateIdentifier(fieldName, 'fieldName');
-    if (labelField) validateIdentifier(labelField, 'labelField');
-
     // La colonne doit être déclarée dans metadata : contrôle explicite pour
-    // renvoyer une erreur utilisable plutôt que de laisser fuiter DuckDB.
+    // renvoyer une erreur utilisable plutôt que de laisser fuiter DuckDB. Le
+    // libellé vient de resolveLabelField, donc de metadata lui aussi.
     const declared = await connection.all(
       `SELECT name FROM ${this.qualifyTable('metadata')} WHERE name = ?`,
       [fieldName],
@@ -249,18 +247,19 @@ class SelectOptionsLoader extends BaseQueryLoader {
     }
 
     // Construction de la requête : valeurs distinctes, NULL exclus, triées
+    const column = quoteIdent(fieldName);
     let query =
-      `SELECT DISTINCT ${fieldName} AS value FROM ${this.qualifyTable('fact_table')} ` +
-      `WHERE ${fieldName} IS NOT NULL`;
+      `SELECT DISTINCT ${column} AS value FROM ${this.qualifyTable('fact_table')} ` +
+      `WHERE ${column} IS NOT NULL`;
     const params: unknown[] = [];
 
     // Recherche insensible à la casse, jokers du terme neutralisés
     if (searchTerm) {
-      query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
+      query += ` AND LOWER(CAST(${column} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
       params.push(`%${escapeLikeWildcards(searchTerm.toLowerCase())}%`);
     }
 
-    query += ` ORDER BY ${fieldName} LIMIT ?`;
+    query += ` ORDER BY ${column} LIMIT ?`;
     params.push(limit);
 
     const results = await connection.all(query, params);
@@ -277,8 +276,8 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * Loads the distinct (code, label) pairs of a code column.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param fieldName - Code column, already validated.
-   * @param labelField - Effective label column, already validated.
+   * @param fieldName - Code column, declared in metadata.
+   * @param labelField - Effective label column, declared in metadata.
    * @param limit - Maximum number of options.
    * @param searchTerm - Case-insensitive filter on the code or the label.
    * @returns Options ordered by code as VARCHAR, `label` falling back to the code.
@@ -291,17 +290,19 @@ class SelectOptionsLoader extends BaseQueryLoader {
     searchTerm?: string | null,
   ): Promise<SelectOption[]> {
     // Couple (code, libellé) lu dans la même ligne de la fact table
+    const code = quoteIdent(fieldName);
+    const label = quoteIdent(labelField);
     let query =
-      `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value, ${labelField} AS label ` +
-      `FROM ${this.qualifyTable('fact_table')} WHERE ${fieldName} IS NOT NULL`;
+      `SELECT DISTINCT CAST(${code} AS VARCHAR) AS value, ${label} AS label ` +
+      `FROM ${this.qualifyTable('fact_table')} WHERE ${code} IS NOT NULL`;
     const params: unknown[] = [];
 
     // Recherche dans le code ou le libellé, même échappement des jokers
     if (searchTerm) {
       const pattern = `%${escapeLikeWildcards(searchTerm.toLowerCase())}%`;
       query +=
-        ` AND (LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
-        ` OR LOWER(${labelField}) LIKE ? ESCAPE '\\')`;
+        ` AND (LOWER(CAST(${code} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
+        ` OR LOWER(${label}) LIKE ? ESCAPE '\\')`;
       params.push(pattern, pattern);
     }
 
@@ -362,14 +363,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
       parent = parentOf.get(parent) ?? null;
     }
 
-    // Validation de chaque identifiant avant interpolation, libellé par défaut du niveau
-    return chain.reverse().map((column) => {
-      const labelColumn = resolveLabelField(column, metadataByName);
-      return {
-        column: validateIdentifier(column, 'parentName'),
-        labelColumn: labelColumn ? validateIdentifier(labelColumn, 'labelField') : null,
-      };
-    });
+    // Colonnes lues dans metadata (quotées à l'interpolation), libellé par défaut du niveau
+    return chain.reverse().map((column) => ({
+      column,
+      labelColumn: resolveLabelField(column, metadataByName),
+    }));
   }
 
   // Méthode de chargement de l'arbre des options d'une hiérarchie de colonnes
@@ -396,7 +394,6 @@ class SelectOptionsLoader extends BaseQueryLoader {
     connection: DuckDBConnection,
     { fieldName, maxDepth, searchTerm, maxNodes }: SelectOptionsTreeParams,
   ): Promise<SelectOptionNode[]> {
-    validateIdentifier(fieldName, 'fieldName');
     if (maxDepth !== null && maxDepth < 1) {
       throw new GraphQLError('maxDepth must be greater than or equal to 1', {
         extensions: { code: 'BAD_USER_INPUT' },
@@ -404,19 +401,22 @@ class SelectOptionsLoader extends BaseQueryLoader {
     }
 
     const chain = await this.resolveColumnChain(connection, fieldName, maxDepth);
-    const codes = chain.map(({ column }) => column).join(', ');
+    const codes = chain.map(({ column }) => quoteIdent(column)).join(', ');
     // Chaque niveau apporte son code et, s'il en a une, sa colonne de libellés
     const projection = chain
       .flatMap(({ column, labelColumn }, index) =>
-        labelColumn ? [column, `${labelColumn} AS _label_${index}`] : [column],
+        labelColumn
+          ? [quoteIdent(column), `${quoteIdent(labelColumn)} AS _label_${index}`]
+          : [quoteIdent(column)],
       )
       .join(', ');
     const leafLabel = chain[chain.length - 1].labelColumn;
+    const leaf = quoteIdent(fieldName);
 
     // Construction de la requête : racine non NULL, feuille éventuellement filtrée
     let query =
       `SELECT DISTINCT ${projection} FROM ${this.qualifyTable('fact_table')} ` +
-      `WHERE ${chain[0].column} IS NOT NULL`;
+      `WHERE ${quoteIdent(chain[0].column)} IS NOT NULL`;
     const params: unknown[] = [];
 
     // Recherche sur le code de la feuille, ou sur son libellé quand il existe
@@ -424,11 +424,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
       const pattern = `%${escapeLikeWildcards(searchTerm.toLowerCase())}%`;
       if (leafLabel) {
         query +=
-          ` AND (LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
-          ` OR LOWER(${leafLabel}) LIKE ? ESCAPE '\\')`;
+          ` AND (LOWER(CAST(${leaf} AS VARCHAR)) LIKE ? ESCAPE '\\'` +
+          ` OR LOWER(${quoteIdent(leafLabel)}) LIKE ? ESCAPE '\\')`;
         params.push(pattern, pattern);
       } else {
-        query += ` AND LOWER(CAST(${fieldName} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
+        query += ` AND LOWER(CAST(${leaf} AS VARCHAR)) LIKE ? ESCAPE '\\'`;
         params.push(pattern);
       }
     }

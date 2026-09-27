@@ -3,6 +3,7 @@ import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
+import { qualifiedTable } from '../utils/identifiers.js';
 import { METADATA_SELECT, toFieldMetadata, withLabelFields } from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
@@ -65,7 +66,7 @@ class CatalogMetadataLoader extends BaseQueryLoader {
     { catalog, schema }: CatalogSchemaKey,
   ): Promise<FieldMetadata[]> {
     const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
-    const query = `SELECT ${METADATA_SELECT} FROM "${catalog}".${resolvedSchema}.metadata`;
+    const query = `SELECT ${METADATA_SELECT} FROM ${qualifiedTable(catalog, resolvedSchema, 'metadata')}`;
     const rows = await connection.all(query);
     // Inverse de label_for calculé sur les lignes lues, sans requête de plus
     return withLabelFields(rows.map((row) => toFieldMetadata(row)));

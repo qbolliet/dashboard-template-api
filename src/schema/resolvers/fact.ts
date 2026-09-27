@@ -5,7 +5,9 @@ import { config } from '../../utils/config-loader.js';
 import { GraphQLError } from 'graphql';
 import { compileFilterTree } from '../../utils/filter-tree.js';
 import { resolveEffectiveSort } from '../../utils/default-sort.js';
-import { databaseManager } from '../../db/index.js';
+import { assertColumns } from '../../utils/identifiers.js';
+import { indexMetadataByName } from '../../utils/metadata-mapping.js';
+import { validatePagination } from '../../utils/pagination.js';
 import { attachScopeToAll, contextScope } from './scope.js';
 import type { FieldScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
@@ -29,30 +31,43 @@ export interface FactTableArgs extends Omit<FactQueryParams, 'where' | 'format'>
 /**
  * Builds the fact loader parameters from the GraphQL arguments.
  *
- * The filter tree is validated and compiled into a parameterized predicate
- * using the metadata of the target catalog/schema, and the effective sort is
- * resolved from dataset_metadata.cluster_by when the client gave none. Only
- * concrete values reach the loader, so the DataLoader/Redis cache key derives
- * from a deterministic SQL string, parameter list and ordering.
+ * Pagination is validated first, before any database work. The projected
+ * columns are checked against the metadata of the target catalog/schema, the
+ * filter tree is validated and compiled into a parameterized predicate, and
+ * the effective sort is resolved from dataset_metadata.cluster_by when the
+ * client gave none (an explicit sort is checked against metadata too). The
+ * target is resolved by contextScope — argument, then header, then default —
+ * the same rule as the loaders. Only concrete values reach the loader, so the
+ * DataLoader/Redis cache key derives from a deterministic SQL string,
+ * parameter list and ordering.
  *
  * @param args - GraphQL arguments of the fact query.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @param context - GraphQL context (header routing).
  * @returns Parameters for the fact loaders.
- * @throws {GraphQLError} BAD_USER_INPUT when the filter tree is invalid.
+ * @throws {GraphQLError} BAD_USER_INPUT on invalid pagination, an unknown
+ *   column or an invalid filter tree.
  */
 // Construction des paramètres du loader et compilation de l'arbre de filtres
 async function buildFactParams(
   args: FactTableArgs,
   activeLoaders: LoadersCollection,
+  context: Pick<GraphQLContext, 'requestCatalog' | 'requestSchema'>,
 ): Promise<FactQueryParams> {
+  validatePagination(args.limit, args.offset);
+
+  // Colonnes projetées contrôlées contre la table metadata du schéma cible
+  const { catalog, schema } = contextScope(context, args.catalog, args.schema);
+  const columns = await activeLoaders.catalogMetadata.load({ catalog, schema });
+  assertColumns(args.fields ?? [], indexMetadataByName(columns), 'field');
+
   const where = await compileFilterTree(args.structuredFilters, (names) =>
     activeLoaders.metadata.loadMany(names),
   );
 
   // Tri effectif résolu ici, donc présent dans les paramètres du loader et
   // dans la clé de cache : deux pages ne peuvent pas partager une entrée.
-  const targetCatalog = databaseManager.validateCatalogRouting(args.catalog ?? null);
-  const sort = await resolveEffectiveSort(args.sort, activeLoaders, targetCatalog, args.schema);
+  const sort = await resolveEffectiveSort(args.sort, activeLoaders, catalog, schema);
 
   return {
     fields: args.fields,
@@ -102,39 +117,23 @@ const factResolvers = {
     /**
      * Fetches a paginated page of fact rows, split into keys and measures.
      *
-     * Validates the pagination parameters against configured limits before
-     * issuing the DataLoader call, then partitions the columns of every
+     * Validates the pagination parameters and the columns (buildFactParams)
+     * before issuing the DataLoader call, then partitions the columns of every
      * returned row in a single bulk pass.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - Fact query parameters including limit, offset and database.
      * @param context - GraphQL context with loaders.
      * @returns Paginated result object with enriched fact rows.
-     * @throws {GraphQLError} When limit or offset exceed configured maximums,
-     *   or when the filter tree is invalid (BAD_USER_INPUT).
+     * @throws {GraphQLError} BAD_USER_INPUT when limit or offset are out of
+     *   bounds, a column is unknown, or the filter tree is invalid.
      */
     // Requête standard des faits avec pagination et comptage
-    getFactTable: async (
-      _: unknown,
-      args: FactTableArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
-    ) => {
-      const { limit, offset } = args;
-
-      // Validation de la limite de pagination
-      if (limit > config.API.PAGINATION.MAX_LIMIT) {
-        throw new GraphQLError(`Limit cannot exceed ${config.API.PAGINATION.MAX_LIMIT}`);
-      }
-
-      // Validation de l'offset de pagination
-      if (offset > config.API.PAGINATION.MAX_OFFSET) {
-        throw new GraphQLError(`Offset cannot exceed ${config.API.PAGINATION.MAX_OFFSET}`);
-      }
-
+    getFactTable: async (_: unknown, args: FactTableArgs, context: GraphQLContext) => {
       // Sélection des loaders adaptés au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(args.catalog, args.schema);
-      const activeLoaders = targetLoaders ?? loaders;
-      const params = await buildFactParams(args, activeLoaders);
+      const targetLoaders = context.getLoadersForCatalog(args.catalog, args.schema);
+      const activeLoaders = targetLoaders ?? context.loaders;
+      const params = await buildFactParams(args, activeLoaders, context);
 
       const result = (await withTimeout(
         activeLoaders.factWithCount.load(params),
@@ -166,13 +165,15 @@ const factResolvers = {
      * @param args - Fact query parameters including optional format and database.
      * @param context - GraphQL context with loaders.
      * @returns Result with enriched data in the requested format.
+     * @throws {GraphQLError} BAD_USER_INPUT when limit or offset are out of
+     *   bounds, a column is unknown, or the filter tree is invalid.
      */
     // Requête des faits avec métadonnées optimisées pour D3
     getFactTableWithMetadata: async (_: unknown, args: FactTableArgs, context: GraphQLContext) => {
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = context.getLoadersForCatalog(args.catalog, args.schema);
       const activeLoaders = targetLoaders ?? context.loaders;
-      const params = await buildFactParams(args, activeLoaders);
+      const params = await buildFactParams(args, activeLoaders, context);
       const scope = contextScope(context, args.catalog, args.schema);
 
       const result = (await withTimeout(

@@ -6,6 +6,8 @@ import { createLoaders } from '../loaders/index.js';
 import { FactLoader } from '../loaders/fact.js';
 import { buildWhere, compileFilterTree } from '../utils/filter-tree.js';
 import { resolveEffectiveSort } from '../utils/default-sort.js';
+import { assertColumns } from '../utils/identifiers.js';
+import { indexMetadataByName } from '../utils/metadata-mapping.js';
 import { ExportHttpError } from './export-params.js';
 import type { ExportParams } from './export-params.js';
 
@@ -89,8 +91,9 @@ function asHttpError(error: unknown): unknown {
  * ordering is resolved by resolveEffectiveSort (cluster_by by default, primary
  * keys as tiebreakers — the export follows the physical order at no sort
  * cost), and the SELECT / ORDER BY / table name come from the FactLoader
- * builders. Projected and sorted columns must exist in the schema metadata,
- * so a typo is a 400 rather than a DuckDB binder error.
+ * builders. Projected and sorted columns must exist in the schema metadata
+ * (assertColumns), so a typo is a 400 rather than a DuckDB binder error; any
+ * column name the database accepts is exported, quoted.
  *
  * @param params - Validated export parameters.
  * @param target - Resolved catalog and schema.
@@ -102,18 +105,10 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
   try {
     const loaders = createLoaders(catalog, schema);
 
-    // Colonnes connues du schéma (table metadata)
+    // Colonnes projetées contrôlées contre la table metadata (le tri explicite
+    // l'est par resolveEffectiveSort) ; BAD_USER_INPUT devient un 400
     const columns = await loaders.catalogMetadata.load({ catalog, schema });
-    const known = new Set(columns.map((c) => c.name));
-    const requested = [...(params.fields ?? []), ...(params.sort ?? []).map((s) => s.field)];
-    const missing = [...new Set(requested.filter((name) => !known.has(name)))];
-    if (missing.length > 0) {
-      throw new ExportHttpError(
-        400,
-        'Invalid export parameter',
-        `Unknown column(s) in ${catalog}.${schema}: ${missing.join(', ')}.`,
-      );
-    }
+    assertColumns(params.fields ?? [], indexMetadataByName(columns), 'field');
 
     // Arbre de filtres compilé contre les métadonnées du schéma cible
     const where = await compileFilterTree(params.filters, (names) =>

@@ -263,19 +263,42 @@ describe('CrossDatabaseLoader', () => {
       expect(result.data[0].delta).toBeNull();
     });
 
-    test('lève une erreur pour un joinField invalide', async () => {
+    test('quote les champs de jointure et les aliase par position', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
+      // L'existence des champs est contrôlée par le resolver des deux côtés
       const loader = createCompareFacts();
-      // validateIdentifier lève une GraphQLError BAD_USER_INPUT, propagée par createLoader
+      await loader.load({
+        catalogA: 'db_a',
+        catalogB: 'db_b',
+        joinFields: ["zone d'emploi", 'Année'],
+        limit: 10,
+        offset: 0,
+        sort: [],
+      } satisfies CompareFactsParams);
+
+      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
+      expect(mainQuery).toContain(`CAST(f."zone d'emploi" AS VARCHAR) AS k_0`);
+      expect(mainQuery).toContain('CAST(f."Année" AS VARCHAR) AS k_1');
+      expect(mainQuery).toContain('a.k_0 = b.k_0 AND a.k_1 = b.k_1');
+    });
+
+    test('une erreur DuckDB rejette la clé au lieu de renvoyer null', async () => {
+      mockConnection.all
+        .mockRejectedValueOnce(new Error('IO Error: catalog unreachable'))
+        .mockResolvedValueOnce([{ total: 0 }]);
+
+      const loader = createCompareFacts();
       await expect(
         loader.load({
           catalogA: 'db_a',
           catalogB: 'db_b',
-          joinFields: ['bad field!'],
+          joinFields: ['country'],
           limit: 10,
           offset: 0,
           sort: [],
         } satisfies CompareFactsParams),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      ).rejects.toThrow('IO Error: catalog unreachable');
     });
 
     test('joint directement sur les libellés, sans table dim_*', async () => {
@@ -299,8 +322,8 @@ describe('CrossDatabaseLoader', () => {
       // La colonne porte le libellé : aucune table de dimension n'est jointe
       expect(mainQuery).not.toContain('dim_');
       // Chaque côté expose sa colonne de jointure, alignée en VARCHAR
-      expect(mainQuery).toContain('CAST(f.country AS VARCHAR) AS k_country');
-      expect(mainQuery).toContain('a.k_country = b.k_country');
+      expect(mainQuery).toContain('CAST(f."country" AS VARCHAR) AS k_0');
+      expect(mainQuery).toContain('a.k_0 = b.k_0');
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
@@ -319,8 +342,8 @@ describe('CrossDatabaseLoader', () => {
       } satisfies CompareFactsParams);
 
       const mainQuery = mockConnection.all.mock.calls[0][0] as string;
-      expect(mainQuery).toContain('"db_2023".schema_a.fact_table');
-      expect(mainQuery).toContain('"db_2023".schema_b.fact_table');
+      expect(mainQuery).toContain('"db_2023"."schema_a"."fact_table"');
+      expect(mainQuery).toContain('"db_2023"."schema_b"."fact_table"');
     });
 
     test('ne lit aucune métadonnée avant de comparer', async () => {
@@ -400,18 +423,22 @@ describe('CrossDatabaseLoader', () => {
       expect(query).toContain('agg_b');
     });
 
-    test('lève une erreur pour un groupBy invalide', async () => {
+    test('quote le groupBy (contrôlé contre metadata par le resolver)', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
       const loader = createCompareAggregatedFacts();
-      await expect(
-        loader.load({
-          catalogA: 'db_a',
-          catalogB: 'db_b',
-          groupBy: 'bad field!',
-          aggregation: 'SUM',
-          limit: 10,
-          offset: 0,
-        } satisfies CompareAggregatedParams),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      await loader.load({
+        catalogA: 'db_a',
+        catalogB: 'db_b',
+        groupBy: "zone d'emploi",
+        aggregation: 'SUM',
+        limit: 10,
+        offset: 0,
+      } satisfies CompareAggregatedParams);
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain(`CAST("zone d'emploi" AS VARCHAR) AS key`);
+      expect(query).toContain(`GROUP BY "zone d'emploi"`);
     });
 
     test('agrège directement sur la colonne, sans jointure de dimension', async () => {
@@ -434,9 +461,9 @@ describe('CrossDatabaseLoader', () => {
       const query = mockConnection.all.mock.calls[0][0] as string;
       // La colonne porte le libellé : GROUP BY direct, aucune table dim_*
       expect(query).not.toContain('dim_');
-      expect(query).toContain('GROUP BY country');
+      expect(query).toContain('GROUP BY "country"');
       // Les clés des deux côtés sont alignées en VARCHAR avant la jointure
-      expect(query).toContain('CAST(country AS VARCHAR) AS key');
+      expect(query).toContain('CAST("country" AS VARCHAR) AS key');
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
@@ -455,8 +482,8 @@ describe('CrossDatabaseLoader', () => {
       } satisfies CompareAggregatedParams);
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"db_2023".schema_a.fact_table');
-      expect(query).toContain('"db_2023".schema_b.fact_table');
+      expect(query).toContain('"db_2023"."schema_a"."fact_table"');
+      expect(query).toContain('"db_2023"."schema_b"."fact_table"');
     });
   });
 
@@ -501,7 +528,7 @@ describe('CrossDatabaseLoader', () => {
       expect(query).toContain('INTERSECT');
       expect(query).not.toContain('dim_');
       // Valeurs alignées en VARCHAR, NULL exclus
-      expect(query).toContain('CAST(country AS VARCHAR)');
+      expect(query).toContain('CAST("country" AS VARCHAR)');
       expect(query).toContain('IS NOT NULL');
     });
 
@@ -520,15 +547,19 @@ describe('CrossDatabaseLoader', () => {
       expect(query).not.toContain('INTERSECT');
     });
 
-    test('lève une erreur pour un fieldName invalide', async () => {
+    test('quote le fieldName (contrôlé contre metadata par le resolver)', async () => {
+      mockConnection.all.mockResolvedValueOnce([]);
+
       const loader = createCrossDatabaseSelectOptions();
-      await expect(
-        loader.load({
-          fieldName: 'bad field!',
-          catalogs: ['db1'],
-          limit: 50,
-        } satisfies CrossDatabaseSelectParams),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      await loader.load({
+        fieldName: 'taux chômage',
+        catalogs: ['db1'],
+        limit: 50,
+      } satisfies CrossDatabaseSelectParams);
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('CAST("taux chômage" AS VARCHAR)');
+      expect(query).toContain('WHERE "taux chômage" IS NOT NULL');
     });
   });
 });

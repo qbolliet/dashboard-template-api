@@ -18,10 +18,10 @@ process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
 process.env.DEFAULT_READ_ONLY = 'true';
 // Schémas du catalogue default : main (jeu principal), predictions
 // (comparaisons cross-schéma), geography (hiérarchie de colonnes), trade
-// (codes et libellés), plus les deux fixtures volontairement non conformes de
-// la garde de version.
+// (codes et libellés), emploi (noms de colonnes avec espace et accent), plus
+// les deux fixtures volontairement non conformes de la garde de version.
 process.env.DEFAULT_SCHEMAS =
-  '["main", "predictions", "geography", "trade", "unsupported_version", "missing_dataset_metadata"]';
+  '["main", "predictions", "geography", "trade", "emploi", "unsupported_version", "missing_dataset_metadata"]';
 // Redirection de macroeconomics et public_finance vers les catalogues synthétiques locaux
 process.env.MACROECONOMICS_CATALOG_PATH = 'data/test-macroeconomics.ducklake';
 process.env.MACROECONOMICS_DATA_PATH = 'data/test-macroeconomics_data/';

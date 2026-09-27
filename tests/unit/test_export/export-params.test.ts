@@ -84,16 +84,26 @@ describe('parseExportQuery', () => {
     expect(parseExportQuery({ limit: '999999' }, settings).limit).toBe(1000);
   });
 
+  test('any column name is accepted here; existence is checked against metadata later', () => {
+    const params = parseExportQuery(
+      { fields: "taux chômage, zone d'emploi", sort: 'Année:desc', catalog: 'a"b', schema: 'x y' },
+      settings,
+    );
+    expect(params.fields).toEqual(['taux chômage', "zone d'emploi"]);
+    expect(params.sort).toEqual([{ field: 'Année', order: 'DESC' }]);
+    // Catalogue et schéma : contrôlés contre leurs allow-lists par resolveExportTarget
+    expect(params.catalog).toBe('a"b');
+    expect(params.schema).toBe('x y');
+  });
+
   test.each([
     [{ format: 'json' }, 'Unknown format'],
-    [{ fields: 'a,b;c' }, 'Invalid field name'],
+    [{ fields: 'a,,b' }, 'Empty field name'],
     [{ fields: 'a,a' }, 'given twice'],
     [{ sort: 'a:up' }, 'Invalid sort direction'],
     [{ sort: 'a:asc:x' }, 'Invalid sort item'],
     [{ sort: 'a,a:desc' }, 'given twice'],
-    [{ sort: '1abc' }, 'Invalid sort field name'],
-    [{ catalog: 'a"b' }, 'Invalid catalog name'],
-    [{ schema: 'main; DROP' }, 'Invalid schema name'],
+    [{ sort: ':asc' }, 'Invalid sort item'],
     [{ filters: '[1,2]' }, 'JSON object of a FilterNode'],
     [{ filters: '{oops' }, 'not valid JSON'],
     [{ limit: '0' }, 'positive integer'],

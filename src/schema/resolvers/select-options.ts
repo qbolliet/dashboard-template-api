@@ -3,6 +3,7 @@ import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
+import { validatePagination } from '../../utils/pagination.js';
 import type { SelectOptionNode } from '../../loaders/select-options.js';
 import type { QueryResolvers } from '../../generated/graphql.js';
 
@@ -42,6 +43,10 @@ const selectOptionsResolvers: {
       },
       { loaders, getLoadersForCatalog },
     ) => {
+      // Borne du nombre d'options, validée avant tout accès à la base
+      const effectiveLimit = limit ?? config.API.PAGINATION.SELECT_OPTIONS_LIMIT;
+      validatePagination(effectiveLimit);
+
       // Sélection des loaders adaptés au catalogue/schéma cible
       const activeLoaders = getLoadersForCatalog(catalog, schema) ?? loaders;
 
@@ -58,7 +63,7 @@ const selectOptionsResolvers: {
       return withTimeout(
         activeLoaders.selectOptions.load({
           fieldName,
-          limit,
+          limit: effectiveLimit,
           searchTerm,
           labelField: effectiveLabelField,
         }),

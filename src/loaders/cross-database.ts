@@ -5,7 +5,7 @@ import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { AggregatedFactsLoader } from './aggregated-facts.js';
-import { validateIdentifier } from '../utils/utils.js';
+import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
 import type { AggregationType } from './aggregated-facts.js';
 
@@ -152,8 +152,8 @@ class CrossDatabaseLoader extends FactQueryLoader {
 
   // Résolution du schéma d'un côté (explicite ou schéma par défaut du catalogue)
   /**
-   * Resolves the schema for one side, validating it both against the catalog's
-   * allow-list and as a SQL identifier.
+   * Resolves the schema for one side, validating it against the catalog's
+   * allow-list (it is quoted when interpolated).
    *
    * @param catalog - Catalog alias.
    * @param schema - Explicit schema, or null/undefined for the catalog default.
@@ -168,28 +168,19 @@ class CrossDatabaseLoader extends FactQueryLoader {
           `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
       );
     }
-    validateIdentifier(resolved, 'schema');
     // Garde de version : les loaders cross-catalog ne sont liés à aucun
     // catalogue, chaque cible est donc vérifiée ici, à sa résolution.
     assertSchemaSupported(catalog, resolved);
     return resolved;
   }
 
-  // Validation d'une colonne de libellés avant interpolation
-  /**
-   * Validates an optional label column name before SQL interpolation.
-   *
-   * @param labelField - Label column resolved by the resolver, or null/undefined.
-   * @returns The validated name, or null.
-   */
-  private validateLabelField(labelField?: string | null): string | null {
-    return labelField ? validateIdentifier(labelField, 'labelField') : null;
-  }
-
   // Construction du SELECT d'un côté : mesure + colonnes de jointure alignées
   /**
    * Builds the per-side SELECT that exposes the measure plus one key column per
    * join field, cast to VARCHAR so both sides align whatever their SQL type.
+   * Join columns are quoted and aliased by position (`k_0`, `k_1`…), so any
+   * column name works; they were checked against each side's metadata by the
+   * resolver.
    *
    * @param catalog - Catalog alias for this side.
    * @param schema - Resolved schema for this side.
@@ -203,10 +194,10 @@ class CrossDatabaseLoader extends FactQueryLoader {
     joinFields: string[],
     labelField: string | null,
   ): string {
-    const keyCols = joinFields.map((f) => `CAST(f.${f} AS VARCHAR) AS k_${f}`);
+    const keyCols = joinFields.map((f, i) => `CAST(f.${quoteIdent(f)} AS VARCHAR) AS k_${i}`);
     // Libellé de la clé lu dans la même ligne que le code
-    if (labelField) keyCols.push(`f.${labelField} AS ${KEY_LABEL_ALIAS}`);
-    return `SELECT f.value AS value, ${keyCols.join(', ')} FROM "${catalog}".${schema}.fact_table f`;
+    if (labelField) keyCols.push(`f.${quoteIdent(labelField)} AS ${KEY_LABEL_ALIAS}`);
+    return `SELECT f.value AS value, ${keyCols.join(', ')} FROM ${qualifiedTable(catalog, schema, 'fact_table')} f`;
   }
 
   // Méthode de comparaison des tables de faits entre deux datasets
@@ -232,25 +223,23 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const schemaA = this.resolveSchema(catalogA, params.schemaA);
     const schemaB = this.resolveSchema(catalogB, params.schemaB);
 
-    // Validation des identifiants de jointure pour éviter les injections SQL
-    joinFields.forEach((f) => validateIdentifier(f, 'joinField'));
-
-    // Libellés seulement pour un champ de jointure unique
+    // Libellés seulement pour un champ de jointure unique (colonnes de jointure
+    // et de libellés contrôlées contre metadata par le resolver)
     const single = joinFields.length === 1;
-    const labelFieldA = single ? this.validateLabelField(params.labelFieldA) : null;
-    const labelFieldB = single ? this.validateLabelField(params.labelFieldB) : null;
+    const labelFieldA = single ? (params.labelFieldA ?? null) : null;
+    const labelFieldB = single ? (params.labelFieldB ?? null) : null;
 
     const selectA = this.buildSideSelect(catalogA, schemaA, joinFields, labelFieldA);
     const selectB = this.buildSideSelect(catalogB, schemaB, joinFields, labelFieldB);
 
     // Condition de jointure a↔b sur les libellés portés par les colonnes
-    const joinCondition = joinFields.map((f) => `a.k_${f} = b.k_${f}`).join(' AND ');
+    const joinCondition = joinFields.map((_, i) => `a.k_${i} = b.k_${i}`).join(' AND ');
 
     // Expression de la clé principale dans le résultat
     const keyExpr =
       joinFields.length === 1
-        ? `a.k_${joinFields[0]}`
-        : `CONCAT(${joinFields.map((f) => `a.k_${f}`).join(", '::', ")})`;
+        ? 'a.k_0'
+        : `CONCAT(${joinFields.map((_, i) => `a.k_${i}`).join(", '::', ")})`;
 
     // Tri déterministe : sans tri explicite, la clé de jointure ordonne le
     // résultat. Les colonnes de cluster_by ne survivent pas aux CTE (seules
@@ -321,18 +310,19 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const schemaA = this.resolveSchema(catalogA, params.schemaA);
     const schemaB = this.resolveSchema(catalogB, params.schemaB);
 
-    validateIdentifier(groupBy, 'groupBy');
-    const labelFieldA = this.validateLabelField(params.labelFieldA);
-    const labelFieldB = this.validateLabelField(params.labelFieldB);
+    // groupBy et libellés contrôlés contre metadata par le resolver, quotés ici
+    const groupColumn = quoteIdent(groupBy);
+    const labelFieldA = params.labelFieldA ?? null;
+    const labelFieldB = params.labelFieldB ?? null;
     const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation as AggregationType] || 'SUM';
 
     // CTE d'agrégation per-side : regroupement direct sur la colonne, libellé par ANY_VALUE
     const aggSide = (catalog: string, schema: string, labelField: string | null): string =>
-      `SELECT CAST(${groupBy} AS VARCHAR) AS key,
-              ${labelField ? `ANY_VALUE(${labelField}) AS ${KEY_LABEL_ALIAS},` : ''}
+      `SELECT CAST(${groupColumn} AS VARCHAR) AS key,
+              ${labelField ? `ANY_VALUE(${quoteIdent(labelField)}) AS ${KEY_LABEL_ALIAS},` : ''}
               ${aggFn}(value) AS value
-       FROM "${catalog}".${schema}.fact_table
-       GROUP BY ${groupBy}`;
+       FROM ${qualifiedTable(catalog, schema, 'fact_table')}
+       GROUP BY ${groupColumn}`;
 
     const query = `
             WITH agg_a AS (${aggSide(catalogA, schemaA, labelFieldA)}),
@@ -391,7 +381,8 @@ class CrossDatabaseLoader extends FactQueryLoader {
     params: CrossDatabaseSelectOptionsParams,
   ): Promise<CrossDatabaseSelectOption[]> {
     const { fieldName, catalogs, limit } = params;
-    validateIdentifier(fieldName, 'fieldName');
+    // Colonne contrôlée contre metadata de chaque cible par le resolver
+    const column = quoteIdent(fieldName);
 
     if (catalogs.length === 0) return [];
 
@@ -404,8 +395,8 @@ class CrossDatabaseLoader extends FactQueryLoader {
 
     // Valeurs distinctes non nulles d'une cible, alignées en VARCHAR
     const distinctOf = (cat: string, schema: string): string =>
-      `SELECT DISTINCT CAST(${fieldName} AS VARCHAR) AS value ` +
-      `FROM "${cat}".${schema}.fact_table WHERE ${fieldName} IS NOT NULL`;
+      `SELECT DISTINCT CAST(${column} AS VARCHAR) AS value ` +
+      `FROM ${qualifiedTable(cat, schema, 'fact_table')} WHERE ${column} IS NOT NULL`;
 
     let query = `SELECT value, value AS label FROM (${distinctOf(primaryCat, primarySchema)})`;
     if (others.length > 0) {

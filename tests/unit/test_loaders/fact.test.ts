@@ -124,12 +124,12 @@ describe('FactLoader', () => {
     test('qualifie la table avec le schéma explicite lors de la requête SQL', async () => {
       mockConnection.all.mockResolvedValue([]);
 
-      // catalog explicite + schema non-défaut : on doit voir "catalog1".staging.fact_table
+      // catalog explicite + schema non-défaut : on doit voir "catalog1"."staging"."fact_table"
       const loader = createFactLoader('catalog1', 'staging');
       await loader.load({ ...baseParams });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"catalog1".staging.fact_table');
+      expect(query).toContain('"catalog1"."staging"."fact_table"');
       // L'appel à getDefaultSchema ne doit PAS être nécessaire (schéma fourni explicitement)
       expect(mockDatabaseManager.getDefaultSchema).not.toHaveBeenCalled();
     });
@@ -142,7 +142,7 @@ describe('FactLoader', () => {
       await loader.load({ ...baseParams });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"catalog1".main.fact_table');
+      expect(query).toContain('"catalog1"."main"."fact_table"');
       expect(mockDatabaseManager.getDefaultSchema).toHaveBeenCalledWith('catalog1');
     });
   });
@@ -185,19 +185,26 @@ describe('FactLoader', () => {
       expect(params).toEqual([]);
     });
 
-    test('rejette un champ de sélection malformé', async () => {
+    test('quote les champs de sélection : un nom hostile reste un identifiant inerte', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      // L'existence de la colonne est contrôlée en amont (assertColumns) ; ici
+      // seul le quotage est en jeu
       const loader = createFactLoader('main');
-      await expect(
-        loader.load({ ...baseParams, fields: ['id', 'a; DROP TABLE fact_table'] }),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
-      expect(mockConnection.all).not.toHaveBeenCalled();
+      await loader.load({ ...baseParams, fields: ['id', 'a"; DROP TABLE fact_table --'] });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('SELECT "id", "a""; DROP TABLE fact_table --" FROM');
     });
 
-    test('rejette un champ de tri malformé', async () => {
+    test('quote les champs de tri', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
       const loader = createFactLoader('main');
-      await expect(
-        loader.load({ ...baseParams, sort: [{ field: 'a; DROP TABLE x', order: 'ASC' }] }),
-      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
+      await loader.load({ ...baseParams, sort: [{ field: 'taux chômage', order: 'ASC' }] });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ORDER BY "taux chômage" ASC');
     });
 
     test('rejette une direction de tri hors ASC / DESC', async () => {
@@ -214,7 +221,7 @@ describe('FactLoader', () => {
       await loader.load({ ...baseParams, sort: [{ field: 'value', order: 'DESC' }] });
 
       const query = mockConnection.all.mock.calls[0][0];
-      expect(query).toContain('ORDER BY value DESC');
+      expect(query).toContain('ORDER BY "value" DESC');
     });
 
     test('inclut LIMIT et OFFSET', async () => {
@@ -228,11 +235,17 @@ describe('FactLoader', () => {
       expect(query).toContain('OFFSET 10');
     });
 
-    test('lève une erreur si limit dépasse MAX_LIMIT', async () => {
+    test('une erreur SQL rejette la clé au lieu de renvoyer null', async () => {
+      mockConnection.all.mockRejectedValueOnce(
+        new Error('Binder Error: LIMIT/OFFSET cannot be negative'),
+      );
+
+      // La pagination est validée par le resolver ; si une valeur invalide
+      // atteint DuckDB, l'erreur remonte (BAD_USER_INPUT), jamais un null
       const loader = createFactLoader('main');
-      // Dépassement de la limite — erreur attrapée par createLoader → null
-      const result = await loader.load({ ...baseParams, limit: 9999 });
-      expect(result).toBeNull();
+      await expect(loader.load({ ...baseParams, limit: -1 })).rejects.toMatchObject({
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     });
   });
 

@@ -3,7 +3,6 @@ import { GraphQLError } from 'graphql';
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
-import { validateIdentifier } from '../../utils/utils.js';
 import { contextScope, loadersForScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 import type { FieldScope, ScopeFields } from './scope.js';
@@ -27,8 +26,8 @@ export interface FieldStatsArgs {
  * Loads the statistics of one column of a scope, optionally filtered.
  *
  * The column is checked against the metadata table first: an unknown column is
- * a client error (BAD_USER_INPUT) and must not reach the SQL, where it would
- * only surface as a binder error swallowed by the loader's generic handling.
+ * a client error (BAD_USER_INPUT) and must not reach the SQL. Any name the
+ * database accepts is allowed — the loader quotes it.
  * The metadata read goes through the metadata DataLoader, already warm when the
  * column comes from a `Metadata` object.
  *
@@ -46,7 +45,6 @@ async function loadFieldStats(
   fieldName: string,
   structuredFilters: FilterNodeInput | null | undefined,
 ): Promise<FieldStats> {
-  validateIdentifier(fieldName, 'field');
   // Instanciation des loaders
   const loaders = loadersForScope(context, scope);
 
