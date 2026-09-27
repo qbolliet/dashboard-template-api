@@ -44,16 +44,22 @@ Add allowed origins to the `production` list for each frontend that will query t
 ```yaml
 API:
   REQUEST_LIMITS:
-    MAX_REQUEST_SIZE: ${MAX_REQUEST_SIZE:-'100kb'}
-    MAX_FIELD_SIZE: ${MAX_FIELD_SIZE:-1000}
-    MAX_FIELDS: ${MAX_FIELDS:-50}
+    MAX_REQUEST_SIZE: '100kb'
+    MAX_QUERY_SIZE: 20000
+    MAX_FIELD_SIZE: 1000
 ```
 
-| Key                | Default | Description                                  |
-| ------------------ | ------- | -------------------------------------------- |
-| `MAX_REQUEST_SIZE` | `100kb` | Maximum HTTP request body size               |
-| `MAX_FIELD_SIZE`   | `1000`  | Maximum value length for a single form field |
-| `MAX_FIELDS`       | `50`    | Maximum number of fields in a multipart form |
+| Key                | Default | Description                                                               |
+| ------------------ | ------- | ------------------------------------------------------------------------- |
+| `MAX_REQUEST_SIZE` | `100kb` | Maximum raw HTTP request body size                                        |
+| `MAX_QUERY_SIZE`   | `20000` | Maximum length of the GraphQL document (`query`), in characters           |
+| `MAX_FIELD_SIZE`   | `1000`  | Maximum length of a single string value inside `variables`, in characters |
+
+A request exceeding one of these limits is rejected with **HTTP 400** and a JSON body
+`{ "errors": [{ "message": …, "extensions": { "code": … } }] }`, where `code` is
+`REQUEST_BODY_TOO_LARGE`, `QUERY_TOO_LARGE` or `VARIABLE_TOO_LARGE`. The number of JSON
+fields is not limited: the size of a filter tree is bounded by
+`SECURITY.FILTER_TREE` (`MAX_CRITERIA`, `MAX_DEPTH`, `MAX_IN_VALUES`).
 
 ## GraphQL introspection & playground
 

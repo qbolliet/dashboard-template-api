@@ -10,6 +10,7 @@ import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import compression from 'compression';
 import { v4 as uuidv4 } from 'uuid';
+import { getVariableValues } from 'graphql';
 import type { GraphQLFormattedError } from 'graphql';
 
 // Importation des modules locaux
@@ -21,6 +22,7 @@ import { closeAllConnections, databaseManager } from './db/index.js';
 import { redis } from './cache/index.js';
 import { initializeSecurityManager } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 import { createCatalogRoutes } from './db/catalog-routes.js';
@@ -68,6 +70,219 @@ interface MutableSingleResult {
   };
 }
 
+/** Security manager instance built by initializeSecurityManager. */
+type SecurityManagerInstance = ReturnType<typeof initializeSecurityManager>;
+
+/** Options overriding the configuration when building the Apollo server. */
+interface ApolloServerOverrides {
+  /** Forces introspection on or off instead of API.GRAPHQL.INTROSPECTION. */
+  introspection?: boolean;
+}
+
+/**
+ * Builds the Apollo Server with its lifecycle plugin and validation rules.
+ *
+ * Validation relies on Apollo's specified rules (unknown fields, arguments and
+ * fragments, missing selections, NoIntrospection when introspection is off) to
+ * which only the depth limit is added. A custom rule must never return a value
+ * from a visitor: `visitInParallel` reads any non-undefined return as
+ * "skip this subtree" for every rule, which would silently disable them all.
+ *
+ * @param securityManager - Security manager run before each operation.
+ * @param metrics - Shared operational counters updated per request.
+ * @param overrides - Configuration overrides, used by tests.
+ * @returns The configured (not yet started) Apollo Server.
+ */
+function createApolloServer(
+  securityManager: SecurityManagerInstance,
+  metrics: ServerMetrics,
+  overrides: ApolloServerOverrides = {},
+): ApolloServer<ServerContext> {
+  // Définition du plugin de cycle de vie des requêtes Apollo
+  const requestLifecyclePlugin: ApolloServerPlugin<ServerContext> = {
+    async requestDidStart({
+      request,
+      contextValue,
+    }: GraphQLRequestContext<ServerContext>): Promise<GraphQLRequestListener<ServerContext>> {
+      const requestStart = Date.now();
+
+      const contextLogger = createContextLogger({
+        requestId: contextValue?.requestId,
+        operationName: request.operationName ?? undefined,
+      });
+
+      metrics.requests.total++;
+
+      return {
+        // Validation de sécurité avant l'exécution de l'opération
+        async didResolveOperation({ document, operation, request: opRequest }): Promise<void> {
+          await securityManager.validateRequest(
+            operation as { name?: { value?: string }; operation?: string },
+            opRequest as { query?: string },
+            contextValue,
+          );
+
+          // Rejet avant exécution des requêtes trop coûteuses
+          // (scores par champ : SECURITY.COMPLEXITY de config/security.yaml)
+          if (operation) {
+            // Variables coercées (valeurs par défaut de l'opération comprises) : une
+            // variable omise ou nulle n'apparaît pas dans opRequest.variables. Si la
+            // coercion échoue, valeurs brutes : l'exécution rejettera la requête.
+            const rawVariables = (opRequest.variables ?? {}) as Record<string, unknown>;
+            const { coerced } = getVariableValues(
+              schema,
+              operation.variableDefinitions ?? [],
+              rawVariables,
+            );
+
+            securityManager.validateComplexity(
+              document,
+              operation,
+              coerced ?? rawVariables,
+              contextValue,
+            );
+          }
+        },
+
+        // Logging de la complétion de la requête et formatage en production
+        async willSendResponse({ response }): Promise<void> {
+          const duration = Date.now() - requestStart;
+          const mutableBody = response.body as MutableSingleResult;
+          const errors = mutableBody.singleResult?.errors;
+
+          contextLogger.performance('Request completed', {
+            duration,
+            errors: errors?.length ?? 0,
+          });
+
+          // Mise à jour des compteurs de métriques
+          if (errors && errors.length > 0) metrics.requests.errors++;
+          metrics.responseTimes.push(duration);
+          if (metrics.responseTimes.length > metrics.maxStoredTimes) {
+            metrics.responseTimes.shift();
+          }
+
+          // Masquage des messages d'erreur détaillés en production
+          if (errors && config.ENVIRONMENT === 'production' && mutableBody.singleResult) {
+            mutableBody.singleResult.errors = errors.map((error) => ({
+              message: 'An error occurred',
+              extensions: {
+                errorId: error.extensions?.['errorId'] as string | undefined,
+                code: error.extensions?.['code'] as string | undefined,
+              },
+            }));
+          }
+        },
+
+        // Logging des erreurs GraphQL rencontrées lors de la résolution
+        async didEncounterErrors({ errors: graphqlErrors }): Promise<void> {
+          graphqlErrors.forEach((error) => {
+            contextLogger.error('GraphQL error', error, {
+              path: error.path,
+              locations: error.locations,
+            });
+          });
+        },
+      };
+    },
+  };
+
+  return new ApolloServer<ServerContext>({
+    // Schéma exécutable de l'API
+    schema,
+    // Introspection : autorisée en développement seulement (NoIntrospection d'Apollo sinon)
+    introspection: overrides.introspection ?? config.API.GRAPHQL.INTROSPECTION,
+    // Formatage des erreurs avec identifiant unique de traçabilité
+    formatError: (formattedError, error) => {
+      // Génération d'un identifiant unique associé à l'erreur
+      const errorId = uuidv4();
+      logger.error(`Error [${errorId}]: ${formattedError.message}`, {
+        stack: (error as Error)?.stack,
+      });
+      // Distinction du message d'erreur selon l'environnement
+      const isProduction = config.ENVIRONMENT === 'production';
+      return {
+        message: isProduction ? 'An error occurred' : formattedError.message,
+        extensions: {
+          code: formattedError.extensions?.['code'] ?? 'INTERNAL_SERVER_ERROR',
+          errorId,
+        },
+      };
+    },
+    // Règles de validation ajoutées à celles d'Apollo : profondeur maximale
+    validationRules: [
+      createDepthLimitRule(
+        config.SECURITY?.MAX_QUERY_DEPTH ?? config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5,
+      ),
+    ],
+    // Plugins du cycle de vie des requêtes
+    plugins: [requestLifecyclePlugin],
+  });
+}
+
+/**
+ * Builds the GraphQL context of a request.
+ *
+ * Reads the optional `x-catalog-id` and `x-schema-id` headers, validates the
+ * catalog routing (falling back to the default catalog when invalid) and
+ * creates the request-scoped DataLoaders.
+ *
+ * @param args - Express request and response of the GraphQL call.
+ * @returns The context injected into every resolver and plugin.
+ */
+async function createContext({
+  req,
+  res,
+}: {
+  req: Request;
+  res: Response;
+}): Promise<ServerContext> {
+  // Extraction du catalogue et du schéma depuis les en-têtes
+  const headerCatalog = req.headers['x-catalog-id'] as string | undefined;
+  const headerSchema = (req.headers['x-schema-id'] as string | undefined) ?? null;
+
+  // Validation du routage vers le catalogue spécifié
+  let validatedCatalog: string | null = null;
+  if (headerCatalog) {
+    try {
+      validatedCatalog = databaseManager.validateCatalogRouting(null, headerCatalog) as
+        | string
+        | null;
+    } catch (error) {
+      logger.warn('Invalid catalog specified in header', {
+        requestedCatalog: headerCatalog,
+        error: (error as Error).message,
+      });
+      // Poursuite avec le catalogue par défaut plutôt qu'un échec
+    }
+  }
+
+  return {
+    requestId: uuidv4(),
+    loaders: createLoaders(validatedCatalog, headerSchema),
+    databaseManager,
+    requestCatalog: validatedCatalog,
+    requestSchema: headerSchema,
+    getLoadersForCatalog: (
+      catalogId: string | null,
+      schema: string | null = null,
+    ): LoadersCollection | null => {
+      const targetCatalog = databaseManager.validateCatalogRouting(catalogId, validatedCatalog) as
+        | string
+        | null;
+      // Résolution du schéma : argument explicite, sinon schéma du contexte (en-tête)
+      const targetSchema = schema ?? headerSchema;
+      // Réutilisation des loaders du contexte si catalogue ET schéma identiques
+      if (targetCatalog === validatedCatalog && targetSchema === headerSchema) {
+        return null;
+      }
+      return createLoaders(targetCatalog, targetSchema);
+    },
+    req,
+    res,
+  };
+}
+
 /**
  * Starts the GraphQL API server with security and performance configurations.
  *
@@ -109,70 +324,8 @@ async function startServer(): Promise<void> {
     next();
   });
 
-  // Gestion de la taille limite des requêtes
-  app.use(
-    express.json({
-      // Vérification que la taille de la requête est inférieure à la taille maximale fixée en paramètre
-      limit: config.API.REQUEST_LIMITS.MAX_REQUEST_SIZE,
-      verify: (req: Request, _res: Response, buf: Buffer): void => {
-        // Exclusion des requêtes d'introspection de la vérification
-        try {
-          const body = JSON.parse(buf.toString()) as Record<string, unknown>;
-          if (body['operationName'] === 'IntrospectionQuery') {
-            return;
-          }
-
-          // Comptage récursif du nombre de champs de l'objet
-          const countFields = (obj: unknown): number => {
-            let count = 0;
-            const queue: unknown[] = [obj];
-
-            while (queue.length > 0) {
-              const current = queue.shift();
-              if (typeof current === 'object' && current !== null) {
-                Object.values(current as Record<string, unknown>).forEach((value) => {
-                  if (typeof value === 'object' && value !== null) {
-                    queue.push(value);
-                  }
-                  count++;
-                });
-              }
-            }
-            return count;
-          };
-
-          // Vérification du nombre de champs par rapport au maximum autorisé
-          const fields = countFields(body);
-          if (fields > config.API.REQUEST_LIMITS.MAX_FIELDS) {
-            throw new Error('Too many fields in request');
-          }
-
-          // Estimation récursive de la taille de chaque champ
-          const checkFieldSize = (obj: unknown): void => {
-            if (typeof obj === 'object' && obj !== null) {
-              Object.entries(obj as Record<string, unknown>).forEach(([key, value]) => {
-                if (
-                  typeof value === 'string' &&
-                  value.length > config.API.REQUEST_LIMITS.MAX_FIELD_SIZE
-                ) {
-                  throw new Error(`Field ${key} exceeds maximum allowed size`);
-                }
-                if (typeof value === 'object' && value !== null) {
-                  checkFieldSize(value);
-                }
-              });
-            }
-          };
-          // Vérification de la taille de chaque champ
-          checkFieldSize(body);
-        } catch (error) {
-          if ((error as Error).message !== 'Unexpected end of JSON input') {
-            throw error;
-          }
-        }
-      },
-    }),
-  );
+  // Corps JSON : taille brute, taille du document et des variables (400 au-delà)
+  applyRequestLimits(app);
 
   // Compression des réponses volumineuses
   if (config.API.COMPRESSION.ENABLED) {
@@ -283,133 +436,8 @@ async function startServer(): Promise<void> {
   // Création du gestionnaire de sécurité
   const securityManager = initializeSecurityManager(config.SECURITY);
 
-  // Définition du plugin de cycle de vie des requêtes Apollo
-  const requestLifecyclePlugin: ApolloServerPlugin<ServerContext> = {
-    async requestDidStart({
-      request,
-      contextValue,
-    }: GraphQLRequestContext<ServerContext>): Promise<GraphQLRequestListener<ServerContext>> {
-      const requestStart = Date.now();
-
-      const contextLogger = createContextLogger({
-        requestId: contextValue?.requestId,
-        operationName: request.operationName ?? undefined,
-      });
-
-      metrics.requests.total++;
-
-      return {
-        // Validation de sécurité avant l'exécution de l'opération
-        async didResolveOperation({ document, operation, request: opRequest }): Promise<void> {
-          await securityManager.validateRequest(
-            operation as { name?: { value?: string }; operation?: string },
-            opRequest as { query?: string },
-            contextValue,
-          );
-
-          // Rejet avant exécution des requêtes trop coûteuses
-          // (scores par champ : SECURITY.COMPLEXITY de config/security.yaml)
-          if (operation) {
-            securityManager.validateComplexity(
-              document,
-              operation,
-              (opRequest.variables ?? {}) as Record<string, unknown>,
-              contextValue,
-            );
-          }
-        },
-
-        // Logging de la complétion de la requête et formatage en production
-        async willSendResponse({ response }): Promise<void> {
-          const duration = Date.now() - requestStart;
-          const mutableBody = response.body as MutableSingleResult;
-          const errors = mutableBody.singleResult?.errors;
-
-          contextLogger.performance('Request completed', {
-            duration,
-            errors: errors?.length ?? 0,
-          });
-
-          // Mise à jour des compteurs de métriques
-          if (errors && errors.length > 0) metrics.requests.errors++;
-          metrics.responseTimes.push(duration);
-          if (metrics.responseTimes.length > metrics.maxStoredTimes) {
-            metrics.responseTimes.shift();
-          }
-
-          // Masquage des messages d'erreur détaillés en production
-          if (errors && config.ENVIRONMENT === 'production' && mutableBody.singleResult) {
-            mutableBody.singleResult.errors = errors.map((error) => ({
-              message: 'An error occurred',
-              extensions: {
-                errorId: error.extensions?.['errorId'] as string | undefined,
-                code: error.extensions?.['code'] as string | undefined,
-              },
-            }));
-          }
-        },
-
-        // Logging des erreurs GraphQL rencontrées lors de la résolution
-        async didEncounterErrors({ errors: graphqlErrors }): Promise<void> {
-          graphqlErrors.forEach((error) => {
-            contextLogger.error('GraphQL error', error, {
-              path: error.path,
-              locations: error.locations,
-            });
-          });
-        },
-      };
-    },
-  };
-
   // Création du serveur Apollo
-  const server = new ApolloServer<ServerContext>({
-    // Schéma exécutable de l'API
-    schema,
-    // Autorisation de l'introspection en développement
-    introspection: config.API.GRAPHQL.INTROSPECTION,
-    // Formatage des erreurs avec identifiant unique de traçabilité
-    formatError: (formattedError, error) => {
-      // Génération d'un identifiant unique associé à l'erreur
-      const errorId = uuidv4();
-      logger.error(`Error [${errorId}]: ${formattedError.message}`, {
-        stack: (error as Error)?.stack,
-      });
-      // Distinction du message d'erreur selon l'environnement
-      const isProduction = config.ENVIRONMENT === 'production';
-      return {
-        message: isProduction ? 'An error occurred' : formattedError.message,
-        extensions: {
-          code: formattedError.extensions?.['code'] ?? 'INTERNAL_SERVER_ERROR',
-          errorId,
-        },
-      };
-    },
-    // Règles de validation des requêtes entrantes
-    validationRules: [
-      // Règle de limitation de la profondeur des requêtes
-      createDepthLimitRule(
-        config.SECURITY?.MAX_QUERY_DEPTH ?? config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5,
-      ),
-      // Liste blanche des opérations valides
-      () => ({
-        OperationDefinition(node) {
-          // Extraction du nom de l'opération pour la validation
-          const operationName = node.name?.value;
-
-          // Exemption des requêtes d'introspection en développement
-          if (config.ENVIRONMENT !== 'production' && operationName === 'IntrospectionQuery') {
-            return;
-          }
-
-          // Autorisation de toutes les opérations par défaut
-          return true;
-        },
-      }),
-    ],
-    // Plugins du cycle de vie des requêtes
-    plugins: [requestLifecyclePlugin],
-  });
+  const server = createApolloServer(securityManager, metrics);
 
   // Réconciliation de la liste de schémas par catalogue avec ce que DuckLake
   // expose réellement (warn si un schéma configuré est absent à l'ATTACH).
@@ -440,53 +468,7 @@ async function startServer(): Promise<void> {
   app.use(
     '/graphql',
     expressMiddleware(server, {
-      context: async ({ req, res }: { req: Request; res: Response }): Promise<ServerContext> => {
-        // Extraction du catalogue et du schéma depuis les en-têtes
-        const headerCatalog = req.headers['x-catalog-id'] as string | undefined;
-        const headerSchema = (req.headers['x-schema-id'] as string | undefined) ?? null;
-
-        // Validation du routage vers le catalogue spécifié
-        let validatedCatalog: string | null = null;
-        if (headerCatalog) {
-          try {
-            validatedCatalog = databaseManager.validateCatalogRouting(null, headerCatalog) as
-              | string
-              | null;
-          } catch (error) {
-            logger.warn('Invalid catalog specified in header', {
-              requestedCatalog: headerCatalog,
-              error: (error as Error).message,
-            });
-            // Poursuite avec le catalogue par défaut plutôt qu'un échec
-          }
-        }
-
-        return {
-          requestId: uuidv4(),
-          loaders: createLoaders(validatedCatalog, headerSchema),
-          databaseManager,
-          requestCatalog: validatedCatalog,
-          requestSchema: headerSchema,
-          getLoadersForCatalog: (
-            catalogId: string | null,
-            schema: string | null = null,
-          ): LoadersCollection | null => {
-            const targetCatalog = databaseManager.validateCatalogRouting(
-              catalogId,
-              validatedCatalog,
-            ) as string | null;
-            // Résolution du schéma : argument explicite, sinon schéma du contexte (en-tête)
-            const targetSchema = schema ?? headerSchema;
-            // Réutilisation des loaders du contexte si catalogue ET schéma identiques
-            if (targetCatalog === validatedCatalog && targetSchema === headerSchema) {
-              return null;
-            }
-            return createLoaders(targetCatalog, targetSchema);
-          },
-          req,
-          res,
-        };
-      },
+      context: createContext,
     }),
   );
 
@@ -548,5 +530,5 @@ async function startServer(): Promise<void> {
   });
 }
 
-export { startServer };
+export { startServer, createApolloServer, createContext };
 export type { ServerContext, ServerMetrics };

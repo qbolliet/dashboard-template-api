@@ -216,6 +216,67 @@ describe('QueryComplexityAnalyzer', () => {
     });
   });
 
+  describe('limit argument resolution', () => {
+    const query = 'query Q($n: Int = 50) { items(limit: $n) { id } }';
+
+    test('charges a literal limit', () => {
+      // 50 * COMPLEXITY_CALCULATION_FACTOR (0,1) en plus du coût d'objet
+      expect(score('{ items(limit: 50) { id } }')).toBeCloseTo(score('{ items { id } }') + 5);
+    });
+
+    test('uses the value of a provided variable over its default', () => {
+      expect(score(query, { n: 5 })).toBeCloseTo(score('{ items(limit: 5) { id } }'));
+      expect(score(query, { n: 5 })).toBeLessThan(score(query));
+    });
+
+    test('falls back to the default of the variable definition when omitted', () => {
+      // Régression AF2 : la variable omise faisait lire .kind sur undefined
+      expect(() => score(query)).not.toThrow();
+      expect(score(query)).toBeCloseTo(score('{ items(limit: 50) { id } }'));
+    });
+
+    test('falls back to the default of the variable definition when undefined', () => {
+      expect(score(query, { n: undefined })).toBeCloseTo(score('{ items(limit: 50) { id } }'));
+    });
+
+    test('charges the default page size for a null variable', () => {
+      // Le mock de configuration n'a pas de section API : défaut 100 → plafonné à 100
+      expect(() => score(query, { n: null })).not.toThrow();
+      expect(score(query, { n: null })).toBeCloseTo(score('{ items(limit: 100) { id } }'));
+    });
+
+    test('charges the default page size for a null literal', () => {
+      expect(score('{ items(limit: null) { id } }')).toBeCloseTo(
+        score('{ items(limit: 100) { id } }'),
+      );
+    });
+
+    test('never throws for an omitted variable without default', () => {
+      const withoutDefault = 'query Q($n: Int) { items(limit: $n) { id } }';
+      expect(() => score(withoutDefault)).not.toThrow();
+      expect(score(withoutDefault)).toBeCloseTo(score('{ items(limit: 100) { id } }'));
+    });
+
+    test('never throws for a variable of an unexpected type', () => {
+      const withoutDefault = 'query Q($n: Int) { items(limit: $n) { id } }';
+      expect(() => score(withoutDefault, { n: 'abc' })).not.toThrow();
+      expect(() => score(withoutDefault, { n: { deep: true } })).not.toThrow();
+    });
+
+    test('applies to the first argument as to limit', () => {
+      const first = 'query Q($n: Int = 20) { items(first: $n) { id } }';
+      expect(score(first)).toBeCloseTo(score('{ items(first: 20) { id } }'));
+    });
+
+    test('resolves defaults inside nested selections and fragments', () => {
+      const nested = `
+        query Q($n: Int = 30) { a { ...F } }
+        fragment F on T { items(limit: $n) { id } }
+      `;
+      expect(score(nested)).toBeCloseTo(score('{ a { items(limit: 30) { id } } }'));
+    });
+  });
+
   describe('extractNumericValue', () => {
     test('extracts integer from IntValue node', () => {
       expect(analyzer.extractNumericValue({ kind: 'IntValue', value: '42' })).toBe(42);

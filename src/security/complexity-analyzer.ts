@@ -1,4 +1,5 @@
 // Importation des types GraphQL nécessaires à l'analyse AST
+import { valueFromASTUntyped } from 'graphql';
 import type {
   FieldNode,
   FragmentDefinitionNode,
@@ -82,14 +83,17 @@ class QueryComplexityAnalyzer {
     // Initialisation du score cumulé de l'opération
     let complexity = 0;
 
+    // Valeurs effectives des variables : fournies, sinon défaut de la définition
+    const effectiveVariables = this.withDefaultValues(operation, variables);
+
     // Parcours des sélections racine (champs, fragments en ligne ou nommés)
     for (const selection of operation.selectionSet?.selections ?? []) {
       if (selection.kind === 'Field' || selection.kind === 'InlineFragment') {
-        complexity += this.calculateFieldComplexity(selection, fragments, variables, 0);
+        complexity += this.calculateFieldComplexity(selection, fragments, effectiveVariables, 0);
       } else if (selection.kind === 'FragmentSpread') {
         const fragment = fragments[selection.name.value];
         if (fragment) {
-          complexity += this.calculateFieldComplexity(fragment, fragments, variables, 0);
+          complexity += this.calculateFieldComplexity(fragment, fragments, effectiveVariables, 0);
         }
       }
     }
@@ -197,17 +201,10 @@ class QueryComplexityAnalyzer {
 
     for (const arg of args) {
       const argName = arg.name.value;
-      let value: ValueNode | unknown = arg.value;
-
-      // Résolution des références de variables GraphQL
-      if ((value as ValueNode).kind === 'Variable' && variables) {
-        const varName = (value as { kind: 'Variable'; name: { value: string } }).name.value;
-        value = variables[varName];
-      }
 
       if (argName === 'limit' || argName === 'first') {
         // Coût proportionnel à la limite de pagination (plafonné à 100)
-        const limit = this.extractNumericValue(value as ValueNode | number);
+        const limit = this.resolveLimit(arg.value, variables);
         const factor = config.SECURITY_LIMITS?.COMPLEXITY_CALCULATION_FACTOR ?? 0.1;
         complexity += Math.min(limit, 100) * factor;
       } else if (argName === 'structuredFilters' || argName === 'where') {
@@ -223,6 +220,61 @@ class QueryComplexityAnalyzer {
   }
 
   /**
+   * Completes the provided variables with the defaults of the operation.
+   *
+   * A variable that is omitted, or explicitly undefined, takes the default
+   * declared in its definition (`$limit: Int = 50`). A variable set to null
+   * is kept as is: it is a value, resolved by {@link resolveLimit}.
+   *
+   * @param operation - Operation whose variable definitions carry the defaults.
+   * @param variables - Variable values provided with the request.
+   * @returns Variable values with the defaults applied.
+   */
+  private withDefaultValues(
+    operation: OperationDefinitionNode,
+    variables: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const effective: Record<string, unknown> = { ...variables };
+
+    for (const definition of operation.variableDefinitions ?? []) {
+      const name = definition.variable.name.value;
+      if (effective[name] === undefined && definition.defaultValue) {
+        effective[name] = valueFromASTUntyped(definition.defaultValue);
+      }
+    }
+    return effective;
+  }
+
+  /**
+   * Resolves the value of a pagination argument (`limit`, `first`).
+   *
+   * The argument is a literal or a variable reference. An absent or null
+   * variable means the field default applies: the API default page size
+   * (API.PAGINATION.DEFAULT_LIMIT) is charged, never zero, so that omitting
+   * the limit cannot make a query cheaper than its real cost. Never throws.
+   *
+   * @param node - Value node of the argument.
+   * @param variables - Effective variable values of the operation.
+   * @returns A non-negative numeric limit.
+   */
+  private resolveLimit(node: ValueNode, variables: Record<string, unknown>): number {
+    let value: ValueNode | unknown = node;
+
+    // Résolution des références de variables GraphQL
+    if (node.kind === 'Variable') {
+      value = variables[node.name.value];
+    }
+
+    // Variable absente ou nulle, ou littéral null : limite par défaut du champ
+    if (value === undefined || value === null || (value as ValueNode).kind === 'NullValue') {
+      return config.API?.PAGINATION?.DEFAULT_LIMIT ?? 100;
+    }
+
+    const limit = this.extractNumericValue(value as ValueNode | number);
+    return Number.isFinite(limit) ? Math.max(limit, 0) : 0;
+  }
+
+  /**
    * Extracts a numeric value from an AST value node or a plain number.
    *
    * @param node - An AST IntValue, FloatValue node, or a plain JavaScript number.
@@ -232,10 +284,10 @@ class QueryComplexityAnalyzer {
     if (typeof node === 'number') {
       return node;
     }
-    if (node.kind === 'IntValue') {
+    if (node?.kind === 'IntValue') {
       return parseInt((node as IntValueNode).value, 10);
     }
-    if (node.kind === 'FloatValue') {
+    if (node?.kind === 'FloatValue') {
       return parseFloat((node as FloatValueNode).value);
     }
     return 0;

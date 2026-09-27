@@ -120,8 +120,8 @@ interface CorsConfig {
 /** Size limits for incoming HTTP requests. */
 interface RequestLimitsConfig {
   MAX_REQUEST_SIZE: string;
+  MAX_QUERY_SIZE: number;
   MAX_FIELD_SIZE: number;
-  MAX_FIELDS: number;
 }
 
 /** HTTP response compression configuration. */
