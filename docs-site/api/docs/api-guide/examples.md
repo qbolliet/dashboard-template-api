@@ -410,13 +410,13 @@ query {
 }
 ```
 
-## Using a different catalog via HTTP header
+## Targeting a different catalog
 
-For clients that cannot modify each query, pass the catalog ID as a header:
+Every query accepts a `catalog` argument (and `schema` for a non-default schema within it); there is no
+HTTP-header alternative — a client that cannot modify each query still passes it as a variable:
 
 ```bash
 curl -X POST http://localhost:4000/graphql \
   -H "Content-Type: application/json" \
-  -H "x-catalog-id: macroeconomics" \
-  -d '{"query": "{ getSelectOptions(fieldName: \"country\") { value label } }"}'
+  -d '{"query": "{ getSelectOptions(fieldName: \"country\", catalog: \"macroeconomics\") { value label } }"}'
 ```

@@ -375,20 +375,23 @@ class DatabaseManager {
 
   /**
    * Validate and resolve the catalog ID for a GraphQL request.
-   * Priority: explicit parameter > HTTP header context > default catalog.
+   * Priority: explicit parameter > fallback parameter > default catalog.
+   *
+   * Catalog targeting is argument-only (no HTTP header is ever consulted);
+   * `fallbackCatalog` exists for callers resolving a fallback other than the
+   * default (most callers pass only `requestedCatalog`).
    *
    * @param requestedCatalog - Catalog requested by the client.
-   * @param contextCatalog - Catalog from request context (HTTP header).
+   * @param fallbackCatalog - Catalog to use when none was requested, before the default.
    * @returns Validated catalog ID to use.
    * @throws {Error} If the resolved catalog is not available.
    */
   validateCatalogRouting(
     requestedCatalog: string | null = null,
-    contextCatalog: string | null = null,
+    fallbackCatalog: string | null = null,
   ): string {
-    // Priorité : paramètre GraphQL > en-tête HTTP > catalogue par défaut
-    // Utilisation de || pour traiter les chaînes vides comme absentes
-    const targetCatalog = requestedCatalog || contextCatalog || this.defaultCatalog;
+    // Priorité : paramètre explicite > paramètre de repli > catalogue par défaut
+    const targetCatalog = requestedCatalog || fallbackCatalog || this.defaultCatalog;
 
     if (!this.isValidCatalog(targetCatalog)) {
       throw new Error(

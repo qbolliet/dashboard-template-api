@@ -30,7 +30,7 @@ The API is intentionally unauthenticated. Access is protected at the network lev
 
 ## Features at a glance
 
-- **Multi-catalog / multi-schema routing** — query different catalogs (and schemas within them) via the `catalog` / `schema` arguments or the `x-catalog-id` / `x-schema-id` HTTP headers
+- **Multi-catalog / multi-schema routing** — query different catalogs (and schemas within them) via the `catalog` / `schema` arguments
 - **Flexible querying** — filter, sort, and paginate fact rows with a structured filter API
 - **Aggregations** — SUM, AVG, MAX, MIN, COUNT, MEDIAN, MODE with optional D3-ready metadata (extents, statistics)
 - **Cross-database comparisons** — compare facts across two catalogs with delta and percentage values

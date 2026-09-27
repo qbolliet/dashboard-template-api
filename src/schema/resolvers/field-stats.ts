@@ -136,7 +136,7 @@ const fieldStatsResolvers = {
       { fieldName, catalog, schema, structuredFilters }: FieldStatsArgs,
       context: GraphQLContext,
     ): Promise<FieldStats> =>
-      loadFieldStats(context, contextScope(context, catalog, schema), fieldName, structuredFilters),
+      loadFieldStats(context, contextScope(catalog, schema), fieldName, structuredFilters),
   },
 };
 

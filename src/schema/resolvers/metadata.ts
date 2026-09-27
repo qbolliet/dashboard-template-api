@@ -33,7 +33,7 @@ const metadataResolvers: { Query: Pick<QueryResolvers, 'getMetaData'> } = {
         'Metadata fetch timeout',
       );
       // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
-      return attachScope(row, contextScope(context, catalog, schema));
+      return attachScope(row, contextScope(catalog, schema));
     },
   },
 };

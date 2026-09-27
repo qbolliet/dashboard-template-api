@@ -2,7 +2,12 @@
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
-import { attachScopeToAll, effectiveScope, validateSchemaForCatalog } from './scope.js';
+import {
+  attachScopeToAll,
+  contextScope,
+  effectiveScope,
+  validateSchemaForCatalog,
+} from './scope.js';
 import { sqlTypeFamily } from '../../utils/filter-tree.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { DatasetInfo } from '../../loaders/dataset-info.js';
@@ -177,11 +182,13 @@ const catalogResolvers = {
       { catalog, schema }: CatalogSchemaArgs,
       { loaders }: GraphQLContext,
     ): Promise<FieldMetadata[]> => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalog);
-      validateSchemaForCatalog(targetCatalog, schema);
-      const rows = await loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+      const scope = contextScope(catalog, schema);
+      const rows = await loaders.catalogMetadata.load({
+        catalog: scope.catalog,
+        schema: scope.schema,
+      });
       // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
-      return attachScopeToAll(rows, effectiveScope(targetCatalog, schema));
+      return attachScopeToAll(rows, scope);
     },
 
     /**
@@ -201,9 +208,8 @@ const catalogResolvers = {
       { catalog, schema }: CatalogSchemaArgs,
       { loaders }: GraphQLContext,
     ): Promise<DatasetInfo> => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalog);
-      validateSchemaForCatalog(targetCatalog, schema);
-      return loaders.datasetInfo.load({ catalog: targetCatalog, schema });
+      const scope = contextScope(catalog, schema);
+      return loaders.datasetInfo.load({ catalog: scope.catalog, schema: scope.schema });
     },
 
     /**
@@ -237,9 +243,11 @@ const catalogResolvers = {
       }: FieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<SelectOption[]> => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalog ?? null);
-      validateSchemaForCatalog(targetCatalog, schema);
-      const fields = await loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+      const scope = contextScope(catalog, schema);
+      const fields = await loaders.catalogMetadata.load({
+        catalog: scope.catalog,
+        schema: scope.schema,
+      });
 
       // Normalisation des termes de comparaison une seule fois
       const normalizedSqlType = sqlType ? sqlType.toLowerCase() : null;

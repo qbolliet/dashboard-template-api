@@ -36,14 +36,13 @@ export interface FactTableArgs extends Omit<FactQueryParams, 'where' | 'format'>
  * filter tree is validated and compiled into a parameterized predicate, and
  * the effective sort is resolved from dataset_metadata.cluster_by when the
  * client gave none (an explicit sort is checked against metadata too). The
- * target is resolved by contextScope — argument, then header, then default —
+ * target is resolved by contextScope — argument, then the catalog's default —
  * the same rule as the loaders. Only concrete values reach the loader, so the
  * DataLoader/Redis cache key derives from a deterministic SQL string,
  * parameter list and ordering.
  *
  * @param args - GraphQL arguments of the fact query.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
- * @param context - GraphQL context (header routing).
  * @returns Parameters for the fact loaders.
  * @throws {GraphQLError} BAD_USER_INPUT on invalid pagination, an unknown
  *   column or an invalid filter tree.
@@ -52,12 +51,11 @@ export interface FactTableArgs extends Omit<FactQueryParams, 'where' | 'format'>
 async function buildFactParams(
   args: FactTableArgs,
   activeLoaders: LoadersCollection,
-  context: Pick<GraphQLContext, 'requestCatalog' | 'requestSchema'>,
 ): Promise<FactQueryParams> {
   validatePagination(args.limit, args.offset);
 
   // Colonnes projetées contrôlées contre la table metadata du schéma cible
-  const { catalog, schema } = contextScope(context, args.catalog, args.schema);
+  const { catalog, schema } = contextScope(args.catalog, args.schema);
   const columns = await activeLoaders.catalogMetadata.load({ catalog, schema });
   assertColumns(args.fields ?? [], indexMetadataByName(columns), 'field');
 
@@ -133,7 +131,7 @@ const factResolvers = {
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = context.getLoadersForCatalog(args.catalog, args.schema);
       const activeLoaders = targetLoaders ?? context.loaders;
-      const params = await buildFactParams(args, activeLoaders, context);
+      const params = await buildFactParams(args, activeLoaders);
 
       const result = (await withTimeout(
         activeLoaders.factWithCount.load(params),
@@ -173,8 +171,8 @@ const factResolvers = {
       // Sélection des loaders adaptés au catalogue/schéma cible
       const targetLoaders = context.getLoadersForCatalog(args.catalog, args.schema);
       const activeLoaders = targetLoaders ?? context.loaders;
-      const params = await buildFactParams(args, activeLoaders, context);
-      const scope = contextScope(context, args.catalog, args.schema);
+      const params = await buildFactParams(args, activeLoaders);
+      const scope = contextScope(args.catalog, args.schema);
 
       const result = (await withTimeout(
         activeLoaders.factWithMetadata.load(params),

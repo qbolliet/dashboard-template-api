@@ -53,6 +53,7 @@ config:
   ALLOWED_CATALOGS: '["default"]'
   AWS_REGION: eu-west-1
   TRUSTED_PROXIES: '["10.0.0.0/8"]'
+  CORS_ORIGINS: '["https://qbolliet.github.io"]' # one origin per frontend querying the API
 
 # Declare each DuckLake catalog under `catalogs.<name>`. The chart renders one
 # block of <NAME>_CATALOG_TYPE / _CATALOG_PATH / _DATA_PATH / _READ_ONLY /

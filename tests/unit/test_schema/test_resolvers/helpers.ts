@@ -86,8 +86,8 @@ export const getServer = async (): Promise<ApolloServer> => {
 /**
  * Executes a GraphQL operation and normalizes the Apollo Server v5 response.
  *
- * Mirrors the contextValue built in src/server.ts: injects a fresh set of
- * DataLoaders, the databaseManager, and the cross-database routing helper.
+ * Mirrors the contextValue built by createContext in src/server.ts: catalog
+ * and schema are resolved from GraphQL arguments only (no HTTP header).
  *
  * Args:
  *     server: Running ApolloServer instance.
@@ -105,14 +105,12 @@ export const execute = async (
   const { body } = await server.executeOperation(operation, {
     contextValue: {
       requestId: uuidv4(),
-      loaders: createLoaders(defaultCatalog),
+      loaders: createLoaders(null, null),
       databaseManager,
-      requestCatalog: defaultCatalog,
-      requestSchema: null,
       // Résolution des loaders pour un catalogue/schéma cible
       getLoadersForCatalog: (catalog: string | null, schema: string | null = null) => {
-        const targetCatalog = databaseManager.validateCatalogRouting(catalog, defaultCatalog);
-        if (targetCatalog === defaultCatalog && schema === null) return null;
+        const targetCatalog = databaseManager.validateCatalogRouting(catalog);
+        if (targetCatalog === defaultCatalog && !schema) return null;
         return createLoaders(targetCatalog, schema);
       },
     },

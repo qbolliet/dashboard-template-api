@@ -125,7 +125,14 @@ interface CorsConfig {
   CREDENTIALS: boolean;
   METHODS: string[];
   HEADERS: string[];
-  ORIGINS: string[];
+  /** Preflight cache duration, in seconds (Access-Control-Max-Age). */
+  MAX_AGE: number;
+  /**
+   * Allowed cross-origin origins. A YAML list in development; a JSON-array
+   * string (or comma-separated string) in production, from the CORS_ORIGINS
+   * environment variable — see `parseCorsOrigins` in src/security/cors.ts.
+   */
+  ORIGINS: string[] | string;
 }
 
 /** Size limits for incoming HTTP requests. */

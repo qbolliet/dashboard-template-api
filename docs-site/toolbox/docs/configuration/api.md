@@ -12,32 +12,38 @@ Controls the HTTP server and GraphQL runtime behaviour.
 ```yaml
 API:
   PORT: ${PORT:-4000}
-  DOMAIN: ${API_DOMAIN:-'https://your-production-domain.com'}
+  DOMAIN: ${API_DOMAIN:-https://your-production-domain.com}
 ```
 
-| Key      | Env var      | Default | Description                          |
-| -------- | ------------ | ------- | ------------------------------------ |
-| `PORT`   | `PORT`       | `4000`  | TCP port the server listens on       |
-| `DOMAIN` | `API_DOMAIN` | —       | Public domain used for CORS and HSTS |
+| Key      | Env var      | Default | Description                    |
+| -------- | ------------ | ------- | ------------------------------ |
+| `PORT`   | `PORT`       | `4000`  | TCP port the server listens on |
+| `DOMAIN` | `API_DOMAIN` | —       | Public domain, used for HSTS   |
 
 ## CORS
 
 ```yaml
 API:
   CORS:
-    CREDENTIALS: true
+    CREDENTIALS: false
     METHODS: ['GET', 'POST', 'OPTIONS']
     HEADERS: ['Content-Type', 'Authorization']
+    MAX_AGE: 86400
     ORIGINS:
       development:
         - 'https://studio.apollographql.com'
         - 'http://localhost:3000'
         - 'http://localhost:5173'
-      production:
-        - ${API_DOMAIN:-'https://your-production-domain.com'}
+      production: ${CORS_ORIGINS:-[]}
 ```
 
-Add allowed origins to the `production` list for each frontend that will query the API.
+Catalog and schema targeting is argument-only (`catalog` / `schema` GraphQL arguments) — the API never reads
+routing information from request headers, so CORS only needs to allow `Content-Type` and `Authorization`.
+
+`ORIGINS.production` is empty by default: no cross-origin request is allowed until `CORS_ORIGINS` is set, as a
+JSON array (e.g. `CORS_ORIGINS='["https://qbolliet.github.io"]'`) or a comma-separated list of origins, one per
+frontend that will query the API. `CREDENTIALS` stays `false` — the API is unauthenticated and never sets a
+cookie, so `Access-Control-Allow-Credentials` is never sent.
 
 ## Request limits
 

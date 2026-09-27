@@ -63,30 +63,23 @@ export function effectiveScope(catalog: string, schema?: string | null): FieldSc
 }
 
 /**
- * Resolves the scope of a query from its arguments and the request context.
+ * Resolves the scope of a query from its GraphQL arguments alone.
  *
- * Same precedence as `getLoadersForCatalog`: GraphQL argument, then HTTP
- * header (`requestCatalog` / `requestSchema`), then the configured default.
+ * The single point of catalog/schema resolution for every resolver: an
+ * argument wins, otherwise the catalog's configured default applies (no HTTP
+ * header is ever consulted — catalog and schema targeting is argument-only).
  *
- * @param context - GraphQL context of the request.
  * @param catalog - Catalog argument of the query, if any.
  * @param schema - Schema argument of the query, if any.
  * @returns The effective catalog and schema.
  * @throws {Error} When the catalog is unknown.
  * @throws {GraphQLError} When the schema is not in the catalog's allow-list.
  */
-// Scope d'une requête : argument, puis en-tête HTTP, puis défaut
-export function contextScope(
-  context: Partial<Pick<GraphQLContext, 'requestCatalog' | 'requestSchema'>>,
-  catalog?: string | null,
-  schema?: string | null,
-): FieldScope {
-  const targetCatalog = databaseManager.validateCatalogRouting(
-    catalog ?? null,
-    context.requestCatalog ?? null,
-  );
+// Scope d'une requête : argument, sinon le défaut du catalogue
+export function contextScope(catalog?: string | null, schema?: string | null): FieldScope {
+  const targetCatalog = databaseManager.validateCatalogRouting(catalog ?? null);
   validateSchemaForCatalog(targetCatalog, schema);
-  return effectiveScope(targetCatalog, schema ?? context.requestSchema);
+  return effectiveScope(targetCatalog, schema);
 }
 
 // ─── Rattachement du scope aux objets Metadata ───────────────────────────────

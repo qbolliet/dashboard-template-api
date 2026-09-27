@@ -1,18 +1,23 @@
 API:
   PORT: ${PORT:-4000}
-  DOMAIN: ${API_DOMAIN:-'https://your-production-domain.com'}
+  DOMAIN: ${API_DOMAIN:-https://your-production-domain.com}
 
   CORS:
-    CREDENTIALS: true
+    # Aucun cookie n'est utilisé par l'API : pas de credentials cross-origin
+    CREDENTIALS: false
     METHODS: ['GET', 'POST', 'OPTIONS']
     HEADERS: ['Content-Type', 'Authorization']
+    # Durée de mise en cache du préflight par le navigateur (secondes)
+    MAX_AGE: 86400
+    # Origines cross-origin autorisées. En développement : liste YAML. En
+    # production : CORS_ORIGINS, liste JSON (ex. '["https://qbolliet.github.io"]'),
+    # vide par défaut — aucune origine cross-origin tant qu'elle n'est pas fixée.
     ORIGINS:
       development:
         - 'https://studio.apollographql.com'
         - 'http://localhost:3000'
         - 'http://localhost:5173'
-      production:
-        - ${API_DOMAIN:-'https://your-production-domain.com'}
+      production: ${CORS_ORIGINS:-[]}
 
   REQUEST_LIMITS:
     # Taille maximale du corps HTTP brut (refus 400 au-delà)

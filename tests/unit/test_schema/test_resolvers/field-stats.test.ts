@@ -362,8 +362,6 @@ describe('Metadata.stats', () => {
     const catalog = databaseManager.getDefaultCatalog();
     const context = {
       loaders: createLoaders(catalog),
-      requestCatalog: catalog,
-      requestSchema: null,
       getLoadersForCatalog: (target: string | null, schema: string | null = null) =>
         target === catalog && schema === null ? null : createLoaders(target ?? catalog, schema),
     } as unknown as GraphQLContext;

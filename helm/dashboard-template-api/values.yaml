@@ -126,6 +126,11 @@ config:
   # Reverse-proxy / rate limiting
   TRUSTED_PROXIES: '["10.0.0.0/8"]'
 
+  # CORS — JSON-encoded list of allowed cross-origin origins (one per frontend
+  # that queries this API from the browser). Empty by default: no cross-origin
+  # request is allowed until set.
+  # CORS_ORIGINS: '["https://qbolliet.github.io"]'
+
   # Logging — stdout only (compatible with readOnlyRootFilesystem)
   LOG_TO_FILE: 'false'
 

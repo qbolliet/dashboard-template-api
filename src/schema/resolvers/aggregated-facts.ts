@@ -387,7 +387,7 @@ const aggregatedFactsResolvers = {
         const measureFieldInfo = await activeLoaders.metadata.load(measure);
 
         // Catalogue et schéma rattachés aux deux Metadata pour la résolution paresseuse de `stats`
-        const scope = contextScope(context, catalog, schema);
+        const scope = contextScope(catalog, schema);
         const groupByFieldInfo = attachScope(
           result.metadata.groupByFieldInfo as FieldMetadata | null,
           scope,

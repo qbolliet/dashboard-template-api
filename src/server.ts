@@ -20,7 +20,11 @@ import type { LoadersCollection } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeAllConnections, databaseManager } from './db/index.js';
 import { redis } from './cache/index.js';
-import { initializeSecurityManager, configuredTrustProxy } from './security/index.js';
+import {
+  initializeSecurityManager,
+  configuredTrustProxy,
+  createCorsMiddleware,
+} from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
 import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
@@ -47,8 +51,10 @@ interface ServerContext {
   loaders: LoadersCollection;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   databaseManager: any;
-  requestCatalog: string | null;
-  requestSchema: string | null;
+  /**
+   * Returns loaders bound to the given catalog/schema (GraphQL arguments
+   * only — see `contextScope`), or null to reuse `loaders`.
+   */
   getLoadersForCatalog: (
     catalogId: string | null,
     schema?: string | null,
@@ -223,9 +229,12 @@ function createApolloServer(
 /**
  * Builds the GraphQL context of a request.
  *
- * Reads the optional `x-catalog-id` and `x-schema-id` headers, validates the
- * catalog routing (falling back to the default catalog when invalid) and
- * creates the request-scoped DataLoaders.
+ * Catalog and schema are resolved exclusively from GraphQL arguments — no
+ * HTTP header is ever read (see `contextScope` in
+ * src/schema/resolvers/scope.ts, the single point of that resolution for
+ * every resolver). `loaders` are the default catalog's; `getLoadersForCatalog`
+ * builds a fresh set for any other (catalog, schema) target, reusing `loaders`
+ * when the target resolves back to the default with no schema override.
  *
  * @param args - Express request and response of the GraphQL call.
  * @returns The context injected into every resolver and plugin.
@@ -237,46 +246,22 @@ async function createContext({
   req: Request;
   res: Response;
 }): Promise<ServerContext> {
-  // Extraction du catalogue et du schéma depuis les en-têtes
-  const headerCatalog = req.headers['x-catalog-id'] as string | undefined;
-  const headerSchema = (req.headers['x-schema-id'] as string | undefined) ?? null;
-
-  // Validation du routage vers le catalogue spécifié
-  let validatedCatalog: string | null = null;
-  if (headerCatalog) {
-    try {
-      validatedCatalog = databaseManager.validateCatalogRouting(null, headerCatalog) as
-        | string
-        | null;
-    } catch (error) {
-      logger.warn('Invalid catalog specified in header', {
-        requestedCatalog: headerCatalog,
-        error: (error as Error).message,
-      });
-      // Poursuite avec le catalogue par défaut plutôt qu'un échec
-    }
-  }
+  const defaultCatalog = databaseManager.getDefaultCatalog();
 
   return {
     requestId: uuidv4(),
-    loaders: createLoaders(validatedCatalog, headerSchema),
+    loaders: createLoaders(null, null),
     databaseManager,
-    requestCatalog: validatedCatalog,
-    requestSchema: headerSchema,
     getLoadersForCatalog: (
       catalogId: string | null,
       schema: string | null = null,
     ): LoadersCollection | null => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalogId, validatedCatalog) as
-        | string
-        | null;
-      // Résolution du schéma : argument explicite, sinon schéma du contexte (en-tête)
-      const targetSchema = schema ?? headerSchema;
-      // Réutilisation des loaders du contexte si catalogue ET schéma identiques
-      if (targetCatalog === validatedCatalog && targetSchema === headerSchema) {
+      const targetCatalog = databaseManager.validateCatalogRouting(catalogId) as string;
+      // Réutilisation des loaders par défaut si aucune cible explicite ne s'en écarte
+      if (targetCatalog === defaultCatalog && !schema) {
         return null;
       }
-      return createLoaders(targetCatalog, targetSchema);
+      return createLoaders(targetCatalog, schema);
     },
     req,
     res,
@@ -300,32 +285,20 @@ async function startServer(): Promise<void> {
   // (identité unique du client pour les limiteurs et l'export)
   app.set('trust proxy', configuredTrustProxy());
 
-  // En-têtes de sécurité et configuration CORS
-  app.use((req: Request, res: Response, next: NextFunction): void => {
-    // Détermination des origines autorisées selon l'environnement
-    const allowedOrigins: string[] = config.API.CORS.ORIGINS;
-    const origin = req.headers.origin;
+  // Suppression de l'en-tête révélant la stack (Express)
+  app.disable('x-powered-by');
 
-    if (origin && (allowedOrigins.includes(origin) || allowedOrigins.includes('*'))) {
-      res.set('Access-Control-Allow-Origin', origin);
-    } else if (allowedOrigins.includes('*')) {
-      res.set('Access-Control-Allow-Origin', '*');
-    }
+  // CORS : origines explicitement listées (CORS_ORIGINS), préflight court-circuité
+  app.use(createCorsMiddleware());
 
+  // En-têtes de sécurité, sur toute requête ayant franchi le CORS
+  app.use((_req: Request, res: Response, next: NextFunction): void => {
     res.set({
-      'Access-Control-Allow-Credentials': String(config.API.CORS.CREDENTIALS),
-      'Access-Control-Allow-Methods': config.API.CORS.METHODS.join(', '),
-      'Access-Control-Allow-Headers': config.API.CORS.HEADERS.join(', '),
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'X-XSS-Protection': '1; mode=block',
       'Strict-Transport-Security': `max-age=${config.API.SECURITY_THRESHOLDS.HSTS_MAX_AGE}; includeSubDomains`,
     });
-
-    if (req.method === 'OPTIONS') {
-      res.sendStatus(204);
-      return;
-    }
     next();
   });
 

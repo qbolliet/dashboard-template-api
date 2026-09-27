@@ -45,12 +45,12 @@ Complexity is computed per query using configurable cost weights: scalar fields 
 
 ## Multi-catalog routing
 
-The API can serve multiple DuckLake catalogs simultaneously. The active catalog is selected per request via:
+The API can serve multiple DuckLake catalogs simultaneously. The active catalog is selected per query via the
+`catalog` GraphQL argument (available on all queries); `schema` selects a schema within the catalog. Both are
+plain arguments — the API never reads routing information from request headers.
 
-- The `catalog` GraphQL argument (available on all queries); `schema` selects a schema within the catalog
-- The `x-catalog-id` HTTP header (applies to the whole request); `x-schema-id` for the schema
-
-When neither is provided, the `DEFAULT_CATALOG` is used (configurable in `config/database.yaml`).
+When `catalog` is omitted, the `DEFAULT_CATALOG` is used (configurable in `config/database.yaml`); when `schema`
+is omitted, the catalog's own default schema is used.
 
 Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two explicit catalog IDs (and optional per-side schemas) and execute against both in a single request. The fact table stores labels directly, so they join on the columns themselves (cast to `VARCHAR` to absorb a type difference between catalogs): a match is on the label.
 
