@@ -4,7 +4,7 @@ import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable } from '../utils/identifiers.js';
-import type { DuckDBConnection } from './base-loader.js';
+import type { CacheNamespace, DuckDBConnection } from './base-loader.js';
 import type { CatalogSchemaKey } from './catalog.js';
 
 // ─── Interface du jeu de résultats ───────────────────────────────────────────
@@ -96,6 +96,22 @@ class DatasetInfoLoader extends BaseQueryLoader {
   override assertKeyAllowed(key: unknown): void {
     const { catalog, schema } = key as CatalogSchemaKey;
     assertSchemaSupported(catalog, schema || databaseManager.getDefaultSchema(catalog));
+  }
+
+  // Segments (catalog, schema) portés par la clé — le loader n'est lié à aucun catalogue
+  /**
+   * Returns the (catalog, schema) carried by the key, resolved.
+   *
+   * Without this override (`catalogId: null`), every cache entry would
+   * collapse under the literal 'default'/'_' placeholders and per-catalog
+   * invalidation (see cache/cache-invalidation.ts) would never find them.
+   *
+   * @param key - DataLoader key naming the catalog and schema to read.
+   * @returns The resolved catalog and schema.
+   */
+  override cacheNamespace(key: unknown): CacheNamespace {
+    const { catalog, schema } = key as CatalogSchemaKey;
+    return { catalog, schema: schema || databaseManager.getDefaultSchema(catalog) };
   }
 
   // Méthode de chargement de la ligne unique de dataset_metadata

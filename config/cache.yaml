@@ -2,7 +2,7 @@ CACHE:
   REDIS:
     HOST: ${REDIS_HOST:-localhost}
     PORT: ${REDIS_PORT:-6379}
-    PASSWORD: ${REDIS_PASSWORD}
+    PASSWORD: ${REDIS_PASSWORD:-}
     OPTIONS:
       RETRY_STRATEGY:
         MAX_DELAY: 2000
@@ -10,16 +10,16 @@ CACHE:
       MAX_RETRIES_PER_REQUEST: 3
       ENABLE_READY_CHECK: true
       CONNECT_TIMEOUT: 10000
-      # Configuration cluster optionnelle
-      CLUSTER:
-        ENABLED: ${REDIS_CLUSTER:-false}
-        NODES:
-          - host: ${REDIS_NODE1_HOST:-localhost}
-            port: ${REDIS_NODE1_PORT:-6379}
-          - host: ${REDIS_NODE2_HOST:-localhost}
-            port: ${REDIS_NODE2_PORT:-6380}
+    # Configuration cluster optionnelle — lue par redis.ts au niveau REDIS, pas OPTIONS
+    CLUSTER:
+      ENABLED: ${REDIS_CLUSTER:-false}
+      NODES:
+        - host: ${REDIS_NODE1_HOST:-localhost}
+          port: ${REDIS_NODE1_PORT:-6379}
+        - host: ${REDIS_NODE2_HOST:-localhost}
+          port: ${REDIS_NODE2_PORT:-6380}
     DB: ${REDIS_DB:-0} # Utile
-    KEY_PREFIX: ${REDIS_KEY_PREFIX:-'graphql-api:'}
+    KEY_PREFIX: ${REDIS_KEY_PREFIX:-graphql-api:}
 
   TTL: # En secondes
     DEFAULT: 300

@@ -537,11 +537,12 @@ describe('SelectOptionsLoader — colonne de code dotée de libellés', () => {
       labelField: 'nc8_libelle_fr',
     });
 
+    // La clé est désormais le sha1 canonique de l'objet (voir base-loader.ts),
+    // plus stable et compacte qu'un JSON brut, mais elle n'embarque donc plus
+    // labelField en clair : seule la distinction des deux clés est vérifiable.
     const keys = withCacheMock.mock.calls.map(([key]) => String(key));
     expect(keys).toHaveLength(2);
     expect(keys[0]).not.toBe(keys[1]);
-    expect(keys[0]).toContain('nc8_libelle_en');
-    expect(keys[1]).toContain('nc8_libelle_fr');
   });
 });
 

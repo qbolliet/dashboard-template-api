@@ -14,6 +14,7 @@ import { ApolloServer } from '@apollo/server';
 import { ensureSetup, getServer, execute } from './helpers.js';
 import { databaseManager } from '../../../../src/db/index.js';
 import { redis } from '../../../../src/cache/index.js';
+import { cacheInvalidationManager } from '../../../../src/cache/cache-invalidation.js';
 import { createLoaders } from '../../../../src/loaders/index.js';
 import { FieldStatsLoader } from '../../../../src/loaders/field-stats.js';
 import { catalogResolvers } from '../../../../src/schema/resolvers/catalog.js';
@@ -76,28 +77,15 @@ async function reference(sql: string, schema = 'main'): Promise<Record<string, u
  * The test data is regenerated at every run while Redis outlives it: a warm
  * entry of a previous run would answer with stale bounds and without reaching
  * the loader, which breaks both the comparison with the table and the counts of
- * SQL queries. ioredis prepends its `keyPrefix` to the keys of a command but not
- * to the MATCH pattern of SCAN, nor does it strip it from the keys SCAN returns:
- * both are handled here. With Redis down the loader runs on every call, so the
- * tests hold as well.
+ * SQL queries. Delegates to `cacheInvalidationManager.scanKeys`, which already
+ * accounts for the client's `keyPrefix` (see cache/cache-invalidation.ts). With
+ * Redis down the loader runs on every call, so the tests hold as well.
  */
-// Vidage du cache des statistiques, sensible au préfixe de clés d'ioredis
+// Vidage du cache des statistiques
 async function clearStatsCache(): Promise<void> {
   try {
-    const prefix =
-      (redis as unknown as { options: { keyPrefix?: string } }).options.keyPrefix ?? '';
-    let cursor = '0';
-    do {
-      const [next, keys] = await redis.scan(
-        cursor,
-        'MATCH',
-        `${prefix}field-stats:*`,
-        'COUNT',
-        100,
-      );
-      if (keys.length > 0) await redis.del(...keys.map((key) => key.slice(prefix.length)));
-      cursor = next;
-    } while (cursor !== '0');
+    const keys = await cacheInvalidationManager.scanKeys('field-stats:*');
+    if (keys.length > 0) await redis.del(...keys);
   } catch {
     // Redis indisponible : le loader s'exécute à chaque appel
   }

@@ -73,9 +73,11 @@ test_overrides:
         MAX_RETRIES_PER_REQUEST: 2
         CONNECT_TIMEOUT: 5000
         ENABLE_READY_CHECK: false
+      # Lu par redis.ts au niveau REDIS (redisConfig.CLUSTER), pas OPTIONS
       CLUSTER:
         ENABLED: false
         NODES: []
+      DB: 0
 
   # Logging configuration for tests
   LOGGING:

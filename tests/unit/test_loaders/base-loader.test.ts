@@ -8,12 +8,48 @@
  */
 
 import { jest } from '@jest/globals';
+import { createHash } from 'node:crypto';
 import {
   makeLoaderConfig,
   makePool,
   makeExtendedConnection,
   makeDatabaseManager,
 } from '../../helpers/mocks.js';
+
+/**
+ * Recomputes the cache key `loadWithCache` is expected to build, mirroring
+ * base-loader.ts's canonicalization (sorted keys, undefined dropped) and sha1
+ * hashing, so tests don't hardcode an opaque hash.
+ *
+ * @param prefix - Loader's cachePrefix.
+ * @param catalog - Resolved catalog segment.
+ * @param schema - Resolved schema segment.
+ * @param key - The raw DataLoader key passed to loadWithCache.
+ * @returns The expected `<prefix>:<catalog>:<schema>:<hash>` cache key.
+ */
+function expectedCacheKey(prefix: string, catalog: string, schema: string, key: unknown): string {
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value !== null && typeof value === 'object') {
+      const source = value as Record<string, unknown>;
+      const sorted: Record<string, unknown> = {};
+      for (const propertyKey of Object.keys(source).sort()) {
+        if (source[propertyKey] !== undefined)
+          sorted[propertyKey] = canonicalize(source[propertyKey]);
+      }
+      return sorted;
+    }
+    return value;
+  };
+  const keyForHash =
+    key !== null && typeof key === 'object' && !Array.isArray(key)
+      ? { ...(key as Record<string, unknown>), catalog, schema }
+      : { key, catalog, schema };
+  const hash = createHash('sha1')
+    .update(JSON.stringify(canonicalize(keyForHash)))
+    .digest('hex');
+  return `${prefix}:${catalog}:${schema}:${hash}`;
+}
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
@@ -332,8 +368,9 @@ describe('BaseQueryLoader', () => {
 
       // Le loader est enveloppé pour distinguer une panne du cache d'une
       // erreur du chargement lui-même : withCache reçoit ce garde, pas loaderFn.
+      // Schéma résolu au défaut du catalogue (mock : 'main'), pas le placeholder '_'.
       expect(mockWithCache).toHaveBeenCalledWith(
-        'test:main:_:"mykey"',
+        expectedCacheKey('test', 'main', 'main', 'mykey'),
         expect.any(Function),
         loader.cacheTimeout,
       );
@@ -386,13 +423,13 @@ describe('BaseQueryLoader', () => {
       await loader.loadWithCache(complexKey, loaderFn);
 
       expect(mockWithCache).toHaveBeenCalledWith(
-        `test:main:_:${JSON.stringify(complexKey)}`,
+        expectedCacheKey('test', 'main', 'main', complexKey),
         expect.any(Function),
         loader.cacheTimeout,
       );
     });
 
-    test('utilise "default" dans la clé cache quand catalogId est null', async () => {
+    test('résout le catalogue et le schéma par défaut dans la clé cache quand catalogId est null', async () => {
       const loader = new BaseQueryLoader({ cachePrefix: 'pre', catalogId: null });
       const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
       mockWithCache.mockImplementation(
@@ -401,8 +438,11 @@ describe('BaseQueryLoader', () => {
 
       await loader.loadWithCache('k', loaderFn);
 
+      // catalogId: null → catalogue/schéma par défaut RÉSOLUS (mock : 'main'/'main'),
+      // jamais les placeholders littéraux 'default'/'_' : sinon toute entrée de ce
+      // loader collapserait sous la même clé quel que soit le catalogue réellement lu.
       expect(mockWithCache).toHaveBeenCalledWith(
-        'pre:default:_:"k"',
+        expectedCacheKey('pre', 'main', 'main', 'k'),
         expect.any(Function),
         expect.any(Number),
       );

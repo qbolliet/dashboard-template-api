@@ -67,7 +67,9 @@ type CacheStats = Record<string, CatalogStats>;
  *
  * Cache keys are written by loaders in the form
  * `<type>:<catalog>:<schema>:<queryKey>` (see `BaseQueryLoader.loadWithCache`),
- * so the patterns here align with that layout.
+ * so the patterns here align with that layout. `scanKeys` accounts for the
+ * client's configured `keyPrefix`, which ioredis applies to GET/SET/DEL but
+ * not to SCAN's MATCH pattern nor to the keys SCAN returns.
  */
 class CacheInvalidationManager {
   // Dictionnaire des générateurs de motifs de clés par type de cache
@@ -76,7 +78,6 @@ class CacheInvalidationManager {
   constructor() {
     // Motifs de clés : segment catalog obligatoire, segment schema soit explicite
     // soit wildcard (=> tous les schémas du catalogue).
-    // Note : || (et non ??) — une chaîne vide doit également retomber sur le défaut.
     this.keyPatterns = {
       metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
       catalogMetadata: (catalog, schema) =>
@@ -94,22 +95,56 @@ class CacheInvalidationManager {
   }
 
   /**
-   * Iterates through all Redis keys matching a pattern using non-blocking SCAN.
+   * Returns the key prefix configured on the shared Redis client, if any.
    *
-   * Avoids the blocking KEYS command by iterating with cursor-based SCAN,
-   * collecting results in batches of 100.
+   * ioredis prepends `keyPrefix` transparently to GET/SET/DEL/etc., but not to
+   * the MATCH pattern of SCAN, and it does not strip it from the keys SCAN
+   * returns. Every caller of the raw SCAN command must therefore add the
+   * prefix to the pattern itself and remove it from the returned keys.
    *
-   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:main:*").
-   * @returns Array of all matching Redis key strings.
+   * @returns The configured prefix, or '' when the client carries none.
+   */
+  private getKeyPrefix(): string {
+    return (redis as unknown as { options?: { keyPrefix?: string } }).options?.keyPrefix ?? '';
+  }
+
+  /**
+   * Escapes the Redis glob special characters (`*`, `?`, `[`, `]`, `\`) so a
+   * literal string — such as the key prefix — can be prepended to a MATCH
+   * pattern without itself being interpreted as a wildcard.
+   *
+   * @param text - Literal text to escape.
+   * @returns Text safe to prepend to a glob pattern.
+   */
+  private escapeGlob(text: string): string {
+    return text.replace(/[*?[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Iterates through all Redis keys matching a pattern using non-blocking scan.
+   *
+   * Avoids the blocking keys command by iterating with cursor-based scan,
+   * collecting results in batches of 100. The client's `keyPrefix` (escaped)
+   * is prepended to `pattern` before scanning, and stripped back off the keys
+   * returned — so callers can pass DEL-ready keys straight through, and
+   * `redis.del(...keys)` (which re-applies the prefix) targets the right rows.
+   *
+   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:main:*"),
+   *   without the key prefix.
+   * @returns Array of all matching Redis key strings, prefix stripped.
    * @throws {Error} When the Redis SCAN command fails.
    */
   // SCAN itératif non-bloquant — évite le blocage de Redis sur de grands ensembles de clés
   async scanKeys(pattern: string): Promise<string[]> {
+    const prefix = this.getKeyPrefix();
+    const fullPattern = `${this.escapeGlob(prefix)}${pattern}`;
     const keys: string[] = [];
     let cursor = '0';
     do {
-      const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-      keys.push(...batch);
+      const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', fullPattern, 'COUNT', 100);
+      keys.push(
+        ...batch.map((key) => (prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key)),
+      );
       cursor = nextCursor;
     } while (cursor !== '0');
     return keys;

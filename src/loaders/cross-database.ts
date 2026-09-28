@@ -6,7 +6,7 @@ import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { AggregatedFactsLoader } from './aggregated-facts.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
-import type { DuckDBConnection, SortItem } from './base-loader.js';
+import type { CacheNamespace, DuckDBConnection, SortItem } from './base-loader.js';
 import type { Aggregation } from '../generated/graphql.js';
 
 // ─── Interfaces des paramètres de requêtes cross-database ─────────────────────
@@ -172,6 +172,67 @@ class CrossDatabaseLoader extends FactQueryLoader {
     // catalogue, chaque cible est donc vérifiée ici, à sa résolution.
     assertSchemaSupported(catalog, resolved);
     return resolved;
+  }
+
+  // Extraction des couples (catalog, schema) portés par une clé, quelle que soit sa forme
+  /**
+   * Resolves every (catalog, schema) target carried by a key, whichever of
+   * the three param shapes it has (compareFacts, compareAggregatedFacts, or
+   * crossDatabaseSelectOptions). Each pair goes through {@link resolveSchema},
+   * which applies the schema-version guard.
+   *
+   * @param key - DataLoader key (one of the three cross-database param shapes).
+   * @returns The resolved (catalog, schema) pairs, in key order.
+   */
+  private resolveTargets(key: unknown): Array<{ catalog: string; schema: string }> {
+    const params = key as Partial<
+      CompareFactsParams & CompareAggregatedFactsParams & CrossDatabaseSelectOptionsParams
+    >;
+    if (Array.isArray(params.catalogs)) {
+      return params.catalogs.map((catalog, i) => ({
+        catalog,
+        schema: this.resolveSchema(catalog, params.schemas?.[i]),
+      }));
+    }
+    const { catalogA, catalogB, schemaA, schemaB } = params as CompareFactsParams;
+    return [
+      { catalog: catalogA, schema: this.resolveSchema(catalogA, schemaA) },
+      { catalog: catalogB, schema: this.resolveSchema(catalogB, schemaB) },
+    ];
+  }
+
+  // Garde de version appliquée à chaque cible de la clé, avant toute consultation du cache
+  /**
+   * Applies the schema version guard to every catalog/schema carried by the
+   * key. Unlike `catalog.ts`/`dataset-info.ts`, this loader's query methods
+   * already call {@link resolveSchema} (which guards); this override exists
+   * so the guard also runs on a cache HIT, before a warm entry for a schema
+   * withdrawn since can be served.
+   *
+   * @param key - DataLoader key naming the catalogs/schemas to read.
+   */
+  override assertKeyAllowed(key: unknown): void {
+    this.resolveTargets(key);
+  }
+
+  // Segments (catalog, schema) portés par la clé — le loader n'est lié à aucun catalogue
+  /**
+   * Returns the cache namespace for a cross-database key.
+   *
+   * There is no single catalog/schema for a comparison or intersection
+   * query, so every target is folded into the namespace, `+`-joined in key
+   * order — resolved names rather than the base implementation's
+   * 'default'/'_' placeholders (this loader has `catalogId: null`).
+   *
+   * @param key - DataLoader key naming the catalogs/schemas to read.
+   * @returns The combined catalog and schema segments.
+   */
+  override cacheNamespace(key: unknown): CacheNamespace {
+    const targets = this.resolveTargets(key);
+    return {
+      catalog: targets.map((t) => t.catalog).join('+'),
+      schema: targets.map((t) => t.schema).join('+'),
+    };
   }
 
   // Construction du SELECT d'un côté : mesure + colonnes de jointure alignées

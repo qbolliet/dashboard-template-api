@@ -5,7 +5,7 @@ import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable } from '../utils/identifiers.js';
 import { METADATA_SELECT, toFieldMetadata, withLabelFields } from '../utils/metadata-mapping.js';
-import type { DuckDBConnection } from './base-loader.js';
+import type { CacheNamespace, DuckDBConnection } from './base-loader.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
 // ─── Interfaces des résultats catalog ────────────────────────────────────────
@@ -51,6 +51,23 @@ class CatalogMetadataLoader extends BaseQueryLoader {
   override assertKeyAllowed(key: unknown): void {
     const { catalog, schema } = key as CatalogSchemaKey;
     assertSchemaSupported(catalog, schema || databaseManager.getDefaultSchema(catalog));
+  }
+
+  // Segments (catalog, schema) portés par la clé — le loader n'est lié à aucun catalogue
+  /**
+   * Returns the (catalog, schema) carried by the key, resolved.
+   *
+   * Overrides the base implementation: this loader has `catalogId: null`, so
+   * without this override every cache entry would collapse under the literal
+   * 'default'/'_' placeholders regardless of the catalog actually queried,
+   * and per-catalog invalidation would never find them.
+   *
+   * @param key - DataLoader key naming the catalog and schema to read.
+   * @returns The resolved catalog and schema.
+   */
+  override cacheNamespace(key: unknown): CacheNamespace {
+    const { catalog, schema } = key as CatalogSchemaKey;
+    return { catalog, schema: schema || databaseManager.getDefaultSchema(catalog) };
   }
 
   // Méthode de chargement de toutes les méta-données d'un catalogue

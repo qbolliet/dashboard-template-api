@@ -1,4 +1,5 @@
 // Importation des modules
+import { createHash } from 'node:crypto';
 import DataLoader from 'dataloader';
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
@@ -71,6 +72,37 @@ interface BaseLoaderConfig {
 interface SortItem {
   field: string;
   order: 'ASC' | 'DESC';
+}
+
+/** The (catalog, schema) segments a cache key is written under. */
+interface CacheNamespace {
+  catalog: string;
+  schema: string;
+}
+
+/**
+ * Recursively sorts object keys and drops `undefined`-valued properties, so
+ * two semantically identical keys (e.g. `{catalog}` and
+ * `{catalog, schema: undefined}`, or the same fields in a different order)
+ * always serialize to the same string.
+ *
+ * @param value - Value to canonicalize (object, array, or scalar).
+ * @returns The same value with objects normalized for stable serialization.
+ */
+// Canonicalisation : clés triées, valeurs undefined retirées — sérialisation stable
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const sorted: Record<string, unknown> = {};
+    for (const propertyKey of Object.keys(source).sort()) {
+      if (source[propertyKey] !== undefined) {
+        sorted[propertyKey] = canonicalize(source[propertyKey]);
+      }
+    }
+    return sorted;
+  }
+  return value;
 }
 
 // Classe de base pour la requête d'une base de données
@@ -217,6 +249,30 @@ class BaseQueryLoader {
     return this.schema || databaseManager.getDefaultSchema(catalog);
   }
 
+  // Point d'extension : segments (catalog, schema) sous lesquels la clé est écrite
+  /**
+   * Returns the resolved (catalog, schema) pair a cache entry is written
+   * under, for one DataLoader key.
+   *
+   * The base implementation returns the loader's own bound catalog/schema
+   * (`this.catalogId`/`this.schema`, resolved to real names — never the
+   * literal 'default'/'_' placeholders). Loaders whose catalog/schema travels
+   * in the key rather than being bound to the instance (e.g. cross-catalog
+   * loaders with `catalogId: null`) override this so their cache entries land
+   * under the catalog/schema they actually read — which is what makes
+   * `CacheInvalidationManager`'s per-catalog patterns (`<type>:<catalog>:<schema>:*`)
+   * match them.
+   *
+   * @param _key - The DataLoader key about to be cached.
+   * @returns The resolved catalog and schema for this key's cache entry.
+   */
+  cacheNamespace(_key: unknown): CacheNamespace {
+    return {
+      catalog: this.catalogId || databaseManager.getDefaultCatalog(),
+      schema: this.resolvedSchema(),
+    };
+  }
+
   // Méthode de chargement de données avec mise en cache Redis
   /**
    * Loads data with optional Redis caching.
@@ -226,7 +282,15 @@ class BaseQueryLoader {
    * loader error: those belong to the caller (a GraphQLError must reach the
    * client, and retrying a failed query would only run it twice).
    *
-   * @param key - Cache key (will be JSON-serialized).
+   * The cache key is `<prefix>:<catalog>:<schema>:<variant><hash>`, where
+   * catalog/schema come from {@link cacheNamespace} (always resolved, never
+   * 'default'/'_' placeholders — so `CacheInvalidationManager`'s per-catalog
+   * patterns match every entry) and hash is the sha1 of the key object,
+   * canonicalized (sorted, undefined fields dropped, catalog/schema
+   * overwritten with their resolved form) so equivalent keys always collide
+   * onto the same entry instead of the raw `JSON.stringify(key)` used before.
+   *
+   * @param key - Cache key (will be canonicalized and hashed).
    * @param loader - Async function that fetches the data on cache miss.
    * @returns Cached or freshly loaded data.
    * @throws Whatever the loader throws, unchanged.
@@ -251,8 +315,16 @@ class BaseQueryLoader {
       // Le schéma fait partie de la clé : deux schémas d'un même catalogue ne
       // doivent jamais partager une entrée de cache (colonnes et modalités différentes).
       // La variante sépare les loaders d'un même préfixe renvoyant des formes différentes.
+      const { catalog, schema } = this.cacheNamespace(key);
       const variant = this.cacheVariant ? `${this.cacheVariant}:` : '';
-      const cacheKey = `${this.cachePrefix}:${this.catalogId || 'default'}:${this.schema || '_'}:${variant}${JSON.stringify(key)}`;
+      const keyForHash =
+        key !== null && typeof key === 'object' && !Array.isArray(key)
+          ? { ...(key as Record<string, unknown>), catalog, schema }
+          : { key, catalog, schema };
+      const hash = createHash('sha1')
+        .update(JSON.stringify(canonicalize(keyForHash)))
+        .digest('hex');
+      const cacheKey = `${this.cachePrefix}:${catalog}:${schema}:${variant}${hash}`;
       return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeoutFor(key));
     } catch (error) {
       // L'erreur vient du loader : elle appartient à l'appelant
@@ -415,4 +487,12 @@ class FactQueryLoader extends BaseQueryLoader {
 }
 
 export { BaseQueryLoader, FactQueryLoader };
-export type { BaseLoaderConfig, SortItem, DuckDBConnection, DuckDBPool, D3QueryResult, D3Metadata };
+export type {
+  BaseLoaderConfig,
+  SortItem,
+  DuckDBConnection,
+  DuckDBPool,
+  D3QueryResult,
+  D3Metadata,
+  CacheNamespace,
+};

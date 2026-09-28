@@ -222,11 +222,15 @@ describe('FieldStatsLoader', () => {
       expect(cacheCalls[0].key.startsWith('field-stats:db1:geo:')).toBe(true);
     });
 
-    test('un schéma non fixé occupe le segment « _ » de la clé', async () => {
+    test('un schéma non fixé occupe le segment du schéma par défaut du catalogue', async () => {
       const loader = createFieldStatsLoader('db1');
       await loader.load({ fieldName: 'population' });
 
-      expect(cacheCalls[0].key.startsWith('field-stats:db1:_:')).toBe(true);
+      // Le schéma est RÉSOLU (mock getDefaultSchema → 'main'), jamais le
+      // placeholder littéral '_' : deux requêtes qui retombent sur le même
+      // schéma par défaut, l'une explicite et l'autre non, doivent partager
+      // la même entrée de cache et être couvertes par la même invalidation.
+      expect(cacheCalls[0].key.startsWith('field-stats:db1:main:')).toBe(true);
     });
   });
 });
