@@ -285,6 +285,30 @@ query {
 }
 ```
 
+Groups tied on `aggregatedValue` are always ordered by their key, so two
+successive pages never overlap. `key` is `null` for the group of the rows where
+the column is NULL (a missing level of a hierarchy, for instance), and
+`aggregatedValue` is `null` when the group holds no value of the measure.
+
+`aggregatedValue` is a JSON value, serialized like any value of the fact table:
+a number for COUNT, SUM, AVG and MEDIAN (an integer sum beyond 2^53 comes back
+as its exact decimal string), a number or an ISO 8601 date for MIN and MAX, and
+a value of the measure for MODE. The aggregation must suit the type of the
+measure: SUM, AVG and MEDIAN need a numeric measure, MIN and MAX a numeric or
+temporal one, and MODE and COUNT work on any column. Any other combination is
+rejected with `BAD_USER_INPUT`, and the error lists the aggregations allowed.
+When `aggregation` is omitted, the measure's `defaultAggregation` applies,
+falling back to SUM for a numeric measure only.
+
+```graphql
+query {
+  getAggregatedFacts(groupBy: "country", measure: "date", aggregation: MAX, limit: 20) {
+    key
+    aggregatedValue # "2024-01-01"
+  }
+}
+```
+
 ## Aggregation with statistics
 
 ```graphql
@@ -315,6 +339,11 @@ query {
   }
 }
 ```
+
+`valueExtent` is `[min, max]` over the non-NULL values of the page: numbers, or
+ISO 8601 dates for MIN, MAX or MODE of a temporal measure. It is `null` for an
+empty page, a page that holds only NULLs, or a text or boolean MODE. `statistics`
+is `null` when the aggregated value is not numeric.
 
 ## Schema introspection for a field
 

@@ -21,14 +21,22 @@ interface FactQueryParams {
 
 // ─── Interfaces des résultats ─────────────────────────────────────────────────
 
-/** Standard paginated result with total count. */
-interface PaginatedFactResult {
-  data: Record<string, unknown>[] | unknown[][];
+/**
+ * Standard paginated result with total count, shared by the loader and the
+ * fact resolvers.
+ *
+ * @typeParam Row - Shape of a row: an object by default, an array in the
+ *   ARRAYS format.
+ */
+interface PaginatedFactResult<Row = Record<string, unknown>> {
+  data: Row[];
   total: number;
   hasNextPage: boolean;
   currentPage: number;
   totalPages: number;
   generatedAt: string;
+  /** Column names, present on the D3 metadata path. */
+  columns?: string[];
 }
 
 /** Paginated D3 result (metadata enriched with pagination data). */
@@ -47,7 +55,7 @@ type FactQueryResult =
   | Record<string, unknown>[]
   | unknown[][]
   | D3QueryResult
-  | PaginatedFactResult
+  | PaginatedFactResult<Record<string, unknown> | unknown[]>
   | PaginatedD3Result;
 
 // Classe de chargement de la table des faits
@@ -152,7 +160,7 @@ class FactLoader extends FactQueryLoader {
           currentPage: Math.floor(offset / limit) + 1,
           totalPages: Math.ceil(total / limit),
           generatedAt: new Date().toISOString(),
-        } as PaginatedFactResult;
+        } as PaginatedFactResult<Record<string, unknown> | unknown[]>;
       }
     }
 

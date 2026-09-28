@@ -2,21 +2,29 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { GraphQLError } from 'graphql';
 import { config } from '../../utils/config-loader.js';
-import { compileFilterTree, sqlTypeFamily } from '../../utils/filter-tree.js';
+import { compileFilterTree } from '../../utils/filter-tree.js';
 import { assertColumns } from '../../utils/identifiers.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import { validatePagination } from '../../utils/pagination.js';
+import {
+  AGGREGATIONS,
+  aggregatedValueFamily,
+  allowedAggregations,
+  measureFamily,
+} from '../../utils/aggregations.js';
 import { attachScope, contextScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { LoadersCollection } from '../../loaders/index.js';
-import type { AggregatedQueryParams } from '../../loaders/aggregated-facts.js';
+import type {
+  AggregatedFactRow,
+  AggregatedQueryParams,
+  AggregatedWithMetadata,
+} from '../../loaders/aggregated-facts.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
+import type { Aggregation } from '../../generated/graphql.js';
 
-// ─── Types d'agrégation ───────────────────────────────────────────────────────
-
-/** Supported SQL aggregation operations. */
-export type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
+// ─── Types de tri ─────────────────────────────────────────────────────────────
 
 /** Valid values for sort order. */
 export type SortOrder = 'ASC' | 'DESC';
@@ -35,8 +43,11 @@ export interface AggregatedFactsArgs {
   structuredFilters?: FilterNodeInput | null;
   groupBy: string;
   measure: string;
-  /** Absente, l'agrégation vient de metadata.defaultAggregation puis de SUM. */
-  aggregation?: AggregationType | null;
+  /**
+   * Absente, l'agrégation vient de metadata.defaultAggregation, puis de SUM
+   * pour une mesure numérique seulement.
+   */
+  aggregation?: Aggregation | null;
   limit?: number;
   offset?: number;
   sort?: AggregatedSortItem[];
@@ -44,38 +55,7 @@ export interface AggregatedFactsArgs {
   schema?: string | null;
 }
 
-// ─── Interfaces des résultats ─────────────────────────────────────────────────
-
-/** One aggregated row: a group-by key and its aggregated value. */
-export interface AggregatedFactRow {
-  key: unknown;
-  [key: string]: unknown;
-}
-
-/** Aggregated result with metadata, used by getAggregatedFactsWithMetadata. */
-export interface AggregatedWithMetadataResult {
-  data: AggregatedFactRow[];
-  metadata: Record<string, unknown>;
-  [key: string]: unknown;
-}
-
-// ─── Constantes de validation ─────────────────────────────────────────────────
-
-/** Exhaustive list of supported aggregation operations. */
-const VALID_AGGREGATIONS: readonly AggregationType[] = [
-  'SUM',
-  'AVG',
-  'MAX',
-  'MIN',
-  'COUNT',
-  'MEDIAN',
-  'MODE',
-];
-
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
-
-// Agrégations qui exigent une mesure numérique (ou booléenne, sommée comme 0/1)
-const NUMERIC_AGGREGATIONS: readonly AggregationType[] = ['SUM', 'AVG', 'MAX', 'MIN', 'MEDIAN'];
 
 /**
  * Builds a GraphQL error flagged as a client input error.
@@ -101,14 +81,14 @@ const badInput = (message: string): GraphQLError =>
  */
 // Validation centralisée des arguments des requêtes agrégées
 function validateAggregatedArgs(
-  aggregation: AggregationType,
+  aggregation: Aggregation,
   groupBy: string | undefined,
   measure: string | undefined,
   sort: AggregatedSortItem[],
 ): void {
   // Validation des opérations d'agrégation
-  if (!VALID_AGGREGATIONS.includes(aggregation)) {
-    throw badInput(`Invalid aggregation type. Must be one of: ${VALID_AGGREGATIONS.join(', ')}`);
+  if (!AGGREGATIONS.includes(aggregation)) {
+    throw badInput(`Invalid aggregation type. Must be one of: ${AGGREGATIONS.join(', ')}`);
   }
 
   // Groupby est un élément obligatoire
@@ -134,27 +114,29 @@ function validateAggregatedArgs(
 
 /**
  * Checks groupBy and measure against the metadata table, and the aggregation
- * against the type of the measure.
+ * against the type family of the measure.
  *
  * Both columns are interpolated (quoted) in the SQL, so an unknown one must
- * be a client error rather than a DuckDB binder error. SUM and AVG require a
- * numeric (or boolean) measure; other type mismatches are reported by DuckDB
- * and mapped to BAD_USER_INPUT by the loader.
+ * be a client error rather than a DuckDB binder error. The aggregation must be
+ * allowed on the measure (allowedAggregations): SUM, AVG and MEDIAN require a
+ * numeric measure, MIN and MAX a numeric or temporal one, MODE and COUNT
+ * apply to every type.
  *
  * @param groupBy - Group-by column.
  * @param measure - Measure column.
  * @param aggregation - Effective aggregation.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
+ * @returns The metadata row of the measure.
  * @throws {GraphQLError} BAD_USER_INPUT on an unknown column or an
- *   aggregation incompatible with the measure type.
+ *   aggregation incompatible with the measure type, listing the allowed ones.
  */
-// Colonnes contrôlées contre metadata, agrégation contre le type de la mesure
+// Colonnes contrôlées contre metadata, agrégation contre la famille de la mesure
 async function validateAggregatedColumns(
   groupBy: string,
   measure: string,
-  aggregation: AggregationType,
+  aggregation: Aggregation,
   activeLoaders: LoadersCollection,
-): Promise<void> {
+): Promise<FieldMetadata> {
   const rows = await activeLoaders.metadata.loadMany([groupBy, measure]);
   const failure = rows.find((row): row is Error => row instanceof Error);
   if (failure) throw failure;
@@ -162,52 +144,57 @@ async function validateAggregatedColumns(
   assertColumns([groupBy], byName, 'groupBy');
   assertColumns([measure], byName, 'measure');
 
-  if (NUMERIC_AGGREGATIONS.includes(aggregation)) {
-    const sqlType = byName.get(measure)?.sqlType ?? '';
-    let family: string;
-    try {
-      family = sqlTypeFamily(sqlType);
-    } catch {
-      family = 'unsupported';
-    }
-    if (family !== 'numeric' && family !== 'boolean') {
-      throw badInput(
-        `Aggregation ${aggregation} requires a numeric measure; "${measure}" is ${sqlType || 'untyped'}.`,
-      );
-    }
+  const measureMeta = byName.get(measure)!;
+  const allowed = allowedAggregations(measureMeta.sqlType);
+  if (!allowed.includes(aggregation)) {
+    throw badInput(
+      `Aggregation ${aggregation} is not allowed on measure "${measure}" ` +
+        `(${measureMeta.sqlType || 'untyped'}). Allowed aggregations: ${allowed.join(', ')}.`,
+    );
   }
+  return measureMeta;
 }
 
 /**
  * Resolves the aggregation actually applied to a measure.
  *
  * The argument wins when the client supplies one; otherwise the measure's
- * `defaultAggregation` metadata applies, and SUM closes the chain. The
- * resolution happens here rather than in the loader on purpose: the effective
- * value is then part of the loader parameters, hence part of the cache key —
- * two requests differing only by their implicit aggregation must not share a
- * cache entry.
+ * `defaultAggregation` metadata applies, and SUM closes the chain for a
+ * numeric measure only. A non-numeric measure without defaultAggregation is a
+ * client error: COUNT is never implied. The resolution happens here rather
+ * than in the loader on purpose: the effective value is then part of the
+ * loader parameters, hence part of the cache key — two requests differing
+ * only by their implicit aggregation must not share a cache entry.
  *
  * @param explicit - Aggregation passed by the client, if any.
  * @param measure - Measure column being aggregated.
  * @param activeLoaders - Loaders bound to the target catalog/schema.
  * @returns The aggregation to apply.
+ * @throws {GraphQLError} BAD_USER_INPUT when no aggregation can be implied.
  */
-// Agrégation effective : argument, puis defaultAggregation de la mesure, puis SUM
+// Agrégation effective : argument, puis defaultAggregation, puis SUM si numérique
 async function resolveAggregation(
-  explicit: AggregationType | null | undefined,
+  explicit: Aggregation | null | undefined,
   measure: string | undefined,
   activeLoaders: LoadersCollection,
-): Promise<AggregationType> {
+): Promise<Aggregation> {
   if (explicit) return explicit;
   if (!measure) return 'SUM';
 
+  // Mesure inconnue : SUM provisoire, validateAggregatedColumns la signale ensuite
   const meta = await activeLoaders.metadata.load(measure);
-  const declared = meta?.defaultAggregation;
-  if (declared && VALID_AGGREGATIONS.includes(declared as AggregationType)) {
-    return declared as AggregationType;
+  if (!meta) return 'SUM';
+
+  const declared = meta.defaultAggregation;
+  if (declared && AGGREGATIONS.includes(declared as Aggregation)) {
+    return declared as Aggregation;
   }
-  return 'SUM';
+  if (measureFamily(meta.sqlType) === 'numeric') return 'SUM';
+
+  throw badInput(
+    `Measure "${measure}" (${meta.sqlType || 'untyped'}) declares no defaultAggregation; ` +
+      `pass aggregation explicitly (allowed: ${allowedAggregations(meta.sqlType).join(', ')}).`,
+  );
 }
 
 /**
@@ -279,7 +266,12 @@ const aggregatedFactsResolvers = {
 
       // Validation centralisée des paramètres de la requête
       validateAggregatedArgs(effectiveAggregation, groupBy, measure, sort);
-      await validateAggregatedColumns(groupBy, measure, effectiveAggregation, activeLoaders);
+      const measureMeta = await validateAggregatedColumns(
+        groupBy,
+        measure,
+        effectiveAggregation,
+        activeLoaders,
+      );
 
       try {
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
@@ -296,6 +288,7 @@ const aggregatedFactsResolvers = {
             groupBy,
             measure,
             aggregation: effectiveAggregation,
+            valueFamily: aggregatedValueFamily(effectiveAggregation, measureMeta.sqlType),
             labelField,
             limit,
             offset,
@@ -303,7 +296,7 @@ const aggregatedFactsResolvers = {
           } as AggregatedQueryParams),
           config.API.TIMEOUTS.AGGREGATED_SIMPLE,
           'Aggregated facts fetch timeout',
-        )) as unknown as AggregatedFactRow[];
+        )) as AggregatedFactRow[];
 
         // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
         return results;
@@ -357,7 +350,13 @@ const aggregatedFactsResolvers = {
 
       // Validation centralisée des paramètres de la requête
       validateAggregatedArgs(effectiveAggregation, groupBy, measure, sort);
-      await validateAggregatedColumns(groupBy, measure, effectiveAggregation, activeLoaders);
+      // Métadonnées de la mesure : loader de métadonnées (mis en cache), sans requête de plus
+      const measureFieldInfo = await validateAggregatedColumns(
+        groupBy,
+        measure,
+        effectiveAggregation,
+        activeLoaders,
+      );
 
       try {
         // Compilation de l'arbre de filtres avec les métadonnées du dataset cible
@@ -374,6 +373,8 @@ const aggregatedFactsResolvers = {
             groupBy,
             measure,
             aggregation: effectiveAggregation,
+            // Famille de la valeur agrégée : pilote valueExtent et les statistiques
+            valueFamily: aggregatedValueFamily(effectiveAggregation, measureFieldInfo.sqlType),
             labelField,
             limit,
             offset,
@@ -381,17 +382,11 @@ const aggregatedFactsResolvers = {
           } as AggregatedQueryParams),
           config.API.TIMEOUTS.AGGREGATED_SIMPLE,
           'Aggregated facts with metadata fetch timeout',
-        )) as unknown as AggregatedWithMetadataResult;
-
-        // Métadonnées de la mesure : loader de métadonnées (mis en cache), sans requête de plus
-        const measureFieldInfo = await activeLoaders.metadata.load(measure);
+        )) as AggregatedWithMetadata;
 
         // Catalogue et schéma rattachés aux deux Metadata pour la résolution paresseuse de `stats`
         const scope = contextScope(catalog, schema);
-        const groupByFieldInfo = attachScope(
-          result.metadata.groupByFieldInfo as FieldMetadata | null,
-          scope,
-        );
+        const groupByFieldInfo = attachScope(result.metadata.groupByFieldInfo, scope);
 
         // Libellé de la clé déjà lu par la requête : aucune résolution supplémentaire
         return {

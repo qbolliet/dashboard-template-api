@@ -4,10 +4,12 @@
  * The `aggregation` argument of getAggregatedFacts and
  * getAggregatedFactsWithMetadata is optional and carries no SDL default. When
  * the client omits it, the measure's `metadata.defaultAggregation` applies,
- * and SUM closes the chain (revue-technique-api.md §5.1).
+ * and SUM closes the chain for a numeric measure only (revue-technique-api.md
+ * §5.1); a non-numeric measure without default is a client error.
  *
  * The fixtures make the distinction observable: `quality_score` declares AVG,
- * `value` declares SUM, and `is_provisional` declares nothing at all.
+ * `value` declares SUM, `horizon` (INTEGER) and `is_provisional` (BOOLEAN)
+ * declare nothing at all.
  */
 
 import { ApolloServer } from '@apollo/server';
@@ -28,7 +30,8 @@ beforeAll(async () => {
 /** One aggregated row as returned by the resolver. */
 interface AggregatedRow {
   key: string;
-  aggregatedValue: number;
+  /** null for a group whose measure is entirely NULL. */
+  aggregatedValue: number | null;
   count: number;
 }
 
@@ -43,7 +46,7 @@ interface AggregatedRow {
 const aggregate = async (
   measure: string,
   aggregation: string | null,
-): Promise<Map<string, number>> => {
+): Promise<Map<string, number | null>> => {
   const arg = aggregation === null ? '' : `aggregation: ${aggregation}, `;
   const result = await execute(server, {
     query: `query {
@@ -81,12 +84,25 @@ describe('agrégation implicite', () => {
     expect(implicit).toEqual(sum);
   });
 
-  test('une mesure sans agrégation déclarée retombe sur SUM', async () => {
-    // `is_provisional` ne déclare aucune defaultAggregation
-    const implicit = await aggregate('is_provisional', null);
-    const sum = await aggregate('is_provisional', 'SUM');
+  test('une mesure numérique sans agrégation déclarée retombe sur SUM', async () => {
+    // `horizon` (INTEGER) ne déclare aucune defaultAggregation
+    const implicit = await aggregate('horizon', null);
+    const sum = await aggregate('horizon', 'SUM');
 
     expect(implicit).toEqual(sum);
+  });
+
+  test('une mesure non numérique sans agrégation déclarée est rejetée (pas de COUNT implicite)', async () => {
+    // `is_provisional` (BOOLEAN) ne déclare aucune defaultAggregation
+    const result = await execute(server, {
+      query: `query {
+        getAggregatedFacts(schema: "main", groupBy: "country", measure: "is_provisional") { key }
+      }`,
+    });
+
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(result.errors![0].message).toContain('declares no defaultAggregation');
+    expect(result.errors![0].message).toContain('allowed: COUNT, MODE');
   });
 
   test('l’argument explicite l’emporte sur la métadonnée', async () => {
@@ -94,8 +110,13 @@ describe('agrégation implicite', () => {
     const implicit = await aggregate('quality_score', null);
 
     expect(explicit).not.toEqual(implicit);
-    // MAX borne bien chaque groupe par le haut
+    // MAX borne bien chaque groupe par le haut ; un groupe sans valeur est
+    // null pour les deux agrégations (plus de 0 fictif)
     for (const [key, value] of explicit) {
+      if (value === null) {
+        expect(implicit.get(key)).toBeNull();
+        continue;
+      }
       expect(value).toBeGreaterThanOrEqual(implicit.get(key)!);
     }
   });

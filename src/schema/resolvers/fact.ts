@@ -11,7 +11,7 @@ import { validatePagination } from '../../utils/pagination.js';
 import { attachScopeToAll, contextScope } from './scope.js';
 import type { FieldScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
-import type { FactQueryParams } from '../../loaders/fact.js';
+import type { FactQueryParams, PaginatedFactResult } from '../../loaders/fact.js';
 import type { LoadersCollection } from '../../loaders/index.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { FilterNodeInput } from '../../utils/filter-tree.js';
@@ -77,17 +77,6 @@ async function buildFactParams(
 }
 
 // ─── Interfaces des résultats enrichis ───────────────────────────────────────
-
-/** Paginated result from a fact table query. */
-export interface PaginatedFactResult {
-  data: Record<string, unknown>[];
-  total: number;
-  hasNextPage: boolean;
-  currentPage: number;
-  totalPages: number;
-  generatedAt: string;
-  columns?: string[];
-}
 
 /**
  * Parent object of DatasetWithMetadata: the loaded page plus the metadata

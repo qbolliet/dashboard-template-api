@@ -124,9 +124,9 @@ describe('Object types — FieldStats', () => {
     expect(String(fields.max.type)).toBe('JSON');
   });
 
-  test('distinctCount et nullCount sont des Int non nullables', () => {
-    expect(String(fields.distinctCount.type)).toBe('Int!');
-    expect(String(fields.nullCount.type)).toBe('Int!');
+  test('distinctCount et nullCount sont des Float non nullables (exacts jusqu’à 2^53)', () => {
+    expect(String(fields.distinctCount.type)).toBe('Float!');
+    expect(String(fields.nullCount.type)).toBe('Float!');
   });
 });
 

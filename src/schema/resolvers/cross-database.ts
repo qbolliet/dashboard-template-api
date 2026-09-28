@@ -6,19 +6,16 @@ import { config } from '../../utils/config-loader.js';
 import { assertColumns } from '../../utils/identifiers.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import { validatePagination } from '../../utils/pagination.js';
+import { AGGREGATIONS } from '../../utils/aggregations.js';
 import type { FieldMetadata } from '../../utils/metadata-mapping.js';
 import type { GraphQLContext } from './types.js';
 import type { LoadersCollection } from '../../loaders/index.js';
+import type { Aggregation } from '../../generated/graphql.js';
 import type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
   CrossDatabaseSelectOptionsParams,
 } from '../../loaders/cross-database.js';
-
-// ─── Types d'agrégation ───────────────────────────────────────────────────────
-
-/** Supported SQL aggregation operations for cross-catalog queries. */
-export type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
 
@@ -41,7 +38,7 @@ export interface CompareAggregatedFactsArgs {
   schemaA?: string | null;
   schemaB?: string | null;
   groupBy: string;
-  aggregation?: AggregationType;
+  aggregation?: Aggregation;
   limit?: number;
   offset?: number;
 }
@@ -53,19 +50,6 @@ export interface CrossDatabaseSelectOptionsArgs {
   schemas?: (string | null)[];
   limit?: number;
 }
-
-// ─── Constantes de validation ─────────────────────────────────────────────────
-
-/** Exhaustive list of supported aggregation operations. */
-const VALID_AGGREGATIONS: readonly AggregationType[] = [
-  'SUM',
-  'AVG',
-  'MAX',
-  'MIN',
-  'COUNT',
-  'MEDIAN',
-  'MODE',
-];
 
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
 
@@ -288,11 +272,10 @@ const crossDatabaseResolvers = {
       validatePagination(limit, offset);
 
       // Validation du type d'agrégation
-      if (!VALID_AGGREGATIONS.includes(aggregation)) {
-        throw new GraphQLError(
-          `Invalid aggregation. Must be one of: ${VALID_AGGREGATIONS.join(', ')}`,
-          { extensions: { code: 'BAD_USER_INPUT' } },
-        );
+      if (!AGGREGATIONS.includes(aggregation)) {
+        throw new GraphQLError(`Invalid aggregation. Must be one of: ${AGGREGATIONS.join(', ')}`, {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
       }
 
       // groupBy contrôlé des deux côtés ; libellé de la clé de groupe de chaque

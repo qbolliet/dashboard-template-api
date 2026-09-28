@@ -108,7 +108,7 @@ describe('colonnes contrôlées contre metadata', () => {
         getAggregatedFacts(groupBy: "country", measure: "indicator", aggregation: SUM) { key }
       }`,
     });
-    expectBadInput(result, 'getAggregatedFacts', 'requires a numeric measure');
+    expectBadInput(result, 'getAggregatedFacts', 'Allowed aggregations: COUNT, MODE');
   });
 
   test('compareFacts(joinFields inconnus) → BAD_USER_INPUT', async () => {

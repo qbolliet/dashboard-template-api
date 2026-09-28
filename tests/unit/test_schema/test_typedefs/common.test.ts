@@ -4,7 +4,7 @@
  * Validates the schema-level invariants (existence, Query type, JSON scalar),
  * the shared enums (SortOrder, Aggregation, FilterConnector, FilterOperation),
  * input types (FilterNode, FilterCriterion, SortInput),
- * and common object types (AggregatedFact, SelectOption).
+ * and the SelectOption object type.
  */
 
 import { schema } from '../../../../src/schema/index.js';
@@ -181,21 +181,6 @@ describe('Input types — common', () => {
 // ─── Types objet — communs ────────────────────────────────────────────────────
 
 describe('Object types — common', () => {
-  /**
-   * Verification that AggregatedFact exposes all expected fields.
-   */
-  test('AggregatedFact has key, aggregatedValue, count (no keyLabel)', () => {
-    // Extraction des champs du type AggregatedFact
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFact'),
-    ).getFields();
-
-    // Présence des champs métier attendus
-    for (const f of ['key', 'aggregatedValue', 'count']) {
-      expect(fields).toHaveProperty(f);
-    }
-  });
-
   /**
    * Verification that SelectOption has non-null value and label.
    */

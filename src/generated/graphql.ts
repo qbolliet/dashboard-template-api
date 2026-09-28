@@ -26,27 +26,37 @@ export type Scalars = {
 
 /** An aggregated fact record with key and value */
 export type AggregatedFact = {
-  /** Aggregated value */
-  aggregatedValue: Scalars['Float']['output'];
+  /**
+   * Aggregated value, serialized like every value of the JSON scalar. Its form depends on the
+   * aggregation: COUNT is a number; SUM, AVG and MEDIAN (numeric measures only) are numbers, an
+   * integer sum beyond 2^53 being its exact decimal string; MIN and MAX (numeric or temporal
+   * measures) are numbers or ISO 8601 dates; MODE is a value of the measure (number, string,
+   * boolean, ISO date). null when the group holds no non-NULL value of the measure.
+   */
+  aggregatedValue?: Maybe<Scalars['JSON']['output']>;
   /** Number of records in this group */
-  count: Scalars['Int']['output'];
-  /** Grouping key */
-  key: Scalars['String']['output'];
+  count: Scalars['Float']['output'];
+  /** Grouping key, as a string. null is the group of the rows where the group column is NULL (e.g. a missing level of a column hierarchy) */
+  key?: Maybe<Scalars['String']['output']>;
   /** Label of the grouping key when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise */
   keyLabel?: Maybe<Scalars['String']['output']>;
 };
 
 /** Metadata for aggregated facts optimized for D3 */
 export type AggregatedFactsMetadata = {
+  /** Number of groups in this page */
   count: Scalars['Int']['output'];
   /** ISO 8601 timestamp of when this query was executed */
   generatedAt: Scalars['String']['output'];
   groupByFieldInfo?: Maybe<Metadata>;
+  /** Bounds of the group keys of THIS PAGE, the NULL key ignored: [min, max] as numbers for a numeric group column, as ISO 8601 strings for a temporal one, [first, last] in page order otherwise; null when the page has no non-NULL key */
   keyExtent?: Maybe<Scalars['JSON']['output']>;
   /** Metadata of the aggregated measure (unit and display format of the aggregated value) */
   measureFieldInfo?: Maybe<Metadata>;
+  /** Descriptive statistics of the non-NULL aggregated values of this page; null when the aggregate is not numeric */
   statistics?: Maybe<AggregationStatistics>;
-  valueExtent: Array<Scalars['Float']['output']>;
+  /** Bounds of the aggregated values of THIS PAGE, NULLs ignored: [min, max] as numbers for a numeric aggregate, as ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null when the page is empty, holds only NULLs, or the aggregate is text or boolean (MODE) */
+  valueExtent?: Maybe<Scalars['JSON']['output']>;
 };
 
 /** Aggregated facts with D3-optimized metadata */
@@ -152,9 +162,9 @@ export type DatasetMetadata = {
   /** Whether there are more pages available */
   hasNextPage?: Maybe<Scalars['Boolean']['output']>;
   /** Total number of records matching the query */
-  total?: Maybe<Scalars['Int']['output']>;
+  total?: Maybe<Scalars['Float']['output']>;
   /** Total number of pages */
-  totalPages?: Maybe<Scalars['Int']['output']>;
+  totalPages?: Maybe<Scalars['Float']['output']>;
 };
 
 /** D3-optimized data format with metadata */
@@ -184,13 +194,13 @@ export type Fact = {
  */
 export type FieldStats = {
   /** Nombre de valeurs distinctes non NULL */
-  distinctCount: Scalars['Int']['output'];
+  distinctCount: Scalars['Float']['output'];
   /** Max de la colonne, mêmes formes que min, null si colonne vide */
   max?: Maybe<Scalars['JSON']['output']>;
   /** Min de la colonne (nombre ou date ISO), null si colonne vide. Sérialisation du scalaire JSON : entier au-delà de 2^53 en chaîne décimale exacte, DATE en YYYY-MM-DD, TIMESTAMP en ISO 8601. Sur une colonne texte ou booléenne, le min est calculé aussi (ordre lexical ; false < true) */
   min?: Maybe<Scalars['JSON']['output']>;
   /** Nombre de valeurs NULL */
-  nullCount: Scalars['Int']['output'];
+  nullCount: Scalars['Float']['output'];
 };
 
 /** A single named column value of a fact row. The value preserves its original type (Float, Int, String, Boolean…) via the JSON scalar. */
@@ -323,8 +333,8 @@ export type PaginatedComparedFacts = {
   currentPage: Scalars['Int']['output'];
   data: Array<ComparedFact>;
   hasNextPage: Scalars['Boolean']['output'];
-  total: Scalars['Int']['output'];
-  totalPages: Scalars['Int']['output'];
+  total: Scalars['Float']['output'];
+  totalPages: Scalars['Float']['output'];
 };
 
 /** Paginated response for fact queries */
@@ -336,9 +346,9 @@ export type PaginatedFacts = {
   /** Whether there are more pages available */
   hasNextPage?: Maybe<Scalars['Boolean']['output']>;
   /** Total number of records matching the query */
-  total?: Maybe<Scalars['Int']['output']>;
+  total?: Maybe<Scalars['Float']['output']>;
   /** Total number of pages */
-  totalPages?: Maybe<Scalars['Int']['output']>;
+  totalPages?: Maybe<Scalars['Float']['output']>;
 };
 
 export type Query = {
@@ -719,9 +729,9 @@ export type ResolversParentTypes = {
 };
 
 export type AggregatedFactResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregatedFact'] = ResolversParentTypes['AggregatedFact']> = {
-  aggregatedValue?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
-  count?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
-  key?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  aggregatedValue?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
+  count?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  key?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   keyLabel?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
@@ -732,7 +742,7 @@ export type AggregatedFactsMetadataResolvers<ContextType = GraphQLContext, Paren
   keyExtent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
   measureFieldInfo?: Resolver<Maybe<ResolversTypes['Metadata']>, ParentType, ContextType>;
   statistics?: Resolver<Maybe<ResolversTypes['AggregationStatistics']>, ParentType, ContextType>;
-  valueExtent?: Resolver<Array<ResolversTypes['Float']>, ParentType, ContextType>;
+  valueExtent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
 };
 
 export type AggregatedFactsWithMetadataResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregatedFactsWithMetadata'] = ResolversParentTypes['AggregatedFactsWithMetadata']> = {
@@ -783,8 +793,8 @@ export type DatasetMetadataResolvers<ContextType = GraphQLContext, ParentType ex
   extents?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
   generatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   hasNextPage?: Resolver<Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
-  total?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
-  totalPages?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  total?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
+  totalPages?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
 };
 
 export type DatasetWithMetadataResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['DatasetWithMetadata'] = ResolversParentTypes['DatasetWithMetadata']> = {
@@ -800,10 +810,10 @@ export type FactResolvers<ContextType = GraphQLContext, ParentType extends Resol
 };
 
 export type FieldStatsResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['FieldStats'] = ResolversParentTypes['FieldStats']> = {
-  distinctCount?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  distinctCount?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
   max?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
   min?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
-  nullCount?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  nullCount?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
 };
 
 export type FieldValueResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['FieldValue'] = ResolversParentTypes['FieldValue']> = {
@@ -836,16 +846,16 @@ export type PaginatedComparedFactsResolvers<ContextType = GraphQLContext, Parent
   currentPage?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
   data?: Resolver<Array<ResolversTypes['ComparedFact']>, ParentType, ContextType>;
   hasNextPage?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
-  total?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
-  totalPages?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  total?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
+  totalPages?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
 };
 
 export type PaginatedFactsResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['PaginatedFacts'] = ResolversParentTypes['PaginatedFacts']> = {
   currentPage?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   data?: Resolver<Maybe<Array<Maybe<ResolversTypes['Fact']>>>, ParentType, ContextType>;
   hasNextPage?: Resolver<Maybe<ResolversTypes['Boolean']>, ParentType, ContextType>;
-  total?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
-  totalPages?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
+  total?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
+  totalPages?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
 };
 
 export type QueryResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = {

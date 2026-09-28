@@ -14,7 +14,7 @@
 import { DuckDBInstance } from '@duckdb/node-api';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { computeExtents, jsonValueConverter } from '../../../src/db/json-conversion.js';
+import { computeExtents, extentOf, jsonValueConverter } from '../../../src/db/json-conversion.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -351,5 +351,33 @@ describe('computeExtents', () => {
     );
 
     expect(computeExtents(names, types, rows).d).toEqual(['2023-01-15', '2024-06-01']);
+  });
+});
+
+describe('extentOf', () => {
+  test('numeric: numbers and decimal strings beyond 2^53 compared as numbers, NULLs ignored', () => {
+    expect(extentOf('numeric', [3, null, '9007199254740995', -1])).toEqual([-1, 9007199254740996]);
+  });
+
+  test('date: chronological bounds, Z suffix and fractions included', () => {
+    expect(
+      extentOf('date', [
+        '2024-03-05T10:11:12.5Z',
+        null,
+        '2024-03-05T10:11:12Z',
+        '2024-03-06T00:00:00Z',
+      ]),
+    ).toEqual(['2024-03-05T10:11:12Z', '2024-03-06T00:00:00Z']);
+  });
+
+  test.each([
+    ['empty list', 'numeric', []],
+    ['only NULLs', 'numeric', [null, null]],
+    ['only NULL dates', 'date', [null]],
+    ['text family', 'text', ['a', 'b']],
+    ['boolean family', 'boolean', [true, false]],
+    ['no family', null, [1, 2]],
+  ] as const)('%s → null', (_, family, values) => {
+    expect(extentOf(family, values)).toBeNull();
   });
 });

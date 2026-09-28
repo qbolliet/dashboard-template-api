@@ -31,8 +31,8 @@ interface AggregatedFactsParams {
 
 /** Résultat agrégé enrichi d'un _groupByField. */
 interface AggregatedResult {
-  key: string;
-  aggregatedValue: number;
+  key: string | null;
+  aggregatedValue: unknown;
   count: number;
   _groupByField: string;
 }
@@ -245,24 +245,75 @@ describe('AggregatedFactsLoader', () => {
       });
     });
 
-    test('convertit les valeurs en nombres', async () => {
-      mockConnection.all.mockResolvedValue([{ key: '1', aggregatedValue: '42.5', count: '3' }]);
+    test('garde la valeur agrégée telle que la rend le convertisseur JSON', async () => {
+      // Formes du convertisseur unique : nombre, date ISO, chaîne décimale au-delà de 2^53, null
+      mockConnection.all.mockResolvedValue([
+        { key: 'a', aggregatedValue: 42.5, count: 3 },
+        { key: 'b', aggregatedValue: '2024-01-01', count: 2 },
+        { key: 'c', aggregatedValue: '9007199254740995', count: 1 },
+        { key: 'd', aggregatedValue: null, count: 2 },
+      ]);
 
       const loader = createAggregatedFactsLoader('main');
       const result = (await loader.load({ ...baseParams })) as AggregatedResult[];
 
-      expect(typeof result[0].aggregatedValue).toBe('number');
+      expect(result.map((r) => r.aggregatedValue)).toEqual([
+        42.5,
+        '2024-01-01',
+        '9007199254740995',
+        null,
+      ]);
       expect(typeof result[0].count).toBe('number');
-      expect(result[0].aggregatedValue).toBe(42.5);
     });
 
-    test('convertit les clés en chaînes', async () => {
-      mockConnection.all.mockResolvedValue([{ key: 42, aggregatedValue: 100, count: 1 }]);
+    test('convertit les clés en chaînes, la clé NULL reste null', async () => {
+      mockConnection.all.mockResolvedValue([
+        { key: 42, aggregatedValue: 100, count: 1 },
+        { key: null, aggregatedValue: 7, count: 2 },
+      ]);
 
       const loader = createAggregatedFactsLoader('main');
       const result = (await loader.load({ ...baseParams })) as AggregatedResult[];
 
       expect(result[0].key).toBe('42');
+      expect(result[1].key).toBeNull();
+    });
+
+    test('sans tri explicite, ordonne par la clé', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({ ...baseParams });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ORDER BY key ASC');
+    });
+
+    test('départage le tri par valeur avec la clé de groupe', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({ ...baseParams, sort: [{ field: 'aggregatedValue', order: 'DESC' }] });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ORDER BY aggregatedValue DESC, key ASC');
+    });
+
+    test('un tri explicite sur la clé n’est pas doublé', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createAggregatedFactsLoader('main');
+      await loader.load({
+        ...baseParams,
+        sort: [
+          { field: 'key', order: 'DESC' },
+          { field: 'aggregatedValue', order: 'ASC' },
+        ],
+      });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ORDER BY key DESC, aggregatedValue ASC');
+      expect(query).not.toContain('key ASC');
     });
 
     test("inclut la fonction d'agrégation correcte dans la requête", async () => {
@@ -332,9 +383,20 @@ describe('AggregatedFactsLoader', () => {
       await loader.load({ ...baseParams, where: { sql: '"kind" = ?', params: ['x'] } });
 
       const [countQuery, countParams] = mockConnection.all.mock.calls[1];
-      expect(countQuery).toContain('COUNT(DISTINCT "country")');
       expect(countQuery).toContain('WHERE "kind" = ?');
       expect(countParams).toEqual(['x']);
+    });
+
+    test('compte les groupes du GROUP BY, groupe NULL compris (pas de COUNT DISTINCT)', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ totalGroups: 4 }]);
+
+      const loader = createAggregatedFactsWithCountLoader('main');
+      await loader.load({ ...baseParams });
+
+      const countQuery = (mockConnection.all.mock.calls[1][0] as string).replace(/\s+/g, ' ');
+      expect(countQuery).toContain('SELECT COUNT(*) as totalGroups FROM ( SELECT 1 FROM');
+      expect(countQuery).toContain('GROUP BY "country" )');
+      expect(countQuery).not.toContain('DISTINCT');
     });
   });
 
@@ -361,11 +423,74 @@ describe('AggregatedFactsLoader', () => {
       mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
       const loader = createAggregatedFactsWithMetadataLoader('main');
-      const result = (await loader.load({ ...baseParams })) as Record<string, unknown>;
+      const result = (await loader.load({
+        ...baseParams,
+        valueFamily: 'numeric',
+      })) as Record<string, unknown>;
       const metadata = result['metadata'] as Record<string, unknown>;
 
       expect(metadata.count).toBe(0);
       expect(metadata.keyExtent).toBeNull();
+      // Plus de [0, 0] fictif : aucune valeur, aucune borne
+      expect(metadata.valueExtent).toBeNull();
+    });
+
+    test('ignore la clé et les valeurs NULL dans les bornes et les statistiques', async () => {
+      mockConnection.all
+        .mockResolvedValueOnce([
+          { key: 'A', aggregatedValue: 10, count: 1 },
+          { key: null, aggregatedValue: 30, count: 1 },
+          { key: 'B', aggregatedValue: null, count: 1 },
+        ])
+        .mockResolvedValueOnce([]);
+
+      const loader = createAggregatedFactsWithMetadataLoader('main');
+      const result = (await loader.load({
+        ...baseParams,
+        valueFamily: 'numeric',
+      })) as Record<string, unknown>;
+      const metadata = result['metadata'] as Record<string, unknown>;
+
+      expect(metadata.valueExtent).toEqual([10, 30]);
+      // Colonne de regroupement sans métadonnée : première et dernière clé non NULL
+      expect(metadata.keyExtent).toEqual(['A', 'B']);
+      expect((metadata.statistics as Statistics).mean).toBe(20);
+    });
+
+    test('valeurs agrégées temporelles : bornes ISO, pas de statistiques', async () => {
+      mockConnection.all
+        .mockResolvedValueOnce([
+          { key: 'A', aggregatedValue: '2024-01-01', count: 2 },
+          { key: 'B', aggregatedValue: '2023-01-01', count: 2 },
+        ])
+        .mockResolvedValueOnce([]);
+
+      const loader = createAggregatedFactsWithMetadataLoader('main');
+      const result = (await loader.load({
+        ...baseParams,
+        measure: 'date',
+        aggregation: 'MAX',
+        valueFamily: 'date',
+      })) as Record<string, unknown>;
+      const metadata = result['metadata'] as Record<string, unknown>;
+
+      expect(metadata.valueExtent).toEqual(['2023-01-01', '2024-01-01']);
+      expect(metadata.statistics).toBeNull();
+    });
+
+    test('valeurs toutes NULL : valueExtent null', async () => {
+      mockConnection.all
+        .mockResolvedValueOnce([{ key: 'A', aggregatedValue: null, count: 2 }])
+        .mockResolvedValueOnce([]);
+
+      const loader = createAggregatedFactsWithMetadataLoader('main');
+      const result = (await loader.load({
+        ...baseParams,
+        valueFamily: 'numeric',
+      })) as Record<string, unknown>;
+      const metadata = result['metadata'] as Record<string, unknown>;
+
+      expect(metadata.valueExtent).toBeNull();
     });
   });
 

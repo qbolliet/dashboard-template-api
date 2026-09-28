@@ -32,10 +32,10 @@ const crossDatabaseTypeDefs: DocumentNode = gql`
   "Résultat paginé pour les comparaisons cross-database"
   type PaginatedComparedFacts {
     data: [ComparedFact!]!
-    total: Int!
+    total: Float!
     hasNextPage: Boolean!
     currentPage: Int!
-    totalPages: Int!
+    totalPages: Float!
   }
 
   extend type Query {

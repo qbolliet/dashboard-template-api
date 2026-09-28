@@ -31,14 +31,20 @@ const factTypeDefs: DocumentNode = gql`
 
   "An aggregated fact record with key and value"
   type AggregatedFact {
-    "Grouping key"
+    "Grouping key, as a string. null is the group of the rows where the group column is NULL (e.g. a missing level of a column hierarchy)"
     key: String
     "Label of the grouping key when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise"
     keyLabel: String
-    "Aggregated value"
-    aggregatedValue: Float
+    """
+    Aggregated value, serialized like every value of the JSON scalar. Its form depends on the
+    aggregation: COUNT is a number; SUM, AVG and MEDIAN (numeric measures only) are numbers, an
+    integer sum beyond 2^53 being its exact decimal string; MIN and MAX (numeric or temporal
+    measures) are numbers or ISO 8601 dates; MODE is a value of the measure (number, string,
+    boolean, ISO date). null when the group holds no non-NULL value of the measure.
+    """
+    aggregatedValue: JSON
     "Number of records in this group"
-    count: Int
+    count: Float!
   }
 
   "Paginated response for fact queries"
@@ -46,29 +52,29 @@ const factTypeDefs: DocumentNode = gql`
     "Array of fact records"
     data: [Fact]
     "Total number of records matching the query"
-    total: Int
+    total: Float
     "Whether there are more pages available"
     hasNextPage: Boolean
     "Current page number (1-indexed)"
     currentPage: Int
     "Total number of pages"
-    totalPages: Int
+    totalPages: Float
   }
 
   "Metadata about a dataset, useful for visualization"
   type DatasetMetadata {
     "Number of records in current page"
     count: Int!
-    "Bounds of the columns of THIS PAGE (not of the whole dataset), keyed by column name: [min, max] as numbers for numeric columns (integers beyond 2^53, serialized as strings, are compared as numbers, so their bound is approximate), [min, max] as ISO 8601 strings for date and timestamp columns (chronological comparison). NULLs are ignored; a column with no value has no entry. Global bounds of a column: Metadata.stats"
+    "Bounds of the columns of this page (not of the whole dataset), keyed by column name: [min, max] as numbers for numeric columns (integers beyond 2^53, serialized as strings, are compared as numbers, so their bound is approximate), [min, max] as ISO 8601 strings for date and timestamp columns (chronological comparison). NULLs are ignored; a column with no value has no entry. Global bounds of a column: Metadata.stats"
     extents: JSON
     "Total number of records matching the query"
-    total: Int
+    total: Float
     "Whether there are more pages available"
     hasNextPage: Boolean
     "Current page number (1-indexed)"
     currentPage: Int
     "Total number of pages"
-    totalPages: Int
+    totalPages: Float
     "ISO 8601 timestamp of when this query was executed"
     generatedAt: String!
   }
@@ -95,9 +101,13 @@ const factTypeDefs: DocumentNode = gql`
 
   "Metadata for aggregated facts optimized for D3"
   type AggregatedFactsMetadata {
+    "Number of groups in this page"
     count: Int!
-    keyExtent: JSON # [min, max] pour clés numériques ou [first, last] pour strings
-    valueExtent: [Float!]!
+    "Bounds of the group keys of this page, the NULL key ignored: [min, max] as numbers for a numeric group column, as ISO 8601 strings for a temporal one, [first, last] in page order otherwise; null when the page has no non-NULL key"
+    keyExtent: JSON
+    "Bounds of the aggregated values of this page, NULLs ignored: [min, max] as numbers for a numeric aggregate, as ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null when the page is empty, holds only NULLs, or the aggregate is text or boolean (MODE)"
+    valueExtent: JSON
+    "Descriptive statistics of the non-NULL aggregated values of this page; null when the aggregate is not numeric"
     statistics: AggregationStatistics
     groupByFieldInfo: Metadata
     "Metadata of the aggregated measure (unit and display format of the aggregated value)"
@@ -166,7 +176,7 @@ const factTypeDefs: DocumentNode = gql`
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
-      "Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM"
+      "Agrégation appliquée, compatible avec la famille de type de la mesure : SUM, AVG, MEDIAN sur une mesure numérique ; MIN, MAX sur une mesure numérique ou temporelle ; MODE, COUNT sur toutes (sinon BAD_USER_INPUT listant les agrégations permises). Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM pour une mesure numérique ; une mesure non numérique sans defaultAggregation exige l'argument (COUNT n'est jamais implicite)"
       aggregation: Aggregation
       limit: Int! = 100
       offset: Int! = 0
@@ -183,7 +193,7 @@ const factTypeDefs: DocumentNode = gql`
       groupBy: String!
       "Measure column to aggregate (e.g. value, lower_bound)"
       measure: String!
-      "Agrégation appliquée. Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM"
+      "Agrégation appliquée, compatible avec la famille de type de la mesure : SUM, AVG, MEDIAN sur une mesure numérique ; MIN, MAX sur une mesure numérique ou temporelle ; MODE, COUNT sur toutes (sinon BAD_USER_INPUT listant les agrégations permises). Absente, elle vaut metadata.defaultAggregation de la mesure, puis SUM pour une mesure numérique ; une mesure non numérique sans defaultAggregation exige l'argument (COUNT n'est jamais implicite)"
       aggregation: Aggregation
       limit: Int! = 100
       offset: Int! = 0

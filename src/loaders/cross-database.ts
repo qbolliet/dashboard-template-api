@@ -7,7 +7,7 @@ import { config } from '../utils/config-loader.js';
 import { AggregatedFactsLoader } from './aggregated-facts.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
-import type { AggregationType } from './aggregated-facts.js';
+import type { Aggregation } from '../generated/graphql.js';
 
 // ─── Interfaces des paramètres de requêtes cross-database ─────────────────────
 
@@ -38,7 +38,7 @@ interface CompareAggregatedFactsParams {
   schemaA?: string | null;
   schemaB?: string | null;
   groupBy: string;
-  aggregation?: AggregationType;
+  aggregation?: Aggregation;
   /** Effective label columns of groupBy on each side (null: none). Part of the key. */
   labelFieldA?: string | null;
   labelFieldB?: string | null;
@@ -314,7 +314,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const groupColumn = quoteIdent(groupBy);
     const labelFieldA = params.labelFieldA ?? null;
     const labelFieldB = params.labelFieldB ?? null;
-    const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation as AggregationType] || 'SUM';
+    const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
 
     // CTE d'agrégation per-side : regroupement direct sur la colonne, libellé par ANY_VALUE
     const aggSide = (catalog: string, schema: string, labelField: string | null): string =>

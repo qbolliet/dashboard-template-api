@@ -59,9 +59,9 @@ const metadataTypeDefs: DocumentNode = gql`
     "Max de la colonne, mêmes formes que min, null si colonne vide"
     max: JSON
     "Nombre de valeurs distinctes non NULL"
-    distinctCount: Int!
+    distinctCount: Float!
     "Nombre de valeurs NULL"
-    nullCount: Int!
+    nullCount: Float!
   }
 
   extend type Query {

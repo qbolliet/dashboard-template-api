@@ -1,6 +1,7 @@
 // Importation des modules
 import { DuckDBTimestampValue, DuckDBTypeId, JsonDuckDBValueConverter } from '@duckdb/node-api';
 import { sqlTypeFamily } from '../utils/filter-tree.js';
+import type { SqlTypeFamily } from '../utils/filter-tree.js';
 import type {
   DuckDBType,
   DuckDBValue,
@@ -196,12 +197,70 @@ function chronologicalKey(iso: string): string {
 }
 
 /**
+ * Computes the min/max of a list of values already converted by
+ * {@link jsonValueConverter}.
+ *
+ * Numeric values are compared as numbers — integers beyond 2^53, serialized as
+ * strings, included, so their bound is approximate at that magnitude — and
+ * temporal ones chronologically. NULLs are ignored.
+ *
+ * @param family - Type family of the values; text, boolean or null have no extent.
+ * @param values - Converted values.
+ * @returns `[number, number]` or ISO `[string, string]`, or null when no value
+ *   counts (empty list, only NULLs, family without extent).
+ */
+// Min/max d'une liste de valeurs converties, selon leur famille de type
+function extentOf(
+  family: SqlTypeFamily | null,
+  values: readonly (Json | undefined)[],
+): ColumnExtent | null {
+  // Cas numérique
+  if (family === 'numeric') {
+    // Initialisation du minimum et du maximum
+    let min = Infinity;
+    let max = -Infinity;
+    // Mise à jour
+    for (const raw of values) {
+      const value = Number(raw);
+      if (raw === null || raw === undefined || !Number.isFinite(value)) continue;
+      if (value < min) min = value;
+      if (value > max) max = value;
+    }
+    return min <= max ? [min, max] : null;
+  }
+
+  // Cas d'une date
+  if (family === 'date') {
+    // Initialisation du minimum et du maximum
+    let min: string | null = null;
+    let max: string | null = null;
+    let minKey = '';
+    let maxKey = '';
+    // Mise à jour
+    for (const value of values) {
+      if (typeof value !== 'string') continue;
+      const key = chronologicalKey(value);
+      if (min === null || key < minKey) {
+        min = value;
+        minKey = key;
+      }
+      if (max === null || key > maxKey) {
+        max = value;
+        maxKey = key;
+      }
+    }
+    return min !== null && max !== null ? [min, max] : null;
+  }
+
+  return null;
+}
+
+/**
  * Computes the min/max of the numeric and temporal columns of a page.
  *
  * The family of each column comes from its DuckDB type through
- * {@link sqlTypeFamily}. Integers beyond 2^53, serialized as strings, take part
- * as numbers, so their bound is approximate at that magnitude. NULLs are
- * ignored; a column with no value gets no entry.
+ * {@link sqlTypeFamily}; the bounds follow {@link extentOf}. A column with no
+ * value gets no entry.
  *
  * @param columnNames - Column names of the result.
  * @param columnTypes - DuckDB types of the columns, same order.
@@ -219,7 +278,7 @@ function computeExtents(
   // Parcours des colonnes
   columnNames.forEach((name, index) => {
     // Identification de la famille de type
-    let family: string;
+    let family: SqlTypeFamily;
     try {
       family = sqlTypeFamily(columnTypes[index].toString());
     } catch {
@@ -227,45 +286,14 @@ function computeExtents(
       return;
     }
 
-    // Cas numérique
-    if (family === 'numeric') {
-      // Initialisation du minimum et du maximum
-      let min = Infinity;
-      let max = -Infinity;
-      // Mise à jour
-      for (const row of rows) {
-        const value = Number(row[name]);
-        if (row[name] === null || row[name] === undefined || !Number.isFinite(value)) continue;
-        if (value < min) min = value;
-        if (value > max) max = value;
-      }
-      if (min <= max) extents[name] = [min, max];
-      // Cas d'une date
-    } else if (family === 'date') {
-      // Initlisation du minimum et du maximum
-      let min: string | null = null;
-      let max: string | null = null;
-      let minKey = '';
-      let maxKey = '';
-      // Mise à jour
-      for (const row of rows) {
-        const value = row[name];
-        if (typeof value !== 'string') continue;
-        const key = chronologicalKey(value);
-        if (min === null || key < minKey) {
-          min = value;
-          minKey = key;
-        }
-        if (max === null || key > maxKey) {
-          max = value;
-          maxKey = key;
-        }
-      }
-      if (min !== null && max !== null) extents[name] = [min, max];
-    }
+    const extent = extentOf(
+      family,
+      rows.map((row) => row[name]),
+    );
+    if (extent) extents[name] = extent;
   });
 
   return extents;
 }
 
-export { jsonValueConverter, computeExtents };
+export { jsonValueConverter, extentOf, computeExtents };

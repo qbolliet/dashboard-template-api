@@ -8,14 +8,16 @@ import {
   toFieldMetadataWithLabels,
 } from '../utils/metadata-mapping.js';
 import { buildWhere } from '../utils/filter-tree.js';
+import { measureFamily } from '../utils/aggregations.js';
+import { extentOf } from '../db/json-conversion.js';
+import type { Json } from '@duckdb/node-api';
 import type { DuckDBConnection, SortItem } from './base-loader.js';
-import type { CompiledFilter } from '../utils/filter-tree.js';
+import type { CompiledFilter, SqlTypeFamily } from '../utils/filter-tree.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
+import type { ColumnExtent } from '../db/json-conversion.js';
+import type { Aggregation } from '../generated/graphql.js';
 
 // ─── Interfaces des paramètres de requête ─────────────────────────────────────
-
-/** Supported SQL aggregation type. */
-type AggregationType = 'SUM' | 'AVG' | 'MAX' | 'MIN' | 'COUNT' | 'MEDIAN' | 'MODE';
 
 /** Parameters for an aggregated fact query. */
 interface AggregatedQueryParams {
@@ -25,7 +27,12 @@ interface AggregatedQueryParams {
   groupBy: string;
   /** Measure column to aggregate (e.g. value, lower_bound). */
   measure: string;
-  aggregation: AggregationType;
+  aggregation: Aggregation;
+  /**
+   * Type family of the aggregated value (aggregatedValueFamily), resolved by
+   * the resolver; drives valueExtent and the statistics. Null: no extent.
+   */
+  valueFamily?: SqlTypeFamily | null;
   /**
    * Effective label column of groupBy, resolved by resolveLabelField before the
    * load (hence part of the cache key); null leaves keyLabel null.
@@ -43,10 +50,12 @@ interface AggregatedQueryParams {
 
 /** Row of an aggregated fact result. */
 interface AggregatedFactRow {
-  key: string;
+  /** Group key as a string; null for the group of the rows where the column is NULL. */
+  key: string | null;
   /** Label of the group key, read by ANY_VALUE in the same query; null without label column. */
   keyLabel: string | null;
-  aggregatedValue: number;
+  /** Aggregate as serialized by jsonValueConverter; null when the group has no non-NULL value. */
+  aggregatedValue: Json;
   count: number;
   _groupByField: string;
 }
@@ -62,11 +71,12 @@ interface AggregatedStatistics {
 /** Metadata of an aggregated result (extents, statistics, pagination). */
 interface AggregatedMetadata {
   count: number;
-  keyExtent: [number, number] | [string, string] | null;
-  valueExtent: [number, number];
+  keyExtent: ColumnExtent | null;
+  /** [min, max] of the aggregated values of the page; null when none counts. */
+  valueExtent: ColumnExtent | null;
   groupByFieldInfo: FieldMetadata | null;
   generatedAt: string;
-  statistics?: AggregatedStatistics;
+  statistics?: AggregatedStatistics | null;
   totalGroups?: number;
   hasNextPage?: boolean;
   currentPage?: number;
@@ -137,7 +147,7 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
   // Association des types d'agrégation à leurs fonctions SQL
   /** Mapping between GraphQL aggregation types and SQL functions. */
-  static AGGREGATION_MAP: Record<AggregationType, string> = {
+  static AGGREGATION_MAP: Record<Aggregation, string> = {
     SUM: 'SUM',
     AVG: 'AVG',
     MAX: 'MAX',
@@ -194,15 +204,15 @@ class AggregatedFactsLoader extends FactQueryLoader {
     // Résolution de la fonction SQL d'agrégation
     const aggregationQuery = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
 
-    // Construction du critère de tri. Sans tri explicite, le regroupement est
-    // ordonné par sa clé : deux pages successives restent disjointes sous le
-    // scan parallèle de DuckDB.
-    const sortClause =
-      sort.length > 0
-        ? `ORDER BY ${sort
-            .map((s) => (s.field === 'key' ? `key ${s.order}` : `aggregatedValue ${s.order}`))
-            .join(', ')}`
-        : 'ORDER BY key ASC';
+    // Construction du critère de tri, toujours départagé par la clé de groupe :
+    // les clés sont uniques (le groupe NULL compris), l'ordre est donc total et
+    // deux pages successives restent disjointes sous le scan parallèle de DuckDB,
+    // même entre groupes ex æquo sur aggregatedValue.
+    const orderBy = sort.map((s) =>
+      s.field === 'key' ? `key ${s.order}` : `aggregatedValue ${s.order}`,
+    );
+    if (!sort.some((s) => s.field === 'key')) orderBy.push('key ASC');
+    const sortClause = `ORDER BY ${orderBy.join(', ')}`;
 
     // Construction de la requête principale
     const query = `
@@ -218,13 +228,15 @@ class AggregatedFactsLoader extends FactQueryLoader {
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-    // Exécution de la requête et mise en forme des lignes
+    // Exécution de la requête et mise en forme des lignes. Les valeurs sortent
+    // déjà du convertisseur JSON unique (nombre, chaîne ISO ou décimale, null) :
+    // la valeur agrégée est gardée telle quelle, NULL reste null.
     const results = await connection.all(query, where?.params ?? []);
     const data: AggregatedFactRow[] = results.map((row) => ({
       ...row,
-      key: String(row.key),
+      key: row.key === null || row.key === undefined ? null : String(row.key),
       keyLabel: row.keyLabel === null || row.keyLabel === undefined ? null : String(row.keyLabel),
-      aggregatedValue: Number(row.aggregatedValue),
+      aggregatedValue: (row.aggregatedValue ?? null) as Json,
       count: Number(row.count),
       _groupByField: groupBy,
     }));
@@ -275,11 +287,14 @@ class AggregatedFactsLoader extends FactQueryLoader {
 
   // Méthode pour obtenir le nombre total de groupes distincts
   /**
-   * Gets the total number of distinct groups for pagination purposes.
+   * Gets the total number of groups for pagination purposes.
+   *
+   * Counts the groups of the same GROUP BY as the page query, so the group of
+   * the NULL key is included — COUNT(DISTINCT) would leave it out.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Query parameters (only where and groupBy are used).
-   * @returns Total distinct group count.
+   * @returns Total group count, NULL group included.
    */
   async getTotalGroups(
     connection: DuckDBConnection,
@@ -289,14 +304,19 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const groupBy = quoteIdent(params.groupBy);
     const whereClause = buildWhere(where);
 
+    // Même regroupement que la requête de page : le groupe NULL est compté
     const countQuery = `
-            SELECT COUNT(DISTINCT ${groupBy}) as totalGroups
-            FROM ${this.qualifyTable('fact_table')}
-            ${whereClause}
+            SELECT COUNT(*) as totalGroups
+            FROM (
+                SELECT 1
+                FROM ${this.qualifyTable('fact_table')}
+                ${whereClause}
+                GROUP BY ${groupBy}
+            )
         `;
 
     const result = await connection.all(countQuery, where?.params ?? []);
-    return result[0].totalGroups as number;
+    return Number(result[0].totalGroups);
   }
 
   // Méthode de calcul des méta-données d'un résultat agrégé
@@ -304,19 +324,21 @@ class AggregatedFactsLoader extends FactQueryLoader {
    * Calculates metadata for a set of aggregated fact rows.
    *
    * Fetches groupBy field metadata, computes key and value extents, and
-   * calculates descriptive statistics (mean, median, stdDev, quartiles).
+   * calculates descriptive statistics (mean, median, stdDev, quartiles). NULL
+   * keys and values take no part in the extents nor in the statistics; the
+   * statistics exist only for a numeric aggregated value.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param data - Array of aggregated fact rows already fetched.
-   * @param params - Query parameters (only groupBy is used).
+   * @param params - Query parameters (groupBy and valueFamily are used).
    * @returns AggregatedMetadata object with extents, field info, and statistics.
    */
   async calculateMetadata(
     connection: DuckDBConnection,
     data: AggregatedFactRow[],
-    params: Pick<AggregatedQueryParams, 'groupBy'>,
+    params: Pick<AggregatedQueryParams, 'groupBy' | 'valueFamily'>,
   ): Promise<AggregatedMetadata> {
-    const { groupBy } = params;
+    const { groupBy, valueFamily = null } = params;
 
     // Récupération des informations sur le champ de regroupement
     // Même projection et même mapping camelCase que les loaders de métadonnées
@@ -326,37 +348,46 @@ class AggregatedFactsLoader extends FactQueryLoader {
     const fieldMetaRows = await connection.all(fieldMetaQuery, [groupBy, groupBy]);
     const fieldMeta = toFieldMetadataWithLabels(fieldMetaRows, groupBy);
 
-    // Calcul des extents de valeurs et de clés
-    const values = data.map((d) => d.aggregatedValue);
-    const keys = data.map((d) => d.key);
-
     // Cas sans données — métadonnées vides sûres
-    if (keys.length === 0) {
+    if (data.length === 0) {
       return {
         count: 0,
         keyExtent: null,
-        valueExtent: [0, 0],
+        valueExtent: null,
         groupByFieldInfo: fieldMeta,
         generatedAt: new Date().toISOString(),
       };
     }
 
-    // Détection si les clés sont numériques
-    const numericKeys = keys.every((k) => !isNaN(parseFloat(k)));
+    // Clés non NULL : bornes numériques ou chronologiques selon la famille du
+    // groupBy, sinon première et dernière clé dans l'ordre de la page
+    const keys = data.map((d) => d.key).filter((k): k is string => k !== null);
+    const keyFamily = measureFamily(fieldMeta?.sqlType);
+    const keyExtent: ColumnExtent | null =
+      keyFamily === 'numeric' || keyFamily === 'date'
+        ? extentOf(keyFamily, keys)
+        : keys.length > 0
+          ? [keys[0], keys[keys.length - 1]]
+          : null;
 
     // Construction du dictionnaire de méta-données
+    const values = data.map((d) => d.aggregatedValue);
     const metadata: AggregatedMetadata = {
       count: data.length,
-      keyExtent: numericKeys
-        ? [Math.min(...keys.map(Number)), Math.max(...keys.map(Number))]
-        : [keys[0], keys[keys.length - 1]],
-      valueExtent: [Math.min(...values), Math.max(...values)],
+      keyExtent,
+      valueExtent: extentOf(valueFamily, values),
       groupByFieldInfo: fieldMeta,
       generatedAt: new Date().toISOString(),
     };
 
-    // Calcul des statistiques descriptives
-    metadata.statistics = this.calculateStatistics(values);
+    // Statistiques descriptives sur les seules valeurs numériques non NULL
+    // (entiers au-delà de 2^53, en chaîne, approchés comme dans les extents)
+    metadata.statistics =
+      valueFamily === 'numeric'
+        ? this.calculateStatistics(
+            values.filter((v) => v !== null && Number.isFinite(Number(v))).map(Number),
+          )
+        : null;
 
     return metadata;
   }
@@ -462,7 +493,6 @@ export {
   AggregatedFactsLoader,
 };
 export type {
-  AggregationType,
   AggregatedQueryParams,
   AggregatedFactRow,
   AggregatedStatistics,

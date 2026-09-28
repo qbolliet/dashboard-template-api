@@ -7,6 +7,9 @@
  * and the fact query fields with their argument signatures.
  */
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { schema } from '../../../../src/schema/index.js';
 import {
   assertObjectType,
@@ -15,6 +18,9 @@ import {
   isNamedType,
   GraphQLFieldMap,
 } from 'graphql';
+
+// Racine du dépôt, pour lire les sources des typedefs et le SDL versionné
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 // ─── Enums — fact ─────────────────────────────────────────────────────────────
 
@@ -201,6 +207,62 @@ describe('Object types — fact', () => {
     ]) {
       expect(fields).toHaveProperty(f);
     }
+  });
+
+  /**
+   * Verification of the single AggregatedFact: NULL-safe key and value.
+   */
+  test('AggregatedFact: key nullable, aggregatedValue JSON nullable, count Float!', () => {
+    const fields = assertObjectType(schema.getType('AggregatedFact')).getFields();
+
+    expect(String(fields.key.type)).toBe('String');
+    expect(String(fields.keyLabel.type)).toBe('String');
+    expect(String(fields.aggregatedValue.type)).toBe('JSON');
+    expect(String(fields.count.type)).toBe('Float!');
+  });
+
+  /**
+   * Verification that AggregatedFact is declared once, in the typedefs and in the versioned SDL.
+   */
+  test('AggregatedFact is declared exactly once', () => {
+    const typedefsDir = path.join(ROOT, 'src/schema/typedefs');
+    const sources = fs
+      .readdirSync(typedefsDir)
+      .filter((file) => file.endsWith('.ts'))
+      .map((file) => fs.readFileSync(path.join(typedefsDir, file), 'utf8'))
+      .join('\n');
+    const sdl = fs.readFileSync(path.join(ROOT, 'schema.graphql'), 'utf8');
+
+    expect(sources.match(/\btype AggregatedFact \{/g)).toHaveLength(1);
+    expect(sdl.match(/^type AggregatedFact \{/gm)).toHaveLength(1);
+  });
+
+  /**
+   * Verification that valueExtent admits null and ISO dates.
+   */
+  test('AggregatedFactsMetadata.valueExtent is a nullable JSON', () => {
+    const fields = assertObjectType(schema.getType('AggregatedFactsMetadata')).getFields();
+
+    expect(String(fields.valueExtent.type)).toBe('JSON');
+  });
+
+  /**
+   * Verification that row counters are Float (exact up to 2^53), not 32-bit Int.
+   */
+  test.each([
+    ['PaginatedFacts', 'total', 'Float'],
+    ['PaginatedFacts', 'totalPages', 'Float'],
+    ['DatasetMetadata', 'total', 'Float'],
+    ['DatasetMetadata', 'totalPages', 'Float'],
+    ['PaginatedComparedFacts', 'total', 'Float!'],
+    ['PaginatedComparedFacts', 'totalPages', 'Float!'],
+    ['FieldStats', 'distinctCount', 'Float!'],
+    ['FieldStats', 'nullCount', 'Float!'],
+    ['AggregatedFact', 'count', 'Float!'],
+  ])('%s.%s is %s', (typeName, field, expected) => {
+    const fields = assertObjectType(schema.getType(typeName)).getFields();
+
+    expect(String(fields[field].type)).toBe(expected);
   });
 
   /**
