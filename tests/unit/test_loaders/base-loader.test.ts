@@ -25,9 +25,16 @@ import {
  * @param catalog - Resolved catalog segment.
  * @param schema - Resolved schema segment.
  * @param key - The raw DataLoader key passed to loadWithCache.
- * @returns The expected `<prefix>:<catalog>:<schema>:<hash>` cache key.
+ * @param version - Served data version (mock: 'v1').
+ * @returns The expected `<prefix>:<catalog>:<schema>@<version>:<hash>` cache key.
  */
-function expectedCacheKey(prefix: string, catalog: string, schema: string, key: unknown): string {
+function expectedCacheKey(
+  prefix: string,
+  catalog: string,
+  schema: string,
+  key: unknown,
+  version = 'v1',
+): string {
   const canonicalize = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonicalize);
     if (value !== null && typeof value === 'object') {
@@ -48,7 +55,7 @@ function expectedCacheKey(prefix: string, catalog: string, schema: string, key: 
   const hash = createHash('sha1')
     .update(JSON.stringify(canonicalize(keyForHash)))
     .digest('hex');
-  return `${prefix}:${catalog}:${schema}:${hash}`;
+  return `${prefix}:${catalog}:${schema}@${version}:${hash}`;
 }
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
@@ -164,6 +171,7 @@ describe('BaseQueryLoader', () => {
     mockDatabaseManager.getPool.mockReturnValue(mockPool);
     mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
     mockDatabaseManager.getDefaultCatalog.mockReturnValue('main');
+    mockDatabaseManager.getDataVersion.mockReturnValue('v1');
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
@@ -446,6 +454,25 @@ describe('BaseQueryLoader', () => {
         expect.any(Function),
         expect.any(Number),
       );
+    });
+
+    test('la version des données servie entre dans la clé : une mise à jour la déplace', async () => {
+      const loader = new BaseQueryLoader({ cachePrefix: 'facts', catalogId: 'main' });
+      const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('result');
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
+
+      await loader.loadWithCache('k', loaderFn);
+      mockDatabaseManager.getDataVersion.mockReturnValue('v2');
+      await loader.loadWithCache('k', loaderFn);
+
+      const [before] = mockWithCache.mock.calls[0] as [string];
+      const [after] = mockWithCache.mock.calls[1] as [string];
+      expect(before).toBe(expectedCacheKey('facts', 'main', 'main', 'k', 'v1'));
+      expect(after).toBe(expectedCacheKey('facts', 'main', 'main', 'k', 'v2'));
+      // Version lue pour le (catalogue, schéma) résolu de la clé
+      expect(mockDatabaseManager.getDataVersion).toHaveBeenCalledWith('main', 'main');
     });
 
     test('fait le fallback si JSON.stringify échoue (référence circulaire)', async () => {

@@ -215,11 +215,11 @@ describe('FieldStatsLoader', () => {
       expect(cacheCalls[1].ttl).toBe(FACT_CACHE_TIMEOUT);
     });
 
-    test('la clé suit le motif field-stats:<catalogue>:<schéma>: des invalidations', async () => {
+    test('la clé suit le motif field-stats:<catalogue>:<schéma>@<version>: des invalidations', async () => {
       const loader = createFieldStatsLoader('db1', 'geo');
       await loader.load({ fieldName: 'population' });
 
-      expect(cacheCalls[0].key.startsWith('field-stats:db1:geo:')).toBe(true);
+      expect(cacheCalls[0].key.startsWith('field-stats:db1:geo@v1:')).toBe(true);
     });
 
     test('un schéma non fixé occupe le segment du schéma par défaut du catalogue', async () => {
@@ -230,7 +230,7 @@ describe('FieldStatsLoader', () => {
       // placeholder littéral '_' : deux requêtes qui retombent sur le même
       // schéma par défaut, l'une explicite et l'autre non, doivent partager
       // la même entrée de cache et être couvertes par la même invalidation.
-      expect(cacheCalls[0].key.startsWith('field-stats:db1:main:')).toBe(true);
+      expect(cacheCalls[0].key.startsWith('field-stats:db1:main@v1:')).toBe(true);
     });
   });
 });

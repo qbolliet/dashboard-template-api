@@ -46,6 +46,15 @@ DATABASE:
 # (SCHEMA_VERSION_UNSUPPORTED). Aucun chemin de compatibilité.
 SUPPORTED_SCHEMA_VERSIONS: ${SUPPORTED_SCHEMA_VERSIONS:-[1]}
 
+# Détection des mises à jour de données sur chaque réplica. Toutes les
+# INTERVAL_MS, le pod relit dataset_metadata.updated_at de chaque schéma sur un
+# ATTACH neuf ; si un marqueur a changé, il recharge ses catalogues et bascule
+# ses clés de cache Redis sur la nouvelle version. L'updater n'a plus rien à
+# appeler : la fraîcheur est garantie en un intervalle (plus la durée du reload).
+CATALOG_FRESHNESS:
+  ENABLED: ${CATALOG_FRESHNESS_ENABLED:-true}
+  INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
+
 CATALOG_ROUTING:
   DEFAULT_CATALOG: ${DEFAULT_CATALOG:-default}
   ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-["default", "macroeconomics", "public_finance"]}

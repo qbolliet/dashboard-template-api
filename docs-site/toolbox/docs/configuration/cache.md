@@ -76,7 +76,7 @@ CACHE:
     TIMEOUT: ${CACHE_INVALIDATION_TIMEOUT:-30000}
 ```
 
-When a DuckLake file is updated (e.g. a new dataset is loaded), a `POST` to `/api/cache/invalidate-all` (or `/api/cache/invalidate/:database`):
+A catalog update needs no invalidation: cache keys carry the data version each pod serves (`<type>:<catalog>:<schema>@<version>:…`), so they move on their own when a pod picks the update up (see [Caching](../architecture/caching#versioned-namespaces)). For a manual flush, a `POST` to `/api/cache/invalidate-all` (or `/api/cache/invalidate/:catalog[/:schema]`):
 
 1. Waits `GRACE_PERIOD` seconds for in-flight queries to complete
 2. Deletes all matching cache keys in batches of `BATCH_SIZE`

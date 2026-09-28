@@ -309,6 +309,14 @@ export interface S3Config {
   ENDPOINT?: string;
 }
 
+/** Periodic catalog probe that detects data updates on every replica. */
+export interface CatalogFreshnessConfig {
+  /** Whether the probe runs at all (the admin reload route works either way). */
+  ENABLED: boolean;
+  /** Interval between two probes, in milliseconds. */
+  INTERVAL_MS: number;
+}
+
 /** Complete application configuration loaded from YAML files. */
 interface AppConfig {
   ENVIRONMENT: string;
@@ -348,6 +356,8 @@ interface AppConfig {
   };
   /** Versions de dataset_metadata.schema_version acceptées (JSON en variable d'env). */
   SUPPORTED_SCHEMA_VERSIONS: number[] | string;
+  /** Sondage périodique des catalogues (détection des mises à jour sur chaque réplica). */
+  CATALOG_FRESHNESS?: CatalogFreshnessConfig;
   S3?: S3Config;
   CACHE: CacheConfig;
   CATALOGS: Record<string, CatalogConfig>;

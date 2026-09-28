@@ -54,6 +54,7 @@ interface MockDatabaseManager {
   getDefaultSchema: jest.Mock;
   getSchemas: jest.Mock;
   isValidSchema: jest.Mock;
+  getDataVersion: jest.Mock;
 }
 
 // ─── Fabriques ─────────────────────────────────────────────────────────────────
@@ -122,7 +123,8 @@ export const makeExtendedConnection = (): MockExtendedConnection => ({
  *
  * Returns:
  *     A MockDatabaseManager with jest.fn() for the methods used by loaders
- *     and resolvers (pool access, default catalog/schema, schema allow-list).
+ *     and resolvers (pool access, default catalog/schema, schema allow-list,
+ *     served data version).
  */
 export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseManager => ({
   getPool: pool ? jest.fn().mockReturnValue(pool) : jest.fn(),
@@ -130,4 +132,6 @@ export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseM
   getDefaultSchema: jest.fn().mockReturnValue('main'),
   getSchemas: jest.fn().mockReturnValue(['main']),
   isValidSchema: jest.fn().mockReturnValue(true),
+  // Version des données servie : segment `@v1` des clés de cache
+  getDataVersion: jest.fn().mockReturnValue('v1'),
 });

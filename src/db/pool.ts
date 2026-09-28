@@ -188,6 +188,64 @@ export const buildCatalogSql = (catalog: CatalogEntry): string[] => {
   ];
 };
 
+/**
+ * Create an in-memory DuckDB instance configured to attach DuckLake catalogs.
+ *
+ * Loads ducklake, creates the S3 secret when S3 is enabled and loads the
+ * postgres extension when a catalog needs it — everything an ATTACH of the
+ * given catalogs requires, but no ATTACH itself. Shared by the pool (which then
+ * attaches the catalogs for serving) and the freshness probe (which attaches
+ * them on a throw-away instance to read the latest state).
+ *
+ * @param catalogs - Catalogs the instance will attach (decides the extensions).
+ * @returns A configured instance with no catalog attached.
+ * @throws {Error} If an extension cannot be loaded or the secret cannot be created.
+ */
+export const createConfiguredInstance = async (
+  catalogs: CatalogEntry[],
+): Promise<DuckDBInstance> => {
+  // Création d'une instance DuckDB en mémoire
+  const instance = await DuckDBInstance.create(':memory:');
+  const conn = await instance.connect();
+
+  try {
+    // Chargement de ducklake
+    await conn.run('LOAD ducklake;');
+
+    // Support S3 : chargement de httpfs si activé dans la config
+    if (config.S3?.ENABLED) {
+      await conn.run('INSTALL httpfs FROM core; LOAD httpfs;');
+      const secretParts: string[] = [
+        `TYPE S3`,
+        `REGION '${escapeSqlString(config.S3?.REGION ?? 'eu-west-1')}'`,
+      ];
+      if (config.S3?.ACCESS_KEY) {
+        secretParts.push(`KEY_ID '${escapeSqlString(config.S3.ACCESS_KEY)}'`);
+      }
+      if (config.S3?.SECRET_KEY) {
+        secretParts.push(`SECRET '${escapeSqlString(config.S3.SECRET_KEY)}'`);
+      }
+      if (config.S3?.ENDPOINT) {
+        secretParts.push(`ENDPOINT '${escapeSqlString(config.S3.ENDPOINT)}'`);
+      }
+      await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
+    }
+
+    // Support Postgres : chargement de l'extension si au moins un catalogue l'utilise
+    if (catalogs.some((c) => c.type === 'postgres')) {
+      await conn.run('INSTALL postgres FROM core; LOAD postgres;');
+    }
+  } catch (error) {
+    // Instance à moitié configurée : fermeture avant de propager l'erreur
+    conn.closeSync();
+    instance.closeSync();
+    throw error;
+  }
+  conn.closeSync();
+
+  return instance;
+};
+
 // ─── Classe DuckDBPool ────────────────────────────────────────────────────────
 
 /**
@@ -228,6 +286,8 @@ class DuckDBPool {
   // Délai max d'attente du drainage des requêtes en vol avant fermeture forcée.
   // Doit dépasser le plus long timeout de requête (cf. API.TIMEOUTS, max 15s).
   private readonly drainTimeout: number;
+  // Drainage de l'instance retirée par le dernier reload (résolu une fois fermée)
+  private lastDrain: Promise<void>;
 
   // Initialisation
   constructor(poolConfig: PoolConfig) {
@@ -255,6 +315,8 @@ class DuckDBPool {
     this.reloadOnePromises = new Map();
     // Délai de drainage configurable (défaut 30s, > timeout max de requête)
     this.drainTimeout = poolConfig.drainTimeout ?? 30000;
+    // Aucun drainage en cours au départ
+    this.lastDrain = Promise.resolve();
   }
 
   /**
@@ -265,47 +327,24 @@ class DuckDBPool {
    * @returns A newly created DuckDB instance with every catalog attached.
    */
   private async buildInstance(): Promise<DuckDBInstance> {
-    // Création d'une instance DuckDB en mémoire partagée
-    const instance = await DuckDBInstance.create(':memory:');
+    // Instance configurée (extensions, secrets) sans catalogue attaché
+    const instance = await createConfiguredInstance(this.catalogs);
     const conn = await instance.connect();
 
     try {
-      // Chargement de ducklake
-      await conn.run('LOAD ducklake;');
-
-      // Support S3 : chargement de httpfs si activé dans la config
-      if (config.S3?.ENABLED) {
-        await conn.run('INSTALL httpfs FROM core; LOAD httpfs;');
-        const secretParts: string[] = [
-          `TYPE S3`,
-          `REGION '${escapeSqlString(config.S3?.REGION ?? 'eu-west-1')}'`,
-        ];
-        if (config.S3?.ACCESS_KEY) {
-          secretParts.push(`KEY_ID '${escapeSqlString(config.S3.ACCESS_KEY)}'`);
-        }
-        if (config.S3?.SECRET_KEY) {
-          secretParts.push(`SECRET '${escapeSqlString(config.S3.SECRET_KEY)}'`);
-        }
-        if (config.S3?.ENDPOINT) {
-          secretParts.push(`ENDPOINT '${escapeSqlString(config.S3.ENDPOINT)}'`);
-        }
-        await conn.run(`CREATE OR REPLACE SECRET _api_s3 (${secretParts.join(', ')});`);
-      }
-
-      // Support Postgres : chargement de l'extension si au moins un catalogue l'utilise
-      if (this.catalogs.some((c) => c.type === 'postgres')) {
-        await conn.run('INSTALL postgres FROM core; LOAD postgres;');
-      }
-
       // Attachement de chaque catalogue DuckLake (fichier ou Postgres)
       for (const catalog of this.catalogs) {
         for (const statement of buildCatalogSql(catalog)) {
           await conn.run(statement);
         }
       }
-    } finally {
+    } catch (error) {
+      // Instance inutilisable : fermeture avant de propager l'erreur
       conn.closeSync();
+      instance.closeSync();
+      throw error;
     }
+    conn.closeSync();
 
     return instance;
   }
@@ -380,8 +419,9 @@ class DuckDBPool {
         this.instancePromise = Promise.resolve(newInstance);
         this.pool = [];
 
-        // 3. Drainage et fermeture de l'ancienne instance en arrière-plan
-        void this.drainAndClose(oldInstance, oldConnections);
+        // 3. Drainage et fermeture de l'ancienne instance en arrière-plan ; la
+        // promesse est conservée pour awaitDrain() (montée de version du cache)
+        this.lastDrain = this.drainAndClose(oldInstance, oldConnections);
 
         dbLogger.database('DuckDB instance reloaded successfully', {
           drainingConnections: oldConnections.length,
@@ -393,6 +433,19 @@ class DuckDBPool {
     })();
 
     return this.reloadPromise;
+  }
+
+  /**
+   * Wait until the instance retired by the last {@link reload} is drained and closed.
+   *
+   * After it resolves, no connection of the retired instance is still running a
+   * query, so every connection in use reads the current catalog state. The
+   * database manager awaits it before switching the cache keys to the new data
+   * version: old data can then never be written under a new-version key.
+   * Resolves immediately when no reload has happened.
+   */
+  async awaitDrain(): Promise<void> {
+    await this.lastDrain;
   }
 
   /**

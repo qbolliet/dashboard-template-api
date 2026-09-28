@@ -5,6 +5,7 @@ import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { withCache } from '../utils/cache.js';
+import { buildCacheKey } from '../cache/cache-keys.js';
 import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
@@ -61,9 +62,9 @@ interface BaseLoaderConfig {
   schema?: string | null;
   /**
    * Result variant sharing the same cache prefix (e.g. 'with-count', 'with-metadata').
-   * Included in the cache key after the schema so that loaders returning different
-   * shapes for the same parameters never share an entry, while the invalidation
-   * patterns `prefix:catalog:schema:*` still match.
+   * Included in the cache key after the versioned schema so that loaders returning
+   * different shapes for the same parameters never share an entry, while the
+   * invalidation patterns `prefix:catalog:schema@*:*` still match.
    */
   cacheVariant?: string | null;
 }
@@ -260,7 +261,7 @@ class BaseQueryLoader {
    * in the key rather than being bound to the instance (e.g. cross-catalog
    * loaders with `catalogId: null`) override this so their cache entries land
    * under the catalog/schema they actually read — which is what makes
-   * `CacheInvalidationManager`'s per-catalog patterns (`<type>:<catalog>:<schema>:*`)
+   * `CacheInvalidationManager`'s per-catalog patterns (`<type>:<catalog>:<schema>@*:*`)
    * match them.
    *
    * @param _key - The DataLoader key about to be cached.
@@ -282,10 +283,13 @@ class BaseQueryLoader {
    * loader error: those belong to the caller (a GraphQLError must reach the
    * client, and retrying a failed query would only run it twice).
    *
-   * The cache key is `<prefix>:<catalog>:<schema>:<variant><hash>`, where
-   * catalog/schema come from {@link cacheNamespace} (always resolved, never
-   * 'default'/'_' placeholders — so `CacheInvalidationManager`'s per-catalog
-   * patterns match every entry) and hash is the sha1 of the key object,
+   * The cache key is `<prefix>:<catalog>:<schema>@<version>:<variant><hash>`,
+   * where catalog/schema come from {@link cacheNamespace} (always resolved,
+   * never 'default'/'_' placeholders — so `CacheInvalidationManager`'s
+   * per-catalog patterns match every entry), version is the data version the
+   * live instance serves for that schema (`DatabaseManager.getDataVersion`: a
+   * catalog update moves every key of the schema, older entries simply expire)
+   * and hash is the sha1 of the key object,
    * canonicalized (sorted, undefined fields dropped, catalog/schema
    * overwritten with their resolved form) so equivalent keys always collide
    * onto the same entry instead of the raw `JSON.stringify(key)` used before.
@@ -316,7 +320,6 @@ class BaseQueryLoader {
       // doivent jamais partager une entrée de cache (colonnes et modalités différentes).
       // La variante sépare les loaders d'un même préfixe renvoyant des formes différentes.
       const { catalog, schema } = this.cacheNamespace(key);
-      const variant = this.cacheVariant ? `${this.cacheVariant}:` : '';
       const keyForHash =
         key !== null && typeof key === 'object' && !Array.isArray(key)
           ? { ...(key as Record<string, unknown>), catalog, schema }
@@ -324,7 +327,12 @@ class BaseQueryLoader {
       const hash = createHash('sha1')
         .update(JSON.stringify(canonicalize(keyForHash)))
         .digest('hex');
-      const cacheKey = `${this.cachePrefix}:${catalog}:${schema}:${variant}${hash}`;
+      // Version des données servies dans l'espace de noms : une mise à jour du
+      // catalogue rend les anciennes entrées inaccessibles (expiration par TTL)
+      const cacheKey = buildCacheKey(
+        { prefix: this.cachePrefix, catalog, schema, variant: this.cacheVariant ?? '', hash },
+        (c, s) => databaseManager.getDataVersion(c, s),
+      );
       return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeoutFor(key));
     } catch (error) {
       // L'erreur vient du loader : elle appartient à l'appelant

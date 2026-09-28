@@ -69,7 +69,7 @@ SECURITY:
     BURST_WINDOW_MS: 60000
 ```
 
-The 11th request from one IP within a minute gets a `429` with `Retry-After`. The nightly data update (`/api/catalog/reload` then `/api/cache/invalidate-all`) fits well within this budget. Raise it if you script many per-catalog reloads in a row. The counters are per pod, as for the public limiter.
+The 11th request from one IP within a minute gets a `429` with `Retry-After`. The nightly data update no longer calls the admin routes (each pod detects it, see [Data refresh](../deployment/data-refresh)); an occasional manual `/api/catalog/reload` fits well within this budget. Raise it if you script many per-catalog reloads in a row. The counters are per pod, as for the public limiter.
 
 ## Query complexity
 

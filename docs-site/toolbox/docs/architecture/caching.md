@@ -44,11 +44,44 @@ TTL values per data type (`config/cache.yaml`):
 
 All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) to allow coexistence with other apps in the same Redis instance.
 
+## Versioned namespaces
+
+Every key is built by `BaseQueryLoader.loadWithCache` through
+[`src/cache/cache-keys.ts`](https://github.com/qbolliet/dashboard-template-api/blob/main/src/cache/cache-keys.ts):
+
+```
+<type>:<catalog>:<schema>@<version>:<variant><hash>
+facts:macroeconomics:main@1790563200000000:with-count:3f2a…
+```
+
+- `<catalog>` and `<schema>` are always resolved (never a placeholder), so the invalidation
+  patterns match every entry.
+- `<version>` is the data version the pod **serves** for that schema:
+  `epoch_us(dataset_metadata.updated_at)`, read on the live DuckDB instance at startup and
+  after every reload (`none` when unreadable).
+- A key reading several schemas (cross-catalog comparison) versions each side:
+  `a+b:s1@<v1>+s2@<v2>`, so an update of either side moves it.
+- `<hash>` is the sha1 of the canonical key object (sorted fields, `undefined` dropped).
+
+When a catalog update is detected (see
+[Data refresh](../deployment/data-refresh#how-a-replica-sees-an-update)), each pod rebuilds
+its instance and then publishes the new version: its reads and writes move to new keys, and
+entries computed on older data are never read again — no `SCAN`, no `DEL`. They expire by
+their TTL, so Redis briefly holds both versions. A pod that has not switched yet keeps using
+the old keys, which is consistent with the old data it still serves; the new version is
+published only once the retired instance is drained, so old data can never be written under
+a new-version key.
+
 ## Cache invalidation
 
-When a DuckLake file is updated, the cache must be invalidated to prevent stale data. The API exposes three admin-protected HTTP endpoints (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidate/:database`, `GET /api/cache/stats`) that perform a non-blocking Redis `SCAN` + `DEL` over the per-database key namespaces.
+A catalog update no longer requires any invalidation. The admin-protected endpoints remain
+for a manual flush (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidate/:catalog`,
+`POST /api/cache/invalidate/:catalog/:schema`, `GET /api/cache/stats`): a non-blocking Redis
+`SCAN` + `DEL` over the per-(catalog, schema) patterns, which match every data version
+(`*:<catalog>:<schema>@*:*`, or `*:<catalog>:*:*` for a whole catalog).
 
-See the [Data refresh deployment guide](../deployment/data-refresh) for endpoint reference, in-cluster `CronJob` patterns, the Python updater example, monitoring and troubleshooting.
+See the [Data refresh deployment guide](../deployment/data-refresh) for the refresh model,
+the endpoint reference, monitoring and troubleshooting.
 
 ## HTTP cache headers
 
@@ -59,4 +92,4 @@ Cache-Control: public, max-age=300
 Vary: accept-encoding, accept
 ```
 
-`max-age` mirrors the Redis TTL for the queried data type. CDN layers (Cloudflare, Fastly, etc.) can cache responses without any additional configuration.
+`max-age` mirrors the Redis TTL for the queried data type. CDN layers (Cloudflare, Fastly, etc.) can cache responses without any additional configuration. These copies live outside the API: after a data update, a CDN or browser may still serve a response for up to `max-age`.

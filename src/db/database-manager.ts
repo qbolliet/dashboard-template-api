@@ -42,6 +42,61 @@ export interface DatabaseStats {
   allowCrossCatalog: boolean;
 }
 
+/**
+ * Data version of one catalog/schema, as served by the live instance.
+ *
+ * Read from `dataset_metadata.updated_at`, which the writer stamps inside the
+ * transaction of every write: it changes exactly when the data does.
+ */
+export interface DataVersion {
+  /** `epoch_us(updated_at)` as a digit string, or {@link NO_DATA_VERSION}. */
+  version: string;
+  /** `updated_at` as ISO 8601 UTC, or null when unreadable. */
+  updatedAt: string | null;
+}
+
+/**
+ * Explicit settings replacing the configuration, so that several independent
+ * managers (several "API instances") can live in one process — used by tests.
+ */
+export interface DatabaseManagerOptions {
+  /** Catalog entries to attach, used as is (no path resolution). */
+  catalogs: CatalogEntry[];
+  /** Schema allow-list per catalog; a catalog without entry adopts the discovery. */
+  schemas?: Record<string, string[]>;
+  /** Default catalog (defaults to the first entry). */
+  defaultCatalog?: string;
+  /** Allowed catalogs (defaults to every entry). */
+  allowedCatalogs?: string[];
+  /** Whether cross-catalog queries are allowed (defaults to false). */
+  allowCrossCatalog?: boolean;
+}
+
+/** Version segment used when a schema has no readable `updated_at`. */
+export const NO_DATA_VERSION = 'none';
+
+// Lecture du marqueur de version : updated_at en microsecondes (chiffres seuls,
+// sans « : » qui casserait les motifs de clés Redis) et en ISO pour les métriques
+export const DATA_VERSION_SELECT =
+  'schema_version, ' +
+  'CAST(epoch_us(updated_at) AS VARCHAR) AS data_version, ' +
+  "strftime(updated_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS updated_at_iso";
+
+/**
+ * Decodes the version columns of a `dataset_metadata` row.
+ *
+ * @param row - Row read with {@link DATA_VERSION_SELECT}, or undefined when the table is empty.
+ * @returns The data version (NO_DATA_VERSION when `updated_at` is NULL or the row missing).
+ */
+export const toDataVersion = (row: Record<string, unknown> | undefined): DataVersion => {
+  const raw = row?.['data_version'];
+  const iso = row?.['updated_at_iso'];
+  return {
+    version: raw === null || raw === undefined ? NO_DATA_VERSION : String(raw),
+    updatedAt: iso === null || iso === undefined ? null : String(iso),
+  };
+};
+
 // ─── Classe DatabaseManager ───────────────────────────────────────────────────
 
 /**
@@ -85,17 +140,36 @@ class DatabaseManager {
   // Sert au reconcilier post-ATTACH : ces catalogues sont restreints à l'intersection
   // (config ∩ découverte), tandis que les autres adoptent la liste découverte.
   private readonly explicitlyConfiguredSchemas: Set<string>;
+  // Version des données servie par l'instance vivante, par "catalogue.schéma".
+  // Remplacée d'un bloc après chaque (re)lecture : jamais d'état partiel.
+  private dataVersions: Map<string, DataVersion>;
+  // Réglages explicites remplaçant la configuration (null = configuration)
+  private readonly options: DatabaseManagerOptions | null;
 
-  constructor() {
-    // Configuration du routage des catalogues depuis le fichier de config
-    this.defaultCatalog = config.CATALOG_ROUTING.DEFAULT_CATALOG;
+  /**
+   * @param options - Explicit settings replacing the configuration; omit to read
+   *   `config.CATALOGS` / `config.CATALOG_ROUTING` (the application singleton).
+   */
+  constructor(options: DatabaseManagerOptions | null = null) {
+    this.options = options;
 
-    // ALLOWED_CATALOGS peut être une string JSON ou un tableau selon le config-loader
-    const rawAllowed = config.CATALOG_ROUTING.ALLOWED_CATALOGS;
-    this.allowedCatalogs =
-      typeof rawAllowed === 'string' ? (JSON.parse(rawAllowed) as string[]) : rawAllowed;
+    if (options) {
+      // Réglages explicites : catalogues fournis tels quels
+      const aliases = options.catalogs.map((c) => c.alias);
+      this.defaultCatalog = options.defaultCatalog ?? aliases[0] ?? '';
+      this.allowedCatalogs = options.allowedCatalogs ?? aliases;
+      this.allowCrossCatalog = options.allowCrossCatalog ?? false;
+    } else {
+      // Configuration du routage des catalogues depuis le fichier de config
+      this.defaultCatalog = config.CATALOG_ROUTING.DEFAULT_CATALOG;
 
-    this.allowCrossCatalog = config.CATALOG_ROUTING.ALLOW_CROSS_CATALOG_QUERIES;
+      // ALLOWED_CATALOGS peut être une string JSON ou un tableau selon le config-loader
+      const rawAllowed = config.CATALOG_ROUTING.ALLOWED_CATALOGS;
+      this.allowedCatalogs =
+        typeof rawAllowed === 'string' ? (JSON.parse(rawAllowed) as string[]) : rawAllowed;
+
+      this.allowCrossCatalog = config.CATALOG_ROUTING.ALLOW_CROSS_CATALOG_QUERIES;
+    }
 
     // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
     this.sharedPool = null;
@@ -106,14 +180,35 @@ class DatabaseManager {
     this.configuredSchemas = {};
     // Trace des catalogues à allow-list stricte (SCHEMAS explicitement fourni)
     this.explicitlyConfiguredSchemas = new Set();
+    // Aucune version connue avant la première lecture (initSchemas)
+    this.dataVersions = new Map();
 
     // Initialisation automatique
     this.initializeDatabases();
   }
 
   /**
+   * Build the catalog entries from explicit options, recording their schema lists.
+   *
+   * @param options - Explicit settings given to the constructor.
+   * @returns The catalog entries, unchanged.
+   */
+  private catalogsFromOptions(options: DatabaseManagerOptions): CatalogEntry[] {
+    for (const catalog of options.catalogs) {
+      const listed = options.schemas?.[catalog.alias];
+      this.schemas[catalog.alias] = listed ? [...listed] : ['main'];
+      this.configuredSchemas[catalog.alias] = listed ? [...listed] : ['main'];
+      if (listed) {
+        this.explicitlyConfiguredSchemas.add(catalog.alias);
+      }
+    }
+    return [...options.catalogs];
+  }
+
+  /**
    * Build the catalog array and create the single shared DuckDB pool.
-   * Each entry in config.CATALOGS becomes an ATTACH in the shared DuckDB instance.
+   * Each entry in config.CATALOGS (or in the explicit options) becomes an ATTACH
+   * in the shared DuckDB instance.
    */
   initializeDatabases(): void {
     dbLogger.database('Initializing database manager', {
@@ -123,9 +218,10 @@ class DatabaseManager {
     });
 
     // Construction de la liste des catalogues DuckLake à attacher
-    const catalogs: CatalogEntry[] = [];
+    const catalogs: CatalogEntry[] = this.options ? this.catalogsFromOptions(this.options) : [];
+    const configuredCatalogs = this.options ? {} : config.CATALOGS;
 
-    for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
+    for (const [catalogId, catalogConfig] of Object.entries(configuredCatalogs)) {
       const type = catalogConfig.TYPE ?? 'file';
 
       // Liste des schémas du catalogue (SCHEMAS), défaut ['main']
@@ -409,7 +505,8 @@ class DatabaseManager {
    * Rebuilds the shared DuckDB instance so the API picks up data refreshed by an
    * external process (e.g. a nightly DuckLake update) without a pod restart.
    * In-flight requests drain on the old instance; new requests use the fresh
-   * catalog. Resolves once the new instance is ready.
+   * catalog. Resolves once the old instance is closed and the data versions
+   * (hence the cache namespaces) have been re-read on the new one.
    *
    * @throws {Error} If the shared pool is not initialized or the rebuild fails.
    */
@@ -424,7 +521,13 @@ class DatabaseManager {
     // Re-chargement des catalogues
     await this.sharedPool.reload();
 
+    // Attente de la fermeture de l'ancienne instance AVANT de relire les
+    // versions : une fois la version montée, plus aucune connexion ne lit
+    // l'ancien état, donc aucune donnée périmée sous une clé de nouvelle version
+    await this.sharedPool.awaitDrain();
+
     // Ré-application de la politique d'allow-list contre la nouvelle découverte
+    // (relit aussi les versions de données servies)
     await this.initSchemas();
 
     // Logging
@@ -551,29 +654,83 @@ class DatabaseManager {
 
     resetSchemaVersions();
 
+    // Nouvelle table des versions servies, assignée d'un bloc à la fin
+    const dataVersions = new Map<string, DataVersion>();
+
     const connection = await this.sharedPool.acquire();
     try {
       for (const [catalogId, schemaList] of Object.entries(this.schemas)) {
         for (const schema of schemaList) {
           let version: number | null = null;
+          let dataVersion: DataVersion = { version: NO_DATA_VERSION, updatedAt: null };
           try {
+            // Une seule lecture pour la version du format et celle des données
             const rows = await connection.all(
-              `SELECT schema_version FROM ${qualifiedTable(catalogId, schema, 'dataset_metadata')} LIMIT 1`,
+              `SELECT ${DATA_VERSION_SELECT} FROM ${qualifiedTable(catalogId, schema, 'dataset_metadata')} LIMIT 1`,
             );
             const raw = rows[0]?.schema_version;
             // Une table présente mais vide vaut une table absente (spec §2.3 :
             // exactement une ligne par schéma).
             version = raw === null || raw === undefined ? null : Number(raw);
+            dataVersion = toDataVersion(rows[0]);
           } catch {
             // Table dataset_metadata absente : catalogue à l'ancien format
             version = null;
           }
           recordSchemaVersion(catalogId, schema, version);
+          dataVersions.set(`${catalogId}.${schema}`, dataVersion);
         }
       }
     } finally {
       this.sharedPool.release(connection);
     }
+
+    // Bascule atomique : les clés de cache suivantes portent la nouvelle version
+    this.dataVersions = dataVersions;
+  }
+
+  /**
+   * Returns the data version served for a catalog/schema.
+   *
+   * It is the `updated_at` marker read on the live instance at the last
+   * (re)attach, and it enters every Redis key of that schema
+   * (`<type>:<catalog>:<schema>@<version>:…`): once it changes, entries
+   * computed on older data are no longer reachable.
+   *
+   * @param catalogId - Catalog alias.
+   * @param schema - Schema name within the catalog.
+   * @returns The version segment, or NO_DATA_VERSION when never read.
+   */
+  getDataVersion(catalogId: string, schema: string): string {
+    return this.dataVersions.get(`${catalogId}.${schema}`)?.version ?? NO_DATA_VERSION;
+  }
+
+  /**
+   * Returns every data version served, for diagnostics and metrics.
+   *
+   * @returns Nested record catalog → schema → data version.
+   */
+  getDataVersions(): Record<string, Record<string, DataVersion>> {
+    const result: Record<string, Record<string, DataVersion>> = {};
+    for (const [catalogId, schemaList] of Object.entries(this.schemas)) {
+      result[catalogId] = {};
+      for (const schema of schemaList) {
+        result[catalogId][schema] = this.dataVersions.get(`${catalogId}.${schema}`) ?? {
+          version: NO_DATA_VERSION,
+          updatedAt: null,
+        };
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Returns the catalog entries attached to the shared pool.
+   *
+   * @returns Copy of the catalog entries (empty when the pool is closed).
+   */
+  getCatalogEntries(): CatalogEntry[] {
+    return [...(this.sharedPool?.catalogs ?? [])];
   }
 
   /**

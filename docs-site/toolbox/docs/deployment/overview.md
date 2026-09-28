@@ -16,13 +16,6 @@ This section covers running the API in production. Three deployment modes are su
 ## Architecture
 
 ```
-                         ┌───────────────────────┐
-                         │  External Python      │
-                         │  DuckLake updater     │
-                         └──────────┬────────────┘
-                                    │ POST /api/cache/invalidate-all
-                                    │ x-admin-key
-                                    ▼
    ┌──────────┐         ┌──────────────────────────┐
    │ Internet │ ──────▶ │ Ingress (TLS via         │
    └──────────┘         │ cert-manager)            │
@@ -49,8 +42,17 @@ This section covers running the API in production. Three deployment modes are su
        │ DuckLake  │  │ master  │  │ + Secret  │
        │ catalogs  │  │ (Bitnami│  │           │
        │ + parquet │  │  chart) │  │           │
-       └───────────┘  └─────────┘  └───────────┘
+       └─────▲─────┘  └─────────┘  └───────────┘
+             │ writes catalog + Parquet (nightly)
+       ┌─────┴───────────────┐
+       │ External DuckLake   │
+       │ updater (Python)    │
+       └─────────────────────┘
 ```
+
+The updater only writes to storage: every replica probes the catalogs and reloads itself
+when `dataset_metadata.updated_at` changes, and its Redis keys follow the new data version
+(see [Data refresh](./data-refresh)).
 
 ## Components
 

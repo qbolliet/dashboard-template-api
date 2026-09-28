@@ -16,8 +16,9 @@ const cacheLogger = createContextLogger({
 /**
  * Generates a Redis key glob pattern for a (catalog, schema?) pair.
  *
- * When `schema` is null/undefined, the resulting pattern matches **every**
- * schema of the catalog (the schema segment becomes a `*`). When both
+ * With a `schema`, the pattern matches every data version of that schema
+ * (`<schema>@*`). When `schema` is null/undefined, the resulting pattern
+ * matches **every** schema of the catalog (the schema segment becomes a `*`). When both
  * arguments are null, the pattern matches the legacy 'default' catalog.
  *
  * @param catalog - Catalog identifier, or null/undefined to use 'default'.
@@ -66,8 +67,11 @@ type CacheStats = Record<string, CatalogStats>;
  *  - **all**: every configured catalog in turn
  *
  * Cache keys are written by loaders in the form
- * `<type>:<catalog>:<schema>:<queryKey>` (see `BaseQueryLoader.loadWithCache`),
- * so the patterns here align with that layout. `scanKeys` accounts for the
+ * `<type>:<catalog>:<schema>@<version>:<queryKey>` (see
+ * `BaseQueryLoader.loadWithCache`), so the patterns here align with that
+ * layout and match every data version. A catalog update needs no invalidation
+ * — the version moves and older entries expire by TTL — but these
+ * routes remain for a manual flush. `scanKeys` accounts for the
  * client's configured `keyPrefix`, which ioredis applies to GET/SET/DEL but
  * not to SCAN's MATCH pattern nor to the keys SCAN returns.
  */
@@ -77,20 +81,20 @@ class CacheInvalidationManager {
 
   constructor() {
     // Motifs de clés : segment catalog obligatoire, segment schema soit explicite
-    // soit wildcard (=> tous les schémas du catalogue).
+    // (toutes versions de données confondues : `<schema>@*`) soit wildcard
+    // (=> tous les schémas du catalogue).
+    const namespace = (catalog?: string | null, schema?: string | null): string =>
+      `${catalog || 'default'}:${schema ? `${schema}@*` : '*'}:*`;
     this.keyPatterns = {
-      metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
-      catalogMetadata: (catalog, schema) =>
-        `catalog-metadata:${catalog || 'default'}:${schema || '*'}:*`,
-      datasetInfo: (catalog, schema) => `dataset-info:${catalog || 'default'}:${schema || '*'}:*`,
-      facts: (catalog, schema) => `facts:${catalog || 'default'}:${schema || '*'}:*`,
-      aggregatedFacts: (catalog, schema) =>
-        `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,
-      selectOptions: (catalog, schema) =>
-        `select-options:${catalog || 'default'}:${schema || '*'}:*`,
-      fieldStats: (catalog, schema) => `field-stats:${catalog || 'default'}:${schema || '*'}:*`,
+      metadata: (catalog, schema) => `metadata:${namespace(catalog, schema)}`,
+      catalogMetadata: (catalog, schema) => `catalog-metadata:${namespace(catalog, schema)}`,
+      datasetInfo: (catalog, schema) => `dataset-info:${namespace(catalog, schema)}`,
+      facts: (catalog, schema) => `facts:${namespace(catalog, schema)}`,
+      aggregatedFacts: (catalog, schema) => `aggregated-facts:${namespace(catalog, schema)}`,
+      selectOptions: (catalog, schema) => `select-options:${namespace(catalog, schema)}`,
+      fieldStats: (catalog, schema) => `field-stats:${namespace(catalog, schema)}`,
       // Tous les types pour un (catalog, schema?) donné
-      allCatalog: (catalog, schema) => `*:${catalog || 'default'}:${schema || '*'}:*`,
+      allCatalog: (catalog, schema) => `*:${namespace(catalog, schema)}`,
     };
   }
 

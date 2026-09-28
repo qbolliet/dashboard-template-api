@@ -73,9 +73,10 @@ Routing in resolvers:
 - The schema argument is validated against the per-catalog allow-list — an
   unknown schema returns a `GraphQLError` with the list of allowed values.
 
-Reload semantics: after `POST /api/catalog/reload` or
-`POST /api/catalog/reload/{name}`, the discovery query is re-run and the
-allow-list is re-reconciled. No restart needed.
+Reload semantics: after every reload — automatic (catalog freshness probe),
+`POST /api/catalog/reload` or `POST /api/catalog/reload/{name}` — the discovery
+query is re-run, the allow-list is re-reconciled and the data versions are
+re-read. No restart needed.
 
 ## Routing
 
@@ -111,6 +112,23 @@ DATABASE:
 | `MAX_CONNECTIONS`  | `5`         | Maximum concurrent DuckDB connections per catalog |
 | `ACQUIRE_TIMEOUT`  | `60 000 ms` | Maximum wait for a connection from the pool       |
 | `POOL_RETRY_DELAY` | `500 ms`    | Delay between pool acquire retries                |
+
+## Catalog freshness
+
+```yaml
+CATALOG_FRESHNESS:
+  ENABLED: ${CATALOG_FRESHNESS_ENABLED:-true}
+  INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
+```
+
+| Key           | Default     | Description                                                                                |
+| ------------- | ----------- | ------------------------------------------------------------------------------------------ |
+| `ENABLED`     | `true`      | Each pod probes its catalogs and reloads itself when `dataset_metadata.updated_at` changed |
+| `INTERVAL_MS` | `60 000 ms` | Interval between two probes: the maximum delay before a pod sees an update (plus reload)   |
+
+With the probe enabled, a catalog update reaches every replica without any call from the
+updater, and the Redis keys switch to the new data version. Disable it only for a single
+replica that is reloaded explicitly. See [Data refresh](../deployment/data-refresh).
 
 ## S3 storage (optional)
 

@@ -14,14 +14,14 @@ on the [API & Data site](https://qbolliet.github.io/dashboard-template-api/).
 
 ## What is in the Toolbox
 
-| Section                                             | Content                                                                                             |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| [Getting Started](./getting-started/installation)   | Install the server, configure it, run the tests, build this documentation                           |
-| [Deployment](./deployment/overview)                 | Docker, Kubernetes / Helm, and the nightly data refresh (`/api/catalog/reload`, cache invalidation) |
-| [Configuration Reference](./configuration/overview) | Every YAML key of `config/` and its environment variable                                            |
-| [Architecture](./architecture/overview)             | Security layers, caching, data loading                                                              |
-| [API versioning](./api-versioning)                  | The `schema.graphql` contract, commit conventions and the deprecation policy                        |
-| [Code Reference](/code-reference)                   | TypeDoc pages generated from the TypeScript sources                                                 |
+| Section                                             | Content                                                                                              |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| [Getting Started](./getting-started/installation)   | Install the server, configure it, run the tests, build this documentation                            |
+| [Deployment](./deployment/overview)                 | Docker, Kubernetes / Helm, and the nightly data refresh (detected by every replica, versioned cache) |
+| [Configuration Reference](./configuration/overview) | Every YAML key of `config/` and its environment variable                                             |
+| [Architecture](./architecture/overview)             | Security layers, caching, data loading                                                               |
+| [API versioning](./api-versioning)                  | The `schema.graphql` contract, commit conventions and the deprecation policy                         |
+| [Code Reference](/code-reference)                   | TypeDoc pages generated from the TypeScript sources                                                  |
 
 ## Reusing it in another project
 

@@ -32,6 +32,10 @@ process.env.PUBLIC_FINANCE_DATA_PATH = 'data/test-public-finance_data/';
 process.env.ALLOWED_CATALOGS = '["default", "macroeconomics", "public_finance"]';
 process.env.ALLOW_CROSS_CATALOG_QUERIES = 'true';
 
+// Sondage des catalogues désactivé : aucun timer de fond pendant les tests
+// (les tests du sondeur construisent leurs propres moniteurs)
+process.env.CATALOG_FRESHNESS_ENABLED = 'false';
+
 // Configuration Redis pour les tests
 process.env.REDIS_HOST = 'localhost';
 process.env.REDIS_PORT = '6379';

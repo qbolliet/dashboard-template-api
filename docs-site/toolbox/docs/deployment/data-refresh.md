@@ -5,341 +5,243 @@ sidebar_position: 4
 
 # Data refresh
 
-When DuckLake catalogs are refreshed (typically by a nightly external process), the API must do **two** things before subsequent queries see the new data:
-
-1. **Reload the catalog** — the API attaches each DuckLake catalog to a single in-memory DuckDB instance **once, at startup**, and keeps that instance for the whole process lifetime. A running pod therefore keeps serving the snapshot it attached; it does **not** pick up a refreshed catalog automatically. `POST /api/catalog/reload` rebuilds the instance against the latest catalog (on disk or S3).
-2. **Invalidate the Redis cache** — Redis is an external service that survives both the catalog reload and any pod restart. Until it is flushed, the API keeps serving cached results computed from the old catalog.
-
-The order matters: **reload first, invalidate second** (see [Refresh sequence](#refresh-sequence)).
-
-The API is responsible for catalog and cache state. The external updater is only responsible for refreshing DuckLake files and triggering reload + invalidation via HTTP — no shared filesystem or shared library is needed.
-
-:::caution Why a reload is required
-Because the catalog is attached once and held in memory, invalidating Redis alone is not enough: the next query repopulates the cache from the **same stale in-memory catalog**.
-:::
-
-## Architecture
-
-After refreshing the DuckLake files, the external updater drives the two refresh steps through authenticated endpoints, **in order**: first a reload (full `/api/catalog/reload` or per-catalog `/api/catalog/reload/:catalog`), then a cache invalidation at the matching granularity — all catalogs, one catalog, or one (catalog, schema) pair.
+When DuckLake catalogs are refreshed (typically by a nightly external process), **every API
+replica picks up the new data on its own**, within one probe interval. The updater has
+nothing to call: it writes the catalog and the Parquet files, and stops there.
 
 ```
-┌─────────────────────┐        ┌────────────────────────────────────────────────┐
-│ External updater    │        │  API (Kubernetes / Docker)                     │
-│ (Python script,     │        │                                                │
-│  cron, CI job…)     │  ①──▶  │  POST /api/catalog/reload                      │
-│                     │        │  POST /api/catalog/reload/:catalog              │
-│  1. Refresh         │        │  ┌────────────────────────────────────────┐    │
-│     DuckLake        │        │  │ Full rebuild (all catalogs)            │    │
-│  2. Reload catalog  │        │  │ or DETACH+ATTACH one catalog           │    │
-│  3. Invalidate      │        │  └────────────────────────────────────────┘    │
-│     cache           │        │                                                │
-│                     │  ②──▶  │  POST /api/cache/invalidate-all                │
-│                     │        │  POST /api/cache/invalidate/:catalog           │
-│                     │        │  POST /api/cache/invalidate/:catalog/:schema   │
-│                     │        │  ┌────────────────────────────────────────┐    │
-│                     │        │  │ Redis SCAN + DEL                       │    │
-│                     │        │  │ all catalogs · one catalog ·           │    │
-│                     │        │  │ one (catalog, schema) pair             │    │
-│                     │        │  └────────────────────────────────────────┘    │
-└─────────────────────┘        └────────────────────────────────────────────────┘
+1. Updater writes the new DuckLake catalog + Parquet (to disk, S3 or Postgres)
+   — dataset_metadata.updated_at is stamped in the same transaction
+2. Nothing else. Within CATALOG_FRESHNESS_INTERVAL_MS (60 s by default)
+   every pod detects the new marker, reloads itself and switches its
+   Redis keys to the new data version.
 ```
 
-Step ① rebuilds the shared in-memory DuckDB instance — either all catalogs at once (`/reload`) or a single catalog (`/reload/:catalog`) — so the updated catalog is served (the swap is zero-interruption — see [Endpoints](#endpoints)). Step ② then flushes Redis at the appropriate granularity — all catalogs, one catalog, or one (catalog, schema) pair — so cache misses recompute against the freshly attached catalog.
+`POST /api/catalog/reload` still exists as an optional accelerator, and the cache
+invalidation routes remain for a manual flush, but neither is part of the refresh any more.
 
-Cache isolation is per (catalog, schema): each (catalog, schema) pair has its own Redis key namespace, so invalidating one never affects another. Invalidation is a non-blocking `SCAN` + `DEL` pass over the per-(catalog, schema) key patterns:
+## How a replica sees an update
 
+Each pod attaches its DuckLake catalogs to one in-memory DuckDB instance and keeps serving
+that state; Redis is shared by all pods. Two mechanisms keep them fresh without any call:
+
+1. **A periodic probe per pod** ([`src/db/catalog-freshness.ts`](https://github.com/qbolliet/dashboard-template-api/blob/main/src/db/catalog-freshness.ts)).
+   Every `CATALOG_FRESHNESS_INTERVAL_MS`, the pod creates a throw-away DuckDB instance,
+   attaches each catalog `READ_ONLY` afresh, reads `dataset_metadata.updated_at` of every
+   active schema, and closes the instance. When a marker differs from the version the pod
+   serves, it rebuilds its shared instance (`reloadCatalogs`: new instance built first,
+   atomic swap, old instance drained), then re-reads the markers **on the new live
+   instance**. Several catalogs changed at once cost a single rebuild.
+2. **Versioned cache keys.** The marker the live instance serves is part of every Redis key:
+   `<type>:<catalog>:<schema>@<version>:<variant><hash>`. As soon as a pod serves a new
+   version, it reads and writes new keys; entries computed on older data are no longer
+   reachable, without any `SCAN`, and expire by TTL. A pod that has not probed yet keeps
+   using the old keys, consistently with the old data it still serves — pods never mix
+   versions under one key. See [Caching](../architecture/caching#versioned-namespaces).
+
+### The version marker
+
+The marker is `dataset_metadata.updated_at`, per (catalog, schema), encoded as
+`epoch_us(updated_at)` (digits only, so it cannot break the `:`-separated key layout; `none`
+when the row or the table is missing). It was preferred to the DuckLake snapshot id:
+
+- **Per schema.** The snapshot id is per catalog: a write to one schema would move the keys
+  of every schema of the catalog.
+- **Atomic with the write.** dt-ducklake-manager stamps `updated_at` inside the transaction
+  of every write (`_touch_dataset_metadata`), so the marker and the data land in the same
+  snapshot.
+- **Blind to maintenance.** Compaction (`ducklake_merge_adjacent_files`) or
+  `ducklake_flush_inlined_data` commit snapshots without changing the data; with the
+  snapshot id, each would reload every pod and cold-start the cache.
+- **Free.** It is read by the query that already reads `schema_version` for the version guard.
+
+The snapshot id is readable too (`ducklake_current_snapshot('<alias>')` exists in the
+installed DuckLake), but any writer other than dt-ducklake-manager **must stamp
+`updated_at` on every write** (specification §2.3), or its writes will not be detected.
+
+### Why a fresh ATTACH for the probe
+
+Checked against DuckDB 1.5.2 / DuckLake `415a9ebd`:
+
+| Catalog backend                   | Writer while a reader is attached                          | Existing ATTACH sees the write | Fresh ATTACH sees it |
+| --------------------------------- | ---------------------------------------------------------- | ------------------------------ | -------------------- |
+| `.ducklake` file (DuckDB)         | Blocked by the reader's file lock (Windows: "file in use") | No                             | Yes                  |
+| SQLite metadata                   | Allowed                                                    | Yes                            | Yes                  |
+| Postgres metadata                 | Allowed                                                    | Not verified locally¹          | Yes                  |
+| `.ducklake` file on S3 (replaced) | Allowed (new object)                                       | No (attached at startup)       | Yes                  |
+
+¹ Expected yes, as for SQLite: DuckLake reads an external metadata database per
+transaction. The design does not depend on it — the probe always uses a fresh instance, and
+the rebuild always serves the latest state, whatever the backend.
+
+### Freshness guarantees
+
+- **Delay**: at most one interval plus the probe and rebuild time (well under a second for
+  a local catalog, longer over S3), plus the drain of in-flight requests (capped at 30 s).
+- **No stale data under a new key**: the new version is only published once the retired
+  instance is drained and closed, so no connection still reading the old state can write
+  under a new-version key.
+- **Read error ⇒ no switch**: if the probe cannot read a catalog (S3 or Postgres
+  unreachable, file locked by the writer), the pod keeps serving what it has, logs a warn,
+  and retries at the next interval. A failed rebuild is retried the same way.
+- **HTTP caching**: `/graphql` responses carry `Cache-Control: public, max-age=300`. A CDN or
+  a browser may serve a response up to that age after the switch.
+
+## Configuration
+
+```yaml
+# config/database.yaml
+CATALOG_FRESHNESS:
+  ENABLED: ${CATALOG_FRESHNESS_ENABLED:-true}
+  INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
 ```
-metadata:<catalog>:<schema>:*
-facts:<catalog>:<schema>:*
-aggregated-facts:<catalog>:<schema>:*
-select-options:<catalog>:<schema>:*
-```
 
-Invalidating a whole catalog uses the same patterns with `<schema>` replaced by `*` (e.g. `metadata:<catalog>:*:*`), so every schema is swept in one pass.
-
-The implementation lives in [`src/cache/cache-invalidation.ts`](https://github.com/qbolliet/dashboard-template-api/blob/main/src/cache/cache-invalidation.ts).
+In Kubernetes both variables sit in the chart's `config:` block (see
+[Kubernetes & Helm](./kubernetes-helm)). With `ENABLED: false` nothing is detected
+automatically and the updater must call `POST /api/catalog/reload` on **every** pod (the
+Service routes a call to one pod only) — keep it enabled with more than one replica.
 
 ## Endpoints
 
-All admin endpoints require the `x-admin-key` header set to `ADMIN_API_KEY`. Without a valid key every endpoint returns `401`. If `ADMIN_API_KEY` is unset on the server, every endpoint returns `503` (fail-safe — invalidation cannot run on an unauthenticated deployment).
+All admin endpoints require the `x-admin-key` header set to `ADMIN_API_KEY`. Without a
+valid key every endpoint returns `401`. If `ADMIN_API_KEY` is unset on the server, every
+endpoint returns `503` (fail-safe).
 
-| Method | Path                                     | Purpose                                                                                                                          |
-| ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `POST` | `/api/catalog/reload`                    | Rebuild the in-memory DuckDB instance and re-attach all catalogs at their latest state. Resolves once the new catalog is serving |
-| `POST` | `/api/catalog/reload/:catalog`           | Reattach a **single** catalog (scoped `DETACH` + `ATTACH`) without rebuilding the whole instance                                 |
-| `POST` | `/api/cache/invalidate-all`              | Invalidate every catalog namespace                                                                                               |
-| `POST` | `/api/cache/invalidate/:catalog`         | Invalidate one catalog, **every** of its schemas                                                                                 |
-| `POST` | `/api/cache/invalidate/:catalog/:schema` | Invalidate one schema of one catalog — leaves the catalog's other schemas untouched                                              |
-| `GET`  | `/api/cache/stats`                       | Nested `catalog → schema → type` cache key counts                                                                                |
+| Method | Path                                     | Purpose                                                                                                        |
+| ------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/api/catalog/reload`                    | Immediate probe with a forced rebuild **on the pod that receives it**; returns the data versions it now serves |
+| `POST` | `/api/catalog/reload/:catalog`           | Reattach a **single** catalog (scoped `DETACH` + `ATTACH`) on the receiving pod                                |
+| `POST` | `/api/cache/invalidate-all`              | Manual flush of every catalog namespace (all versions)                                                         |
+| `POST` | `/api/cache/invalidate/:catalog`         | Manual flush of one catalog, every schema                                                                      |
+| `POST` | `/api/cache/invalidate/:catalog/:schema` | Manual flush of one schema of one catalog                                                                      |
+| `GET`  | `/api/cache/stats`                       | Nested `catalog → schema → type` cache key counts (all versions)                                               |
 
-`/api/catalog/reload` rebuilds the shared instance with zero interruption: the new instance is built first (if it fails — S3 unreachable, corrupt catalog — the old one keeps serving and the call returns `500`), then swapped in atomically, then the old instance is drained in the background so in-flight requests finish cleanly.
+`POST /api/catalog/reload` answers once the pod serves the new catalog and its cache keys
+carry the new version:
+
+```json
+{
+  "success": true,
+  "timestamp": "2026-09-28T02:31:04.512Z",
+  "changed": ["macroeconomics"],
+  "versions": {
+    "macroeconomics": {
+      "main": { "version": "1790563200000000", "updatedAt": "2026-09-28T02:30:00.000000Z" }
+    }
+  }
+}
+```
+
+It is useful to make one pod fresh immediately (a smoke test right after the update, for
+instance); the other pods follow at their next probe. Calling
+`/api/cache/invalidate-all` after a refresh is no longer needed: it only forces the new
+version's keys to be recomputed.
 
 ### Reloading a single catalog
 
-When only one catalog has been refreshed, `POST /api/catalog/reload/:catalog` reattaches just that catalog on the **live** shared instance — a scoped `DETACH "<catalog>"` followed by its `ATTACH` (the Postgres credential secret is recreated automatically for Postgres-backed catalogs). The other catalogs are untouched, so this is cheaper than a full reload. Calls are serialized per catalog. An unknown catalog returns `404`.
+`POST /api/catalog/reload/:catalog` reattaches one catalog on the **live** instance of the
+receiving pod — a scoped `DETACH "<catalog>"` followed by its `ATTACH`. A query already
+running against that catalog during the brief window may error; if the `ATTACH` fails the
+catalog stays detached until the next successful probe. The automatic path uses the full,
+zero-interruption rebuild instead.
 
-Because all catalogs share one in-memory DuckDB instance, a query already running against **that** catalog during the brief `DETACH`/`ATTACH` window may error; queries on other catalogs are unaffected. This is an admin-triggered, low-frequency operation, so the tradeoff is accepted — sequence a per-catalog cache invalidation afterwards:
+## What the updater does
 
-```bash
-curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-  https://api.mydomain.org/api/catalog/reload/macroeconomics
-curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-  https://api.mydomain.org/api/cache/invalidate/macroeconomics
+```python
+def nightly_update() -> None:
+    refresh_ducklake_catalogs()   # dt-ducklake-manager: data + updated_at, one transaction
+    # Done: every pod switches within CATALOG_FRESHNESS_INTERVAL_MS.
 ```
 
-A multi-schema catalog (a `.ducklake` holding several schemas) is reattached as a whole — reload is always catalog-level because schemas live inside the catalog file. Cache invalidation, on the other hand, is **finer-grained**: `POST /api/cache/invalidate/:catalog/:schema` flushes only the targeted schema without disturbing the catalog's other schemas, which is useful when an external process refreshes a single schema and a full per-catalog flush would over-invalidate.
-
-## Refresh sequence
-
-After the external process has finished writing the new DuckLake catalog and data, run the two admin calls **in this order**:
-
-```
-1. Updater writes new DuckLake catalog + Parquet (to disk or S3)
-2. POST /api/catalog/reload          ← wait for 200 (new catalog now serving)
-3. POST /api/cache/invalidate-all    ← only after the reload returns
-```
-
-Reloading **before** invalidating guarantees that when Redis is flushed, every cache miss is recomputed against the new catalog. If you invalidated first, an incoming request could repopulate the cache from the old in-memory catalog during the window before the reload completes.
-
-## Calling from outside the cluster
-
-When the updater runs outside the Kubernetes cluster (a managed CI job, a script on a separate host, an on-prem worker), it reaches the API through the Ingress URL.
-
-### Python
+Optionally, to fail the job when no pod picks the update up, poll `/metrics` (see below)
+until `servedVersion` equals the version just written, or call `/api/catalog/reload` once
+and check its `versions`:
 
 ```python
 import os
 import requests
 
-API_URL = os.environ["DTA_API_URL"]                 # e.g. https://api.mydomain.org
-ADMIN_KEY = os.environ["DTA_ADMIN_KEY"]
-HEADERS = {"x-admin-key": ADMIN_KEY}
+API_URL = os.environ.get("DTA_API_URL", "http://api:80")   # in-cluster Service DNS
+HEADERS = {"x-admin-key": os.environ["ADMIN_API_KEY"]}
 
-# After refreshing DuckLake catalogs:
-# 1. Reload the catalog (the API holds it in memory until told otherwise).
-#    Use a generous timeout: this re-attaches every catalog (S3 reads).
 r = requests.post(f"{API_URL}/api/catalog/reload", headers=HEADERS, timeout=120)
 r.raise_for_status()
-
-# 2. Only once the reload succeeded, flush Redis so misses recompute on new data.
-r = requests.post(f"{API_URL}/api/cache/invalidate-all", headers=HEADERS, timeout=30)
-r.raise_for_status()
-print(r.json())   # {"success": true, ...}
+print(r.json()["versions"])
 ```
 
-Per-catalog invalidation (flushes every schema of the catalog):
-
-```python
-for catalog in ("default", "macroeconomics"):
-    requests.post(
-        f"{API_URL}/api/cache/invalidate/{catalog}",
-        headers={"x-admin-key": ADMIN_KEY},
-        timeout=30,
-    ).raise_for_status()
-```
-
-Per-schema invalidation (single catalog × schema, other schemas untouched):
-
-```python
-# Only the macroeconomics catalog's "annual" schema is flushed.
-requests.post(
-    f"{API_URL}/api/cache/invalidate/macroeconomics/annual",
-    headers={"x-admin-key": ADMIN_KEY},
-    timeout=30,
-).raise_for_status()
-```
-
-### bash / cron
-
-```bash
-# Reload the catalog first, then invalidate the cache.
-curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-  https://api.mydomain.org/api/catalog/reload
-curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-  https://api.mydomain.org/api/cache/invalidate-all
-```
-
-A typical crontab entry on the host running the updater (note the `&&` chain so
-the cache is only flushed once the refresh and reload succeed):
-
-```cron
-30 2 * * *  /usr/local/bin/refresh-ducklake.sh && \
-            curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-              https://api.mydomain.org/api/catalog/reload && \
-            curl -fsS -X POST -H "x-admin-key: $ADMIN_API_KEY" \
-              https://api.mydomain.org/api/cache/invalidate-all \
-            >> /var/log/dta-cache-invalidate.log 2>&1
-```
-
-## Calling from inside the cluster
-
-When the DuckLake updater already runs inside the same Kubernetes cluster as the API — which is the most common production layout — there is no reason to traverse the Ingress. The Helm chart provisions a `Service` of type `ClusterIP` (port `80` → container port `4000`) that resolves via the cluster DNS:
-
-```
-http://<release-name>.<namespace>.svc.cluster.local:80/api/cache/invalidate-all
-```
-
-Inside the same namespace, the short form `http://<release-name>:80/...` (default release name `api` → `http://api:80/...`) works as well. No TLS, no Ingress traversal, and the admin key never leaves the cluster network.
-
-`ADMIN_API_KEY` lives in the `api-secrets` Secret created at install time (see [Kubernetes & Helm](./kubernetes-helm)). Any Pod in the same namespace can mount it via `envFrom: secretRef`.
-
-### CronJob
-
-A minimal `CronJob` that runs the refresh script and then invalidates the cache:
-
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: ducklake-refresh
-  namespace: dta
-spec:
-  schedule: '30 2 * * *'
-  concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: refresh-and-invalidate
-              image: curlimages/curl:8.10.1
-              envFrom:
-                - secretRef:
-                    name: api-secrets # provides ADMIN_API_KEY
-              command: ['/bin/sh', '-c']
-              args:
-                - >
-                  set -eu;
-                  echo "Refreshing DuckLake catalogs...";
-                  # ...your DuckLake refresh step here...
-                  echo "Reloading catalog...";
-                  curl -fsS -X POST
-                  -H "x-admin-key: $ADMIN_API_KEY"
-                  http://api:80/api/catalog/reload;
-                  echo "Invalidating cache...";
-                  curl -fsS -X POST
-                  -H "x-admin-key: $ADMIN_API_KEY"
-                  http://api:80/api/cache/invalidate-all;
-```
-
-Replace `image: curlimages/curl` with your own updater image when the refresh step is non-trivial — the only requirement is that the container can reach the API Service and read `ADMIN_API_KEY` from `envFrom`.
-
-To trigger a one-off run from the same template:
-
-```bash
-kubectl --namespace dta create job --from=cronjob/ducklake-refresh manual-$(date +%s)
-```
-
-### Python (in-cluster application)
-
-For a Python updater running as a `Deployment`, `Job`, or `CronJob` Pod inside the cluster, the code is identical to the external version — only the URL changes:
-
-```python
-import os
-import requests
-
-# Resolved via cluster DNS — same namespace as the API release named "api"
-API_URL = os.environ.get("DTA_API_URL", "http://api:80")
-ADMIN_KEY = os.environ["ADMIN_API_KEY"]      # injected via envFrom: secretRef: api-secrets
-
-def refresh_and_invalidate(databases: list[str] | None = None) -> None:
-    """Refresh DuckLake catalogs, reload the API catalog, then invalidate cache."""
-    headers = {"x-admin-key": ADMIN_KEY}
-
-    refresh_ducklake_catalogs(databases)     # your own logic
-
-    # Reload the in-memory catalog first (rebuilds the shared DuckDB instance).
-    requests.post(f"{API_URL}/api/catalog/reload", headers=headers, timeout=120).raise_for_status()
-
-    # Then flush Redis so cache misses recompute against the new catalog.
-    if databases:
-        for db in databases:
-            requests.post(
-                f"{API_URL}/api/cache/invalidate/{db}", headers=headers, timeout=30
-            ).raise_for_status()
-    else:
-        requests.post(
-            f"{API_URL}/api/cache/invalidate-all", headers=headers, timeout=30
-        ).raise_for_status()
-```
-
-The associated Pod spec snippet:
-
-```yaml
-spec:
-  containers:
-    - name: updater
-      image: registry.example.com/ducklake-updater:1.0.0
-      env:
-        - name: DTA_API_URL
-          value: 'http://api:80'
-      envFrom:
-        - secretRef:
-            name: api-secrets # provides ADMIN_API_KEY
-```
-
-## When to use which
-
-| Setup                                               | Recommended trigger                                                                           |
-| --------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Updater outside the cluster (CI, external host)     | `POST` to `https://api.mydomain.org/api/cache/invalidate-all` via Ingress                     |
-| Updater inside the same cluster (CronJob, Job, Pod) | `POST` to `http://<release>:80/api/cache/invalidate-all` via Service ClusterIP DNS            |
-| Local development on the same host as the API       | `curl` to `http://localhost:4000/api/cache/invalidate-all` with `x-admin-key: $ADMIN_API_KEY` |
-
-## Stats
-
-```bash
-curl -fsS -H "x-admin-key: $ADMIN_API_KEY" \
-  https://api.mydomain.org/api/cache/stats | jq
-```
-
-Returns nested `catalog → schema → type` cache key counts — useful for monitoring cache-warming after invalidation, or for confirming that an invalidation (catalog-wide or per-schema) reduced the key count as expected.
+Inside the cluster, prefer the Service DNS (`http://<release>:80`, `ADMIN_API_KEY` injected
+with `envFrom: secretRef: api-secrets`): no Ingress traversal, the key never leaves the
+cluster network.
 
 ## Monitoring
 
-Key log messages emitted by the API during a refresh (Winston, JSON format):
+`GET /metrics` reports, per pod, the freshness state of every schema:
 
-- `Reloading DuckDB instance (re-attaching catalogs)` — reload request received
-- `DuckDB instance reloaded successfully` — new catalog attached and serving
-- `Force-closing in-flight connections after drain timeout` — a request outlived the 30s drain window during reload (investigate slow queries)
-- `Starting cache invalidation` — invalidation request received and authenticated
-- `Invalidated <N> cache entries` — confirms keys deleted successfully
-- `Cache invalidation failed` — requires investigation (Redis connectivity, timeout, etc.)
-
-Combine with the `/api/cache/stats` endpoint for periodic snapshots:
-
-```bash
-# Scrape every 5 min into a time series
-*/5 * * * *  curl -fsS -H "x-admin-key: $ADMIN_API_KEY" \
-             https://api.mydomain.org/api/cache/stats \
-             | jq -c '. + {ts: now}' >> /var/log/dta-cache-stats.jsonl
+```json
+"catalogFreshness": {
+  "enabled": true,
+  "intervalMs": 60000,
+  "lastReloadAt": "2026-09-28T02:31:04.512Z",
+  "lastReloadError": null,
+  "skippedTicks": 0,
+  "catalogs": {
+    "macroeconomics": {
+      "lastProbeAt": "2026-09-28T02:32:00.004Z",
+      "lastProbeOk": true,
+      "lastError": null,
+      "lastChangeAt": "2026-09-28T02:31:04.201Z",
+      "schemas": {
+        "main": {
+          "servedVersion": "1790563200000000",
+          "servedUpdatedAt": "2026-09-28T02:30:00.000000Z",
+          "probedVersion": "1790563200000000",
+          "probedUpdatedAt": "2026-09-28T02:30:00.000000Z",
+          "lastProbeAt": "2026-09-28T02:32:00.004Z",
+          "lastError": null
+        }
+      }
+    }
+  }
+}
 ```
+
+`/metrics` is not yet behind the admin key (planned); the markers are timestamps, not data.
+
+Key log messages (Winston, JSON):
+
+- `Catalog update detected, reloading catalogs` (info) — a probe saw a new marker
+- `Catalog freshness probe failed; keeping the served version` (warn) — catalog unreadable
+- `Data marker unreadable; keeping the served version` (warn) — one schema unreadable
+- `Catalog reload after update failed; retrying at next probe` (warn)
+- `Reloaded catalog serves another version than the one probed` (warn) — see below
+- `Force-closing in-flight connections after drain timeout` (warn) — a request outlived
+  the 30 s drain window during a rebuild
 
 ## Troubleshooting
 
-**`401 Unauthorized`** — The `x-admin-key` header is missing or does not match the server's `ADMIN_API_KEY`. Verify the Secret value in the cluster (`kubectl --namespace dta get secret api-secrets -o jsonpath='{.data.ADMIN_API_KEY}' | base64 -d`) and that the calling Pod has it injected via `envFrom`.
+**A pod never switches** — Check `catalogFreshness` in its `/metrics`: `lastProbeOk: false`
+with `lastError` names the cause (credentials, network, file lock). If `probedVersion`
+never changes, the writer did not stamp `dataset_metadata.updated_at`.
 
-**`503 Service Unavailable`** — `ADMIN_API_KEY` is unset on the server (fail-safe mode). Check the API ConfigMap / Secret wiring and that the env variable is present in the running Pod.
+**`Reloaded catalog serves another version than the one probed`** — The rebuilt instance
+reads another state than the probe: a newer write landed in between (harmless, the next
+probe settles it), or a cache in front of the storage served the old object.
 
-**Cache not invalidating despite `200 OK`** — Verify Redis connectivity from the API Pod (`kubectl --namespace dta exec deploy/api -- nc -zv $REDIS_HOST 6379`) and that the `REDIS_KEY_PREFIX` matches between the writers (resolvers) and the invalidator (`config/cache.yaml`).
+**Stale answers right after the switch** — The HTTP `Cache-Control: public, max-age` of
+`/graphql` lets a CDN or browser keep a response for up to that age.
 
-**Invalidation reaches the API but Redis keys remain** — Likely a `REDIS_KEY_PREFIX` mismatch or a stale loader holding an in-memory entry. The in-memory DataLoader caches are per-request and clear on the next request; if you see stale data persisting beyond a few seconds, restart the API Pods (`kubectl --namespace dta rollout restart deploy/api`).
+**`401` / `503` on the admin routes** — Missing or wrong `x-admin-key`, or `ADMIN_API_KEY`
+unset on the server (fail-safe).
 
-**Inspect cache contents directly** (dev/debug):
+**Inspect cache contents** (dev/debug):
 
 ```bash
-# from a Pod that can reach Redis
-redis-cli -h $REDIS_HOST KEYS "graphql-api:*" | head
-redis-cli -h $REDIS_HOST MONITOR     # live traffic
+redis-cli -h $REDIS_HOST --scan --pattern "graphql-api:facts:macroeconomics:main@*" | head
 ```
 
 ## Security notes
 
-- The cache management endpoints **must not be exposed publicly without `ADMIN_API_KEY`**. The fail-safe (503 when unset) guarantees you cannot accidentally deploy them in open mode.
-- Prefer the in-cluster path (Service ClusterIP) whenever the updater runs in the same cluster — the admin key never leaves the cluster network.
-- Log all cache operations (already enabled — see `Starting cache invalidation` / `Invalidated <N> cache entries` log lines) for audit trails.
-- Rate-limit the Ingress path if the API is reachable from untrusted networks. The endpoint is cheap but trivially DoS-able with valid credentials.
+- The admin endpoints **must not be exposed publicly without `ADMIN_API_KEY`**; the fail-safe
+  (503 when unset) prevents deploying them in open mode.
+- Since the refresh no longer calls them, the updater does not need the admin key at all.
+- Admin routes are rate-limited before the key check.

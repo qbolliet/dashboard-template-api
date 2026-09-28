@@ -44,12 +44,25 @@ Express (HTTP middleware)
 
 ### Database layer (`src/db/`)
 
-| File                  | Role                                                                 |
-| --------------------- | -------------------------------------------------------------------- |
-| `connection.ts`       | Opens and closes a DuckDB connection to a catalog                    |
-| `pool.ts`             | Connection pool — limits concurrent connections per catalog          |
-| `database-manager.ts` | High-level API: acquires a pooled connection, runs a query, releases |
-| `index.ts`            | Re-exports the shared DatabaseManager singleton                      |
+| File                   | Role                                                                 |
+| ---------------------- | -------------------------------------------------------------------- |
+| `connection.ts`        | Opens and closes a DuckDB connection to a catalog                    |
+| `pool.ts`              | Connection pool — limits concurrent connections per catalog          |
+| `database-manager.ts`  | High-level API: acquires a pooled connection, runs a query, releases |
+| `catalog-freshness.ts` | Per-pod probe detecting catalog updates, then reloading the pod      |
+| `catalog-routes.ts`    | Admin reload routes (`/api/catalog/reload[/:catalog]`)               |
+| `index.ts`             | Re-exports the shared DatabaseManager singleton                      |
+
+#### Catalog freshness
+
+Each pod attaches its DuckLake catalogs once and serves that state. Started by
+`startServer()` after the schemas are reconciled, `catalogFreshnessMonitor` reads
+`dataset_metadata.updated_at` of every schema every `CATALOG_FRESHNESS.INTERVAL_MS` on a
+throw-away DuckDB instance (a fresh `ATTACH` sees the latest commit). When a marker differs
+from the version the pod serves, the pod rebuilds its instance (build, swap, drain), then
+re-reads the markers on the live instance. That served version is part of every Redis key,
+so no stale entry can be read after the switch, on any replica, without any call from the
+updater. See [Data refresh](../deployment/data-refresh).
 
 ### GraphQL schema (`src/schema/`)
 
@@ -109,7 +122,7 @@ See [Caching](./caching).
 
 `SIGTERM` and `SIGINT` trigger a coordinated shutdown:
 
-1. Stop accepting new HTTP requests
+1. Stop the catalog freshness probe and accept no new HTTP requests
 2. Wait for in-flight requests to complete
 3. Close all DuckDB connections in the pool
 4. Disconnect from Redis

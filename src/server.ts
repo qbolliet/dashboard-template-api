@@ -30,6 +30,7 @@ import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 import { createCatalogRoutes } from './db/catalog-routes.js';
+import { catalogFreshnessMonitor } from './db/catalog-freshness.js';
 import { createExportRoutes } from './export/export-routes.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -414,6 +415,8 @@ async function startServer(): Promise<void> {
       },
       responseTime: { avg, p95, p99, samples: times.length },
       database: dbStats.sharedPool,
+      // Dernier marqueur vu et date de la dernière sonde, par schéma
+      catalogFreshness: catalogFreshnessMonitor.getStatus(),
       memory: process.memoryUsage(),
     });
   });
@@ -431,6 +434,10 @@ async function startServer(): Promise<void> {
     logger.error('Failed to reconcile catalog schemas at startup', error);
     throw error;
   }
+
+  // Sondage périodique des catalogues : chaque réplica détecte seule les mises
+  // à jour et bascule ses clés de cache sur la nouvelle version des données
+  catalogFreshnessMonitor.start();
 
   // Démarrage du serveur Apollo
   await server.start();
@@ -475,6 +482,8 @@ async function startServer(): Promise<void> {
   // Gestionnaire de fermeture gracieuse du serveur
   const gracefulShutdown = async (signal: string): Promise<void> => {
     logger.info(`Received ${signal} signal. Starting graceful shutdown...`);
+    // Arrêt du sondage des catalogues (aucun rechargement pendant l'arrêt)
+    catalogFreshnessMonitor.stop();
     try {
       await Promise.all([
         // Fermeture du client Redis

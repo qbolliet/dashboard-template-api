@@ -54,7 +54,7 @@ interface FieldStats {
  * invalidates the cache), so it gets the long select options TTL; a filtered
  * variant is one of many combinations and gets the short fact TTL. The filter
  * is part of the key, so the two never share an entry, and the key layout
- * `field-stats:<catalog>:<schema>:…` is covered by the invalidation by prefix.
+ * `field-stats:<catalog>:<schema>@<version>:…` is covered by the invalidation by prefix.
  */
 class FieldStatsLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux statistiques

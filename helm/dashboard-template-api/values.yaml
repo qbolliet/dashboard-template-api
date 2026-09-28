@@ -115,6 +115,13 @@ config:
   ALLOWED_CATALOGS: '["default"]'
   ALLOW_CROSS_CATALOG_QUERIES: 'false'
 
+  # Catalog freshness: every pod re-reads dataset_metadata.updated_at on a fresh
+  # ATTACH at this interval and reloads itself when it changed — the updater
+  # needs no reload/invalidation call. Data is fresh on every pod within one
+  # interval (plus the reload time).
+  CATALOG_FRESHNESS_ENABLED: 'true'
+  CATALOG_FRESHNESS_INTERVAL_MS: '60000'
+
   # S3 backend
   S3_ENABLED: 'true'
   AWS_REGION: eu-west-1

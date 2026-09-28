@@ -220,10 +220,12 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 let CacheInvalidationManager: CacheInvalidationManagerConstructor;
 let cacheInvalidationManager: CacheInvalidationManagerInstance;
 let createCacheInvalidationRoutes: (app: MockApp) => void;
+let buildCacheKey: typeof import('../../../src/cache/cache-keys.js').buildCacheKey;
 
 beforeAll(async () => {
   ({ CacheInvalidationManager, cacheInvalidationManager, createCacheInvalidationRoutes } =
     (await import('../../../src/cache/cache-invalidation.js')) as unknown as CacheInvalidationModule);
+  ({ buildCacheKey } = await import('../../../src/cache/cache-keys.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -255,14 +257,17 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('generates correct (catalog, schema) patterns when both are provided', () => {
-      expect(manager.keyPatterns.metadata('main', 'main')).toBe('metadata:main:main:*');
-      expect(manager.keyPatterns.facts('analytics', 'main')).toBe('facts:analytics:main:*');
+      // Segment schéma `<schéma>@*` : toutes les versions de données du schéma
+      expect(manager.keyPatterns.metadata('main', 'main')).toBe('metadata:main:main@*:*');
+      expect(manager.keyPatterns.facts('analytics', 'main')).toBe('facts:analytics:main@*:*');
       expect(manager.keyPatterns.aggregatedFacts('main', 'main')).toBe(
-        'aggregated-facts:main:main:*',
+        'aggregated-facts:main:main@*:*',
       );
-      expect(manager.keyPatterns.selectOptions('main', 'main')).toBe('select-options:main:main:*');
-      expect(manager.keyPatterns.fieldStats('main', 'main')).toBe('field-stats:main:main:*');
-      expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main:*');
+      expect(manager.keyPatterns.selectOptions('main', 'main')).toBe(
+        'select-options:main:main@*:*',
+      );
+      expect(manager.keyPatterns.fieldStats('main', 'main')).toBe('field-stats:main:main@*:*');
+      expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main@*:*');
     });
 
     test('omits schema → wildcard, matching every schema of the catalog', () => {
@@ -273,13 +278,20 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('the field-stats pattern covers the keys written by the field stats loader', () => {
-      // Clé écrite par BaseQueryLoader.loadWithCache : <préfixe>:<catalogue>:<schéma>:<clé JSON>
+      // Clé écrite par BaseQueryLoader.loadWithCache :
+      // <préfixe>:<catalogue>:<schéma>@<version>:<variante><hash>
       const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const globToRegExp = (glob: string): RegExp =>
         new RegExp(`^${glob.split('*').map(escapeRegExp).join('.*')}$`);
-      const filteredKey =
-        'field-stats:main:geography:{"fieldName":"population","where":{"sql":"\\"region\\" = ?","params":["x"]}}';
-      const plainKey = 'field-stats:main:geography:{"fieldName":"population","where":null}';
+      const versionOf = (): string => '1767225600123456';
+      const filteredKey = buildCacheKey(
+        { prefix: 'field-stats', catalog: 'main', schema: 'geography', variant: '', hash: 'a1' },
+        versionOf,
+      );
+      const plainKey = buildCacheKey(
+        { prefix: 'field-stats', catalog: 'main', schema: 'geography', hash: 'b2' },
+        () => 'none',
+      );
 
       for (const key of [filteredKey, plainKey]) {
         expect(globToRegExp(manager.keyPatterns.fieldStats('main', 'geography')).test(key)).toBe(
@@ -290,6 +302,8 @@ describe('CacheInvalidationManager', () => {
         expect(globToRegExp(manager.keyPatterns.allCatalog('main')).test(key)).toBe(true);
         // Un autre catalogue n'est pas touché
         expect(globToRegExp(manager.keyPatterns.fieldStats('other')).test(key)).toBe(false);
+        // Un schéma dont le nom est un préfixe (geo ⊂ geography) n'est pas touché
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main', 'geo')).test(key)).toBe(false);
       }
     });
 
@@ -364,7 +378,13 @@ describe('CacheInvalidationManager', () => {
 
       await manager.invalidateCatalog('main', 'analytics');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith(
+        '0',
+        'MATCH',
+        '*:main:analytics@*:*',
+        'COUNT',
+        100,
+      );
       expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
     });
 
@@ -403,7 +423,7 @@ describe('CacheInvalidationManager', () => {
 
   describe('invalidateCacheType', () => {
     test('deletes keys for the specified type, catalog and schema', async () => {
-      const keys = ['metadata:main:main:field1', 'metadata:main:main:field2'];
+      const keys = ['metadata:main:main@1:field1', 'metadata:main:main@2:field2'];
       mockRedis.scan.mockResolvedValueOnce(['0', keys]);
       mockRedis.del.mockResolvedValueOnce(2);
 
@@ -412,7 +432,7 @@ describe('CacheInvalidationManager', () => {
       expect(mockRedis.scan).toHaveBeenCalledWith(
         '0',
         'MATCH',
-        'metadata:main:main:*',
+        'metadata:main:main@*:*',
         'COUNT',
         100,
       );
@@ -902,7 +922,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
     await manager.invalidateCatalog('main', 'analytics');
 
     // Le motif cible un seul schéma — le SCAN ne ramène pas le schéma "main"
-    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
+    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics@*:*', 'COUNT', 100);
     expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
   });
 
