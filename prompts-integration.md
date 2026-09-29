@@ -20,34 +20,36 @@
 > mécaniques bien délimités. Opus 5.5 + high + plan pour les changements de contrat, de
 > sécurité ou de conception. Chaque prompt justifie ses écarts à cette grille.
 >
-> | #   | Dépôt | Constats                                 | Modèle | Effort | Plan |
-> | --- | ----- | ---------------------------------------- | ------ | ------ | ---- |
-> | A1  | API   | B1, B4, AF2                              | Sonnet | medium | non  |
-> | A2  | API   | B2, BA3, M7                              | Opus   | high   | oui  |
-> | A3  | API   | B3, M1                                   | Opus   | high   | oui  |
-> | A4  | API   | I2, M3, AF3 (API)                        | Sonnet | high   | non  |
-> | A5  | API   | B5, M5, M6, M11                          | Opus   | high   | oui  |
-> | A6  | API   | I1, M4, M12, M13                         | Sonnet | medium | non  |
-> | A7  | API   | BA7                                      | Opus   | high   | oui  |
-> | A8  | API   | I6, I7                                   | Opus   | high   | oui  |
-> | A9  | API   | I3, I4, I11                              | Opus   | high   | oui  |
-> | A10 | API   | BA1, BA2 (API), BA5, BA6, BA8            | Sonnet | high   | non  |
-> | A11 | API   | AF4 (API)                                | Opus   | high   | oui  |
-> | A12 | API   | EX1, EX2                                 | Opus   | high   | oui  |
-> | A13 | API   | EX3 (M8), EX4, EX5, EX6, EX7             | Sonnet | high   | non  |
-> | A14 | API   | `audit-api.md` §4, AF10 (API)            | Opus   | high   | oui  |
-> | A15 | API   | I5, compare\* multi-agrégats, EX8        | Opus   | high   | oui  |
-> | A16 | API   | I8, M2, `npm audit`                      | Sonnet | medium | non  |
-> | A17 | API   | I9                                       | Sonnet | medium | non  |
-> | A18 | API   | I10, M9, M10, M14, §3.6                  | Sonnet | medium | non  |
-> | D1  | Base  | BA2, BA4, BA9, BA10, BA3 (avertissement) | Sonnet | high   | non  |
-> | F1  | Front | AF14                                     | Sonnet | medium | non  |
-> | F2  | Front | AF1, AF3, AF4, AF8 (front)               | Opus   | high   | oui  |
-> | F3  | Front | AF5, AF13                                | Opus   | high   | oui  |
-> | F4  | Front | AF6, AF7, AF15                           | Sonnet | medium | non  |
-> | F5  | Front | AF12                                     | Sonnet | medium | non  |
-> | F6  | Front | AF9, AF11                                | Sonnet | high   | non  |
-> | F7  | Front | AF10 (front)                             | Opus   | high   | oui  |
+> | #     | Dépôt | Constats                                 | Modèle | Effort | Plan |
+> | ----- | ----- | ---------------------------------------- | ------ | ------ | ---- |
+> | A1    | API   | B1, B4, AF2                              | Sonnet | medium | non  |
+> | A2    | API   | B2, BA3, M7                              | Opus   | high   | oui  |
+> | A3    | API   | B3, M1                                   | Opus   | high   | oui  |
+> | A4    | API   | I2, M3, AF3 (API)                        | Sonnet | high   | non  |
+> | A5    | API   | B5, M5, M6, M11                          | Opus   | high   | oui  |
+> | A6    | API   | I1, M4, M12, M13                         | Sonnet | medium | non  |
+> | A7    | API   | BA7                                      | Opus   | high   | oui  |
+> | A8    | API   | I6, I7                                   | Opus   | high   | oui  |
+> | A9    | API   | I3, I4, I11                              | Opus   | high   | oui  |
+> | A10   | API   | BA1, BA2 (API), BA5, BA6, BA8            | Sonnet | high   | non  |
+> | A10.1 | API   | Sonde : schémas ajoutés ou supprimés     | Opus   | high   | non  |
+> | A10.3 | API   | `MAX_FIELD_SIZE`, valeurs recopiées      | Sonnet | medium | non  |
+> | A11   | API   | AF4 (API)                                | Opus   | high   | oui  |
+> | A12   | API   | EX1, EX2                                 | Opus   | high   | oui  |
+> | A13   | API   | EX3 (M8), EX4, EX5, EX6, EX7             | Sonnet | high   | non  |
+> | A14   | API   | `audit-api.md` §4, AF10 (API)            | Opus   | high   | oui  |
+> | A15   | API   | I5, compare\* multi-agrégats, EX8        | Opus   | high   | oui  |
+> | A16   | API   | I8, M2, `npm audit`                      | Sonnet | medium | non  |
+> | A17   | API   | I9                                       | Sonnet | medium | non  |
+> | A18   | API   | I10, M9, M10, M14, §3.6                  | Sonnet | medium | non  |
+> | D1    | Base  | BA2, BA4, BA9, BA10, BA3 (avertissement) | Sonnet | high   | non  |
+> | F1    | Front | AF14                                     | Sonnet | medium | non  |
+> | F2    | Front | AF1, AF3, AF4, AF8 (front)               | Opus   | high   | oui  |
+> | F3    | Front | AF5, AF13                                | Opus   | high   | oui  |
+> | F4    | Front | AF6, AF7, AF15                           | Sonnet | medium | non  |
+> | F5    | Front | AF12                                     | Sonnet | medium | non  |
+> | F6    | Front | AF9, AF11                                | Sonnet | high   | non  |
+> | F7    | Front | AF10 (front)                             | Opus   | high   | oui  |
 
 ---
 
@@ -580,6 +582,106 @@ feat: discover schemas by default, accept every database type and order columns 
 
 ---
 
+## A10.1 — Sonde de fraîcheur : découverte des schémas
+
+- **Modèle : Opus 5.5.** Concurrence entre réplicas et risque de boucle de rechargement.
+- **Effort : high.**
+- **Plan mode : non.** La réconciliation est spécifiée ci-dessous.
+- **Dépôt / branche** : `dashboard-template-api`, `qb-schemav2-adaptation`. **Après A7 et A10.**
+
+```text
+Contexte :
+- src/db/catalog-freshness.ts : runProbe construit ses cibles avec getSchemas(catalogue) et
+  readCatalog ne lit que les marqueurs de ces schémas. Un schéma ajouté par l'updater n'est
+  exposé qu'au rechargement suivant, déclenché par un autre schéma ou par l'admin. Un schéma
+  supprimé donne un « marqueur illisible » : warn à chaque sonde, jamais de rechargement.
+- La réconciliation découverte ↔ config est dans DatabaseManager.initSchemas
+  (src/db/database-manager.ts:607+) : liste explicite → intersection ; sinon liste
+  découverte (main d'abord), repli ['main'] si elle est vide. La requête de découverte est
+  DuckDBPool.discoverCatalogSchemas (src/db/pool.ts:521).
+- Coût attendu négligeable : la sonde fait déjà une instance neuve, un ATTACH par catalogue
+  et une lecture Parquet de dataset_metadata par schéma ; lister les schémas ne lit que le
+  catalogue DuckLake chargé par l'ATTACH.
+
+À faire :
+1) Extraire la réconciliation en fonction pure (ex. reconcileSchemas(catalogId, discovered))
+   utilisée par initSchemas ET par la sonde : comparer la découverte brute à getSchemas
+   provoquerait un rechargement à chaque sonde (repli main, liste explicite). Factoriser la
+   requête de découverte (information_schema.schemata, mêmes exclusions) pour la lancer sur
+   l'alias __probe_.
+2) readCatalog : après l'ATTACH, lire la liste des schémas du catalogue sondé et la renvoyer
+   dans CatalogProbeResult ; ne lire les marqueurs que des schémas servis encore présents.
+3) recordResult : changement si la liste réconciliée diffère de getSchemas (ajout ou retrait,
+   ordre ignoré). Un schéma servi absent de la découverte est un retrait, plus un marqueur
+   illisible. Un échec de lecture de la liste → aucune bascule, warn (comme un marqueur).
+4) Métriques /metrics : schémas découverts par la dernière sonde, par catalogue.
+5) Mesurer la durée d'une sonde avant/après sur le catalogue de test ; chiffres dans le résumé.
+6) Doc (docs-site/toolbox/docs : cache-invalidation, architecture, runbook de mise à jour) :
+   ajout et retrait de schéma détectés par la sonde, sans appel admin.
+
+Critères d'acceptation :
+- Test à deux instances (celui de A7) : un schéma créé avec ses trois tables apparaît dans
+  getCatalogs sur les deux instances en moins d'un intervalle, sans appel admin.
+- Un schéma supprimé disparaît de getCatalogs ; plus de warn récurrent.
+- Catalogue sans schéma découvert (repli main) et catalogue à liste explicite : dix sondes
+  successives sans écriture → zéro rechargement.
+- Schéma découvert avant l'écriture de dataset_metadata : non exposé, puis exposé à la sonde
+  qui suit l'écriture ; aucune erreur 500 entre les deux.
+
+Tests : unitaires du moniteur avec un MarkerReader simulé (ajout, retrait, repli main, liste
+explicite, échec de la lecture de la liste) ; test unitaire de reconcileSchemas ; intégration
+à deux instances.
+
+Vérification : npm run lint && npm run type:check && npm run test:setup && npm test.
+Conventions habituelles. Ne commite pas ; propose :
+fix: detect added and removed schemas in the catalog freshness probe
+```
+
+---
+
+## A10.3 — Suppression de `MAX_FIELD_SIZE`, valeurs tronquées dans les erreurs
+
+- **Modèle : Sonnet 5.** Suppression mécanique.
+- **Effort : medium.**
+- **Plan mode : non.**
+- **Dépôt / branche** : `dashboard-template-api`, `qb-schemav2-adaptation`. Indépendant ; peut aussi être intégré à A18.
+
+```text
+Contexte :
+- API.REQUEST_LIMITS.MAX_FIELD_SIZE (config/api.yaml:30, src/security/request-limits.ts)
+  borne chaque chaîne de `variables` à 1 000 caractères. Les valeurs de filtre sont des
+  paramètres liés ; la structure est bornée par SECURITY.FILTER_TREE et le corps par
+  MAX_REQUEST_SIZE. Le gain est jugé inférieur au coût d'un paramètre de plus.
+- SECURITY_LIMITS.MAX_INPUT_LENGTH (config/security.yaml:129) n'est lu nulle part.
+- Sans borne par valeur, les messages qui recopient la valeur reçue deviennent illimités
+  (src/utils/filter-tree.ts:441, :535, :553, :569), or BAD_USER_INPUT est renvoyé au client
+  et journalisé (A9).
+
+À faire :
+1) Supprimer MAX_FIELD_SIZE : findOversizedString, le code VARIABLE_TOO_LARGE, le champ de
+   RequestLimits, le type dans config-loader.ts, api.yaml, la doc
+   (docs-site/toolbox/docs/configuration/api.md et toute mention de VARIABLE_TOO_LARGE dans
+   docs-site/api), le test tests/integration/graphql-http.test.ts:222.
+2) Supprimer SECURITY_LIMITS.MAX_INPUT_LENGTH (yaml et type) ; laisser validation.ts à A18.
+3) Helper unique (ex. previewValue(value, 80) dans src/utils) : JSON compact tronqué avec
+   « … » ; utilisé par TOUS les messages d'erreur qui recopient une valeur ou un nom fourni
+   par le client (grep des badInput et GraphQLError interpolant une entrée).
+
+Critères d'acceptation : un searchTerm de 5 000 caractères → 200 ; une valeur numérique
+invalide de 50 000 caractères → BAD_USER_INPUT dont le message fait moins de 300
+caractères ; un corps > MAX_REQUEST_SIZE → 400 inchangé ; grep MAX_FIELD_SIZE,
+VARIABLE_TOO_LARGE et MAX_INPUT_LENGTH vides dans src/, config/, docs-site/ (hors fichiers
+générés) et tests/.
+
+Tests : unitaires du helper ; supertest pour les critères ci-dessus.
+
+Vérification : npm run lint && npm run type:check && npm run test:setup && npm test.
+Conventions habituelles. Ne commite pas ; propose :
+refactor(security): drop the per-variable size limit and truncate values echoed in errors
+```
+
+---
+
 ## A11 — `Metadata.typeFamily` et `filterOperations`
 
 - **Modèle : Opus 5.5.** Ajout au contrat public : les noms d'enum sont définitifs.
@@ -932,6 +1034,12 @@ Contexte (audit-api.md I10, M9, M10, M14, §3.4, §3.6) :
 (les prompts précédents en auront traité une partie). Supprimer l'argument fields des
 agrégats = rupture de SDL : le marquer @deprecated s'il est déjà publié (après 0.3.0).
 Régénérer graphql-test-queries.graphql depuis les exemples de la doc, ou le supprimer.
+Ajouter aussi au déploiement (docs-site/toolbox/docs/deployment/kubernetes-helm.md, renvoi
+depuis architecture/caching.md) une étape post-déploiement : une fois le rollout terminé
+(kubectl rollout status), appeler POST /api/cache/invalidate-all (x-admin-key). Motif : les
+clés Redis sont versionnées par les données, pas par le code ; une réponse dont le contenu
+change à arguments égaux resterait servie jusqu'au TTL. L'appeler PENDANT le rollout ne
+suffit pas : les anciens pods réécriraient leurs entrées.
 
 Critères d'acceptation : grep « sanitiz », « invalidate/:database » et
 « specification-bdd » vides dans docs-site/, README et src/ ; TypeDoc sans avertissement ;
@@ -1344,5 +1452,5 @@ feat: render grouped charts from server-side aggregates
 | Fusion de `qb-schemav2-adaptation` | A1 à A5 commités, `npm test` vert, `schema:check` et `codegen:check` verts ; A6 recommandé             |
 | Tag 0.3.0                          | + A11 (et idéalement A9, A10, A12) ; `npm run schema:diff` relu ; asset `schema.graphql` publié        |
 | Front branché sur l'API            | F1 → F3 fusionnés, épinglés sur 0.3.0 ; `CORS_ORIGINS` de production contenant l'origine du front (A4) |
-| Production multi-réplicas          | A6, A7 (après D1), A8, A16                                                                             |
+| Production multi-réplicas          | A6, A7 (après D1), A8, A10.1, A16                                                                      |
 | 0.4.0                              | A14, A15, puis F7                                                                                      |
