@@ -139,6 +139,8 @@ class AggregatedFactsLoader extends FactQueryLoader {
       cachePrefix: 'aggregated-facts',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.AGGREGATED_SIMPLE,
       catalogId,
       schema,
       cacheVariant,

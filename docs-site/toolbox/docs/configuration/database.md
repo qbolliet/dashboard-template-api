@@ -107,11 +107,16 @@ DATABASE:
     POOL_RETRY_DELAY: ${DB_POOL_RETRY_DELAY:-500}
 ```
 
-| Key                | Default     | Description                                       |
-| ------------------ | ----------- | ------------------------------------------------- |
-| `MAX_CONNECTIONS`  | `5`         | Maximum concurrent DuckDB connections per catalog |
-| `ACQUIRE_TIMEOUT`  | `60 000 ms` | Maximum wait for a connection from the pool       |
-| `POOL_RETRY_DELAY` | `500 ms`    | Delay between pool acquire retries                |
+| Key                | Default     | Description                                                 |
+| ------------------ | ----------- | ----------------------------------------------------------- |
+| `MAX_CONNECTIONS`  | `5`         | Hard cap on open DuckDB connections of the shared pool      |
+| `ACQUIRE_TIMEOUT`  | `60 000 ms` | Maximum wait in the FIFO queue for a connection             |
+| `POOL_RETRY_DELAY` | `500 ms`    | Polling interval of the drain that follows a catalog reload |
+
+Acquisition does not poll: a caller that finds the pool full joins a FIFO
+queue and receives the next released connection directly. The queue length
+and the acquisition waits are reported under `database` in `/metrics`
+(`waiting`, `acquire.waitMs.{avg,p95,max}`, `acquire.timeouts`).
 
 ## Catalog freshness
 

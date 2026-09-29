@@ -38,6 +38,8 @@ class CatalogMetadataLoader extends BaseQueryLoader {
       cachePrefix: 'catalog-metadata',
       cache: true,
       cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.METADATA,
       catalogId: null,
     });
   }

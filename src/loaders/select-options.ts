@@ -198,6 +198,8 @@ class SelectOptionsLoader extends BaseQueryLoader {
       cache: true,
       // Durée de mise en cache plus longue car les options changent peu
       cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.SELECT_OPTIONS,
       catalogId,
       schema,
       cacheVariant,

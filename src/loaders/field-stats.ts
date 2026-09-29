@@ -70,6 +70,8 @@ class FieldStatsLoader extends BaseQueryLoader {
       cachePrefix: 'field-stats',
       cache: true,
       cacheTimeout: config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.AGGREGATED_SIMPLE,
       catalogId,
       schema,
     });

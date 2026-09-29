@@ -76,13 +76,33 @@ interface DuckDBPoolInstance {
   reload: () => Promise<void>;
   reloadOne: (catalogId: string) => Promise<void>;
   discoverCatalogSchemas: () => Promise<Record<string, string[]>>;
-  acquire: () => Promise<PoolEntry>;
+  acquire: (signal?: AbortSignal) => Promise<PoolEntry>;
   release: (conn: PoolEntry) => void;
   close: () => Promise<void>;
+  getStats: () => PoolStatsSnapshot;
+}
+
+/** Statistiques du pool (occupation, file, attentes d'acquisition). */
+interface PoolStatsSnapshot {
+  available: number;
+  using: number;
+  total: number;
+  creating: number;
+  waiting: number;
+  maxConnections: number;
+  attachedCatalogs: string[];
+  acquire: {
+    total: number;
+    queued: number;
+    timeouts: number;
+    aborted: number;
+    waitMs: { avg: number; p95: number; max: number; samples: number };
+  };
 }
 
 /** Entrée dans le tableau pool — connexion avec flag d'utilisation. */
 interface PoolEntry {
+  instance: MockDuckInstance;
   conn: MockDuckConnection;
   inUse: boolean;
   all: (sql: string, params?: unknown[]) => Promise<unknown[]>;
@@ -208,17 +228,27 @@ const makePool = (overrides: Partial<PoolConfig> = {}): DuckDBPoolInstance =>
  * Lets a test tell the old instance apart from the rebuilt one across a reload
  * (the shared mockInstance cannot be distinguished from itself).
  *
+ * Args:
+ *     connectDelayMs: Delay before connect() resolves (0: next microtask), so
+ *         concurrent acquisitions really overlap during the opening.
+ *
  * Returns:
  *     A standalone MockDuckInstance with its own closeSync spy.
  */
-const makeFreshInstance = (): MockDuckInstance => {
+const makeFreshInstance = (connectDelayMs = 0): MockDuckInstance => {
   const makeConn = (): MockDuckConnection => ({
     run: jest.fn().mockResolvedValue(mockQueryResult),
     prepare: jest.fn(),
     closeSync: jest.fn(),
   });
   return {
-    connect: jest.fn().mockImplementation(() => Promise.resolve(makeConn())),
+    connect: jest
+      .fn()
+      .mockImplementation(() =>
+        connectDelayMs > 0
+          ? new Promise((resolve) => setTimeout(() => resolve(makeConn()), connectDelayMs))
+          : Promise.resolve(makeConn()),
+      ),
     closeSync: jest.fn(),
   };
 };
@@ -424,6 +454,207 @@ describe('DuckDBPool', () => {
       await pool.acquire();
       await expect(pool.acquire()).rejects.toThrow('Connection acquisition timeout');
     }, 5000);
+  });
+
+  // ── Capacité bornée et file FIFO ──────────────────────────────────────────
+
+  describe('bounded capacity and FIFO queue', () => {
+    test('10 concurrent cold acquires never open more than maxConnections', async () => {
+      // Ouverture lente : les 10 appels se chevauchent pendant les await
+      const instance = makeFreshInstance(10);
+      DuckDBInstance.create.mockResolvedValue(instance);
+      const pool = makePool({ maxConnections: 2, acquireTimeout: 2000 });
+
+      let maxUsing = 0;
+      const held: PoolEntry[] = [];
+      const all = Array.from({ length: 10 }, () =>
+        pool.acquire().then(async (conn) => {
+          held.push(conn);
+          maxUsing = Math.max(maxUsing, pool.getStats().using + pool.getStats().creating);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          pool.release(conn);
+          return conn;
+        }),
+      );
+      await Promise.all(all);
+
+      // 2 connexions d'initialisation (extensions, ATTACH) + 2 connexions du pool
+      expect(instance.connect).toHaveBeenCalledTimes(4);
+      expect(pool.pool).toHaveLength(2);
+      expect(new Set(held).size).toBe(2);
+      expect(maxUsing).toBeLessThanOrEqual(2);
+      expect(pool.getStats().waiting).toBe(0);
+    });
+
+    test('serves queued acquisitions in FIFO order', async () => {
+      DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      const first = await pool.acquire();
+
+      const order: string[] = [];
+      const queued = ['A', 'B', 'C'].map((label) =>
+        pool.acquire().then((conn) => {
+          order.push(label);
+          return conn;
+        }),
+      );
+      expect(pool.getStats().waiting).toBe(3);
+
+      // Libérations successives : chaque connexion va à la tête de file
+      pool.release(first);
+      const a = await queued[0];
+      // Une acquisition arrivée après ne double pas la file
+      const late = pool.acquire().then((conn) => {
+        order.push('late');
+        return conn;
+      });
+      pool.release(a);
+      const b = await queued[1];
+      pool.release(b);
+      const c = await queued[2];
+      pool.release(c);
+      pool.release(await late);
+
+      expect(order).toEqual(['A', 'B', 'C', 'late']);
+      expect(a).toBe(first);
+    });
+
+    test('a queued acquisition that times out leaves the queue and clears its timer', async () => {
+      DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 30 });
+      const held = await pool.acquire();
+
+      await expect(pool.acquire()).rejects.toThrow('Connection acquisition timeout after 30ms');
+      expect(pool.getStats().waiting).toBe(0);
+      expect(pool.getStats().acquire.timeouts).toBe(1);
+
+      // La connexion libérée reste libre : aucune remise à un appel expiré
+      pool.release(held);
+      expect(held.inUse).toBe(false);
+    });
+
+    test('a served acquisition leaves no pending timer behind', async () => {
+      jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
+      try {
+        DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+        const pool = makePool({ maxConnections: 1, acquireTimeout: 60000 });
+        const held = await pool.acquire();
+        const queued = pool.acquire();
+        expect(jest.getTimerCount()).toBe(1);
+
+        pool.release(held);
+        await queued;
+        // Minuteur d'acquisition nettoyé dès la remise de la connexion
+        expect(jest.getTimerCount()).toBe(0);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    test('an aborted signal removes the call from the queue', async () => {
+      DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      const held = await pool.acquire();
+
+      const controller = new AbortController();
+      const queued = pool.acquire(controller.signal);
+      expect(pool.getStats().waiting).toBe(1);
+      controller.abort(new Error('batch deadline'));
+
+      await expect(queued).rejects.toThrow('batch deadline');
+      expect(pool.getStats().waiting).toBe(0);
+      expect(pool.getStats().acquire.aborted).toBe(1);
+      pool.release(held);
+      expect(held.inUse).toBe(false);
+    });
+
+    test('an already aborted signal rejects at once', async () => {
+      const pool = makePool();
+      const controller = new AbortController();
+      controller.abort(new Error('too late'));
+      await expect(pool.acquire(controller.signal)).rejects.toThrow('too late');
+      expect(pool.pool).toHaveLength(0);
+    });
+
+    test('a failed opening frees its slot for the next caller', async () => {
+      const instance = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValue(instance);
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      await pool.initializeInstance();
+
+      instance.connect.mockRejectedValueOnce(new Error('connect failed'));
+      await expect(pool.acquire()).rejects.toThrow('connect failed');
+      expect(pool.getStats().creating).toBe(0);
+
+      const conn = await pool.acquire();
+      expect(conn.inUse).toBe(true);
+      expect(pool.pool).toHaveLength(1);
+    });
+
+    test('a failed opening hands its slot to a queued acquisition', async () => {
+      const instance = makeFreshInstance(10);
+      DuckDBInstance.create.mockResolvedValue(instance);
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      await pool.initializeInstance();
+
+      instance.connect.mockImplementationOnce(
+        () => new Promise((_, reject) => setTimeout(() => reject(new Error('boom')), 10)),
+      );
+      const failing = pool.acquire();
+      const queued = pool.acquire();
+      expect(pool.getStats().waiting).toBe(1);
+
+      await expect(failing).rejects.toThrow('boom');
+      const conn = await queued;
+      expect(conn.inUse).toBe(true);
+      expect(pool.pool).toHaveLength(1);
+    });
+
+    test('a reload serves queued acquisitions on the new instance', async () => {
+      const instA = makeFreshInstance();
+      const instB = makeFreshInstance();
+      DuckDBInstance.create.mockResolvedValueOnce(instA).mockResolvedValueOnce(instB);
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000, drainTimeout: 5000 });
+      const oldConn = await pool.acquire();
+      const queued = pool.acquire();
+
+      await pool.reload();
+      const conn = await queued;
+
+      expect(conn.instance).toBe(instB);
+      expect(pool.getStats().waiting).toBe(0);
+      pool.release(oldConn);
+    });
+
+    test('close() rejects queued acquisitions', async () => {
+      DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      await pool.acquire();
+      const queued = pool.acquire();
+
+      await pool.close();
+      await expect(queued).rejects.toThrow('Connection pool closed');
+      expect(pool.getStats().waiting).toBe(0);
+    });
+
+    test('getStats() reports the queue and the acquisition waits', async () => {
+      DuckDBInstance.create.mockResolvedValue(makeFreshInstance());
+      const pool = makePool({ maxConnections: 1, acquireTimeout: 2000 });
+      const held = await pool.acquire();
+      const queued = pool.acquire();
+      expect(pool.getStats()).toMatchObject({ using: 1, total: 1, waiting: 1, maxConnections: 1 });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      pool.release(held);
+      await queued;
+
+      const { acquire } = pool.getStats();
+      expect(acquire.total).toBe(2);
+      expect(acquire.queued).toBe(1);
+      expect(acquire.waitMs.samples).toBe(2);
+      expect(acquire.waitMs.max).toBeGreaterThanOrEqual(15);
+      expect(pool.getStats().attachedCatalogs).toEqual(['main']);
+    });
   });
 
   // ── Libération de connexion ───────────────────────────────────────────────

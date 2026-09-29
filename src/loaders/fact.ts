@@ -84,6 +84,8 @@ class FactLoader extends FactQueryLoader {
       cachePrefix: 'facts',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.FACT_SIMPLE,
       catalogId,
       schema,
       cacheVariant,

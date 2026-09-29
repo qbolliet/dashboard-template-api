@@ -68,6 +68,7 @@ interface BaseQueryLoaderInstance {
   catalogId: string | null;
   schema: string | null;
   cacheTimeout: number;
+  queryTimeout: number;
   executeWithConnection: (fn: (conn: unknown) => Promise<unknown>) => Promise<unknown>;
   qualifyTable: (tableName: string) => string;
   loadWithCache: (key: unknown, loaderFn: () => Promise<unknown>) => Promise<unknown>;
@@ -87,6 +88,7 @@ interface BaseQueryLoaderOptions {
   catalogId?: string | null;
   schema?: string | null;
   cacheTimeout?: number;
+  queryTimeout?: number;
 }
 
 /** Constructeur de BaseQueryLoader. */
@@ -185,6 +187,8 @@ describe('BaseQueryLoader', () => {
       expect(loader.cacheEnabled).toBe(true);
       expect(loader.catalogId).toBeNull();
       expect(loader.cacheTimeout).toBe(300000);
+      // Échéance par défaut : le plus long timeout de resolver (FACT_COMPLEX)
+      expect(loader.queryTimeout).toBe(15000);
     });
 
     test('initialise avec une configuration personnalisée', () => {
@@ -265,6 +269,118 @@ describe('BaseQueryLoader', () => {
       expect(results).toHaveLength(5);
       expect(mockPool.acquire).toHaveBeenCalledTimes(5);
       expect(mockPool.release).toHaveBeenCalledTimes(5);
+    });
+
+    test("passe un signal d'annulation à l'acquisition", async () => {
+      const loader = new BaseQueryLoader();
+      await loader.executeWithConnection(async () => 'ok');
+      expect(mockPool.acquire).toHaveBeenCalledWith(expect.any(AbortSignal));
+    });
+  });
+
+  // ── Connexion à la demande : cache consulté avant le pool ─────────────────
+
+  describe('createLoader — cache avant connexion', () => {
+    test('un hit de cache ne prend aucune connexion', async () => {
+      const loader = new BaseQueryLoader({ cachePrefix: 'hit', catalogId: 'main' });
+      mockWithCache.mockImplementation(async () => 'cached');
+      const loadFn = jest.fn<() => Promise<string>>().mockResolvedValue('db');
+      const dataLoader = loader.createLoader<string, string>(loadFn);
+
+      await expect(dataLoader.load('k')).resolves.toBe('cached');
+      expect(mockPool.acquire).not.toHaveBeenCalled();
+      expect(mockPool.release).not.toHaveBeenCalled();
+      expect(loadFn).not.toHaveBeenCalled();
+    });
+
+    test('les absences de cache d’un lot partagent une seule connexion', async () => {
+      const loader = new BaseQueryLoader({ cachePrefix: 'mix', catalogId: 'main' });
+      // Premier appel : hit ; les suivants : absence, chargement en base
+      mockWithCache
+        .mockImplementationOnce(async () => 'cached')
+        .mockImplementation(async (_key: unknown, fn: () => Promise<unknown>) => await fn());
+      const dataLoader = loader.createLoader<string, string>(async (_conn, key) => `db:${key}`);
+
+      const results = await Promise.all([
+        dataLoader.load('a'),
+        dataLoader.load('b'),
+        dataLoader.load('c'),
+      ]);
+
+      expect(results).toEqual(['cached', 'db:b', 'db:c']);
+      expect(mockPool.acquire).toHaveBeenCalledTimes(1);
+      expect(mockPool.release).toHaveBeenCalledTimes(1);
+      expect(mockPool.release).toHaveBeenCalledWith(mockConnection);
+    });
+
+    test('un chargement en échec est appelé une seule fois', async () => {
+      const loader = new BaseQueryLoader({ cachePrefix: 'fail', catalogId: 'main' });
+      mockWithCache.mockImplementation(
+        async (_key: unknown, fn: () => Promise<unknown>) => await fn(),
+      );
+      const loadFn = jest.fn<() => Promise<string>>().mockRejectedValue(new Error('IO Error: x'));
+      const dataLoader = loader.createLoader<string, string>(loadFn);
+
+      await expect(dataLoader.load('k')).rejects.toThrow('IO Error: x');
+      expect(loadFn).toHaveBeenCalledTimes(1);
+      expect(mockPool.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── Échéance du lot : interruption de la requête ──────────────────────────
+
+  describe('queryTimeout', () => {
+    test('interrompt la requête en cours puis libère la connexion', async () => {
+      // Requête bloquée jusqu'à l'interruption DuckDB, qui la fait échouer
+      let failQuery: (error: Error) => void = () => undefined;
+      const interrupt = jest.fn(() => failQuery(new Error('INTERRUPT Error: Interrupted!')));
+      const connection = { conn: { interrupt } };
+      mockPool.acquire.mockResolvedValue(connection);
+      const loader = new BaseQueryLoader({ cachePrefix: 'slow', queryTimeout: 30 });
+
+      const started = Date.now();
+      await expect(
+        loader.executeWithConnection(
+          () =>
+            new Promise((_resolve, reject) => {
+              failQuery = reject;
+            }),
+        ),
+      ).rejects.toThrow('slow query timeout after 30ms');
+
+      expect(interrupt).toHaveBeenCalledTimes(1);
+      expect(mockPool.release).toHaveBeenCalledWith(connection);
+      expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    test("quitte la file d'attente du pool à l'échéance, sans libération", async () => {
+      // Acquisition en file : seule l'annulation du signal la termine
+      mockPool.acquire.mockImplementation(
+        (signal: unknown) =>
+          new Promise((_resolve, reject) => {
+            const abortSignal = signal as AbortSignal;
+            abortSignal.addEventListener('abort', () => reject(abortSignal.reason));
+          }),
+      );
+      const loader = new BaseQueryLoader({ cachePrefix: 'queued', queryTimeout: 30 });
+      const queryFn = jest.fn();
+
+      await expect(loader.executeWithConnection(queryFn)).rejects.toThrow(
+        'queued query timeout after 30ms',
+      );
+      expect(queryFn).not.toHaveBeenCalled();
+      expect(mockPool.release).not.toHaveBeenCalled();
+    });
+
+    test("une requête terminée avant l'échéance n'est pas interrompue", async () => {
+      const interrupt = jest.fn();
+      const connection = { conn: { interrupt } };
+      mockPool.acquire.mockResolvedValue(connection);
+      const loader = new BaseQueryLoader({ queryTimeout: 30 });
+
+      await expect(loader.executeWithConnection(async () => 'fast')).resolves.toBe('fast');
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      expect(interrupt).not.toHaveBeenCalled();
     });
   });
 
@@ -374,12 +490,11 @@ describe('BaseQueryLoader', () => {
 
       const result = await loader.loadWithCache('mykey', loaderFn);
 
-      // Le loader est enveloppé pour distinguer une panne du cache d'une
-      // erreur du chargement lui-même : withCache reçoit ce garde, pas loaderFn.
+      // withCache distingue lui-même panne Redis et erreur du loader : il reçoit loaderFn.
       // Schéma résolu au défaut du catalogue (mock : 'main'), pas le placeholder '_'.
       expect(mockWithCache).toHaveBeenCalledWith(
         expectedCacheKey('test', 'main', 'main', 'mykey'),
-        expect.any(Function),
+        loaderFn,
         loader.cacheTimeout,
       );
       expect(loaderFn).toHaveBeenCalledTimes(1);
@@ -397,15 +512,15 @@ describe('BaseQueryLoader', () => {
       expect(result).toBe('direct');
     });
 
-    test("fallback vers le chargement direct en cas d'erreur cache", async () => {
+    test('un rejet de withCache remonte sans chargement direct supplémentaire', async () => {
+      // Les pannes Redis sont absorbées par withCache : un rejet est une erreur
+      // du loader, jamais rejouée ici
       const loader = new BaseQueryLoader({ cache: true });
-      mockWithCache.mockRejectedValue(new Error('Cache error'));
-      const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('fallback');
+      mockWithCache.mockRejectedValue(new Error('SQL error'));
+      const loaderFn = jest.fn<() => Promise<string>>().mockResolvedValue('never');
 
-      const result = await loader.loadWithCache('key', loaderFn);
-
-      expect(result).toBe('fallback');
-      expect(loaderFn).toHaveBeenCalled();
+      await expect(loader.loadWithCache('key', loaderFn)).rejects.toThrow('SQL error');
+      expect(loaderFn).not.toHaveBeenCalled();
     });
 
     test('une erreur du loader remonte sans second appel', async () => {

@@ -1,5 +1,5 @@
 // Importation des modules nécessaires pour la gestion des bases de données
-import { DuckDBPool, type CatalogEntry } from './pool.js';
+import { DuckDBPool, type CatalogEntry, type PoolStats } from './pool.js';
 import { dirname, resolve } from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -24,15 +24,6 @@ const REMOTE_URI_PATTERN = /^[a-z0-9]+:\/\//i;
 const isRemoteUri = (p: string): boolean => REMOTE_URI_PATTERN.test(p);
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
-
-/** Shared pool statistics returned by {@link DatabaseManager.getStatistics}. */
-export interface PoolStats {
-  available: number;
-  using: number;
-  total: number;
-  maxConnections: number;
-  attachedCatalogs: string[];
-}
 
 /** Full statistics snapshot for the database manager. */
 export interface DatabaseStats {
@@ -757,19 +748,9 @@ class DatabaseManager {
    * @returns Statistics for the shared pool and routing configuration.
    */
   getStatistics(): DatabaseStats {
-    // Récupération des statistiques du pool partagé si disponible
-    const poolStats: PoolStats | null = this.sharedPool
-      ? {
-          available: this.sharedPool.pool.filter((c) => !c.inUse).length,
-          using: this.sharedPool.pool.filter((c) => c.inUse).length,
-          total: this.sharedPool.pool.length,
-          maxConnections: this.sharedPool.maxConnections,
-          attachedCatalogs: (this.sharedPool.catalogs ?? []).map((c) => c.alias),
-        }
-      : null;
-
+    // Statistiques du pool partagé (occupation, file, attentes) si disponible
     return {
-      sharedPool: poolStats,
+      sharedPool: this.sharedPool ? this.sharedPool.getStats() : null,
       defaultCatalog: this.defaultCatalog,
       allowedCatalogs: this.allowedCatalogs,
       allowCrossCatalog: this.allowCrossCatalog,

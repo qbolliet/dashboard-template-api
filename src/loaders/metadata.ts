@@ -34,6 +34,8 @@ class MetadataLoader extends BaseQueryLoader {
       cache: true,
       // Durée de mise en cache plus longue car les méta-données changent rarement
       cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.METADATA,
       catalogId,
       schema,
     });

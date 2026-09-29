@@ -59,6 +59,7 @@ interface MockPool {
   reloadOne: jest.Mock;
   awaitDrain: jest.Mock;
   discoverCatalogSchemas: jest.Mock;
+  getStats: jest.Mock;
 }
 
 /** Configuration passée au constructeur DuckDBPool lors de l'initialisation. */
@@ -192,6 +193,23 @@ const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig):
     reloadOne: jest.fn().mockResolvedValue(undefined),
     awaitDrain: jest.fn().mockResolvedValue(undefined),
     discoverCatalogSchemas: jest.fn().mockResolvedValue(defaultDiscovery),
+    // Statistiques du pool (forme de DuckDBPool.getStats), pool vide
+    getStats: jest.fn().mockReturnValue({
+      available: 0,
+      using: 0,
+      total: 0,
+      creating: 0,
+      waiting: 0,
+      maxConnections: cfg.maxConnections ?? 5,
+      attachedCatalogs: aliases,
+      acquire: {
+        total: 0,
+        queued: 0,
+        timeouts: 0,
+        aborted: 0,
+        waitMs: { avg: 0, p95: 0, max: 0, samples: 0 },
+      },
+    }),
   };
 };
 
@@ -607,6 +625,13 @@ describe('DatabaseManager', () => {
       expect(sharedPool).toHaveProperty('using');
       expect(sharedPool).toHaveProperty('total');
       expect(sharedPool).toHaveProperty('maxConnections');
+    });
+
+    test('sharedPool stats come from the pool (queue and acquisition waits)', () => {
+      const { sharedPool } = manager.getStatistics();
+      expect(manager.sharedPool!.getStats).toHaveBeenCalled();
+      expect(sharedPool).toHaveProperty('waiting', 0);
+      expect(sharedPool).toHaveProperty('acquire.waitMs.p95', 0);
     });
 
     test('returns null sharedPool when pool is not initialized', () => {

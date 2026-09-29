@@ -36,6 +36,7 @@ export interface PoolConfig {
   catalogs: CatalogEntry[];
   maxConnections: number;
   acquireTimeout: number;
+  /** Polling interval (ms) of the drain that follows a reload. */
   retryDelay: number;
   /** Max wait (ms) for in-flight requests to drain on reload before force-close. */
   drainTimeout?: number;
@@ -50,6 +51,34 @@ export interface WithMetadataResult {
     /** Bounds of the page: numbers for numeric columns, ISO strings for date/timestamp ones. */
     extents: Record<string, ColumnExtent>;
   };
+}
+
+/** Acquisition counters and wait durations of the pool, exposed in /metrics. */
+export interface AcquireStats {
+  /** Acquisitions served since start. */
+  total: number;
+  /** Acquisitions that had to wait in the queue. */
+  queued: number;
+  /** Queued acquisitions rejected after `acquireTimeout`. */
+  timeouts: number;
+  /** Queued acquisitions cancelled by their caller's signal. */
+  aborted: number;
+  /** Wait before getting a connection, over the last served acquisitions. */
+  waitMs: { avg: number; p95: number; max: number; samples: number };
+}
+
+/** Pool statistics returned by {@link DuckDBPool.getStats}. */
+export interface PoolStats {
+  available: number;
+  using: number;
+  total: number;
+  /** Connections being opened (slots already reserved). */
+  creating: number;
+  /** Acquisitions waiting in the FIFO queue. */
+  waiting: number;
+  maxConnections: number;
+  attachedCatalogs: string[];
+  acquire: AcquireStats;
 }
 
 /** Connection wrapper exposing DuckDB query methods. */
@@ -248,6 +277,19 @@ export const createConfiguredInstance = async (
 
 // ─── Classe DuckDBPool ────────────────────────────────────────────────────────
 
+/** Acquisition waiting in the FIFO queue for a connection to be handed over. */
+interface Waiter {
+  resolve: (connection: ConnectionWrapper) => void;
+  reject: (error: unknown) => void;
+  /** Date.now() at enqueue, for the wait metric. */
+  enqueuedAt: number;
+  /** Removes the acquisition timer and the abort listener. */
+  cleanup: () => void;
+}
+
+// Nombre de durées d'attente conservées pour les métriques (fenêtre glissante)
+const MAX_WAIT_SAMPLES = 1000;
+
 /**
  * Connection pool for DuckDB with multi-catalog DuckLake support.
  * Manages a single shared DuckDB in-memory instance to which all configured
@@ -288,6 +330,13 @@ class DuckDBPool {
   private readonly drainTimeout: number;
   // Drainage de l'instance retirée par le dernier reload (résolu une fois fermée)
   private lastDrain: Promise<void>;
+  // Créneaux réservés pour des connexions en cours d'ouverture (comptés dans la capacité)
+  private creating: number;
+  // File FIFO des acquisitions en attente d'une connexion
+  private readonly waiters: Waiter[];
+  // Compteurs et durées d'attente des acquisitions (métriques)
+  private readonly acquireCounters: Omit<AcquireStats, 'waitMs'>;
+  private readonly waitSamples: number[];
 
   // Initialisation
   constructor(poolConfig: PoolConfig) {
@@ -299,7 +348,7 @@ class DuckDBPool {
     this.maxConnections = poolConfig.maxConnections;
     // Timeout pour l'acquisition de la connexion
     this.acquireTimeout = poolConfig.acquireTimeout;
-    // Délai d'attente entre deux tentatives quand le pool est plein
+    // Intervalle de sondage du drainage après un reload (l'acquisition ne sonde pas)
     this.retryDelay = poolConfig.retryDelay;
     // Liste des catalogues DuckLake à attacher
     this.catalogs = poolConfig.catalogs ?? [];
@@ -317,6 +366,11 @@ class DuckDBPool {
     this.drainTimeout = poolConfig.drainTimeout ?? 30000;
     // Aucun drainage en cours au départ
     this.lastDrain = Promise.resolve();
+    // Aucune connexion en ouverture, file vide, compteurs à zéro
+    this.creating = 0;
+    this.waiters = [];
+    this.acquireCounters = { total: 0, queued: 0, timeouts: 0, aborted: 0 };
+    this.waitSamples = [];
   }
 
   /**
@@ -422,6 +476,9 @@ class DuckDBPool {
         // 3. Drainage et fermeture de l'ancienne instance en arrière-plan ; la
         // promesse est conservée pour awaitDrain() (montée de version du cache)
         this.lastDrain = this.drainAndClose(oldInstance, oldConnections);
+
+        // Pool neuf et vide : les acquisitions en file sont servies sur la nouvelle instance
+        this.dispatch();
 
         dbLogger.database('DuckDB instance reloaded successfully', {
           drainingConnections: oldConnections.length,
@@ -614,163 +671,261 @@ class DuckDBPool {
   }
 
   /**
-   * Acquire a connection from the pool or create a new one.
-   * Connections are reused when available (marked inUse = false).
-   * If the pool is at capacity, waits with polling until a connection is freed.
+   * Open a new connection on the live shared instance and wrap it.
    *
-   * @returns A connection wrapper with query methods.
-   * @throws {Error} If acquisition times out.
+   * The caller must have reserved the slot beforehand (see {@link creating}).
+   * If a reload swapped the instance while the connection was being opened,
+   * that connection belongs to the retired instance: it is closed and the
+   * opening starts again on the new one, so a retired connection never enters
+   * the live pool.
+   *
+   * @returns A connection wrapper with query methods, marked in use.
    */
-  async acquire(): Promise<ConnectionWrapper> {
-    const dbLogger = createContextLogger({ component: 'database' });
-    dbLogger.database('Acquiring connection', { poolSize: this.pool.length });
+  private async openConnection(): Promise<ConnectionWrapper> {
+    let instance: DuckDBInstance;
+    let duckdbConnection: DuckDBConnection;
+    for (;;) {
+      // Initialisation paresseuse de l'instance partagée (idempotente)
+      instance = await this.initializeInstance();
+      // Nouvelle connexion à l'instance partagée
+      duckdbConnection = await instance.connect();
+      if (this.instance === instance) break;
+      // Instance remplacée pendant l'ouverture : connexion retirée, nouvel essai
+      duckdbConnection.closeSync();
+    }
 
-    // Référence partagée pour nettoyer l'interval d'attente si le timeout gagne la course
-    let waitInterval: ReturnType<typeof setInterval> | null = null;
+    // Création d'un wrapper exposant les méthodes de requête
+    return {
+      instance,
+      conn: duckdbConnection,
+      inUse: true,
 
-    // Initialisation du timeout
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => {
-        if (waitInterval) {
-          clearInterval(waitInterval);
-          waitInterval = null;
-        }
+      /**
+       * Execute a query and return results as objects.
+       * Values are serialized by the single DuckDB → JSON converter.
+       *
+       * @param query - SQL query to execute.
+       * @param params - Parameters for prepared statement.
+       * @returns Query results as array of row objects.
+       */
+      all: async (query: string, params: unknown[] = []): Promise<Record<string, Json>[]> => {
+        const result = await runQuery(duckdbConnection, query, params);
+        return result.convertRowObjects(jsonValueConverter);
+      },
+
+      /**
+       * Execute a query and return results as a JSON array.
+       * Optimized for D3 visualization (array of arrays).
+       *
+       * @param query - SQL query to execute.
+       * @param params - Parameters for prepared statement.
+       * @returns Query results as JSON array of arrays.
+       */
+      getAsJsonArray: async (query: string, params: unknown[] = []): Promise<Json[][]> => {
+        const result = await runQuery(duckdbConnection, query, params);
+        return result.convertRows(jsonValueConverter);
+      },
+
+      /**
+       * Execute a query and return D3-friendly result with column metadata.
+       *
+       * @param query - SQL query to execute.
+       * @param params - Parameters for prepared statement.
+       * @returns Data with columns, rows, count, and numeric/temporal extents.
+       */
+      getWithMetadata: async (
+        query: string,
+        params: unknown[] = [],
+      ): Promise<WithMetadataResult> => {
+        const result = await runQuery(duckdbConnection, query, params);
+        const columnNames = result.columnNames();
+        const columnTypes = result.columnTypes();
+        const rows = await result.convertRowObjects(jsonValueConverter);
+
+        return {
+          columns: columnNames,
+          data: rows,
+          metadata: {
+            count: rows.length,
+            extents: computeExtents(columnNames, columnTypes, rows),
+          },
+        };
+      },
+
+      /**
+       * Execute a SQL statement without returning results (DDL, utilities).
+       *
+       * @param query - SQL statement to execute.
+       */
+      exec: async (query: string): Promise<void> => {
+        await duckdbConnection.run(query);
+      },
+
+      /**
+       * Close this specific connection.
+       */
+      close: async (): Promise<void> => {
+        duckdbConnection.closeSync();
+      },
+    };
+  }
+
+  /**
+   * Whether a new connection may be opened without exceeding maxConnections.
+   * Counts the connections being opened, whose slot is already reserved.
+   */
+  private hasCapacity(): boolean {
+    return this.pool.length + this.creating < this.maxConnections;
+  }
+
+  /**
+   * Open a connection in a slot reserved synchronously by the caller.
+   *
+   * The slot is released on failure and handed to the next queued acquisition
+   * (via {@link dispatch}), so a failed opening never shrinks the pool.
+   *
+   * @returns The new connection, already in the pool and marked in use.
+   */
+  private async openInReservedSlot(): Promise<ConnectionWrapper> {
+    try {
+      const connection = await this.openConnection();
+      this.pool.push(connection);
+      return connection;
+    } finally {
+      this.creating--;
+      // Créneau libre (échec) ou file non vide : service de la tête de file
+      this.dispatch();
+    }
+  }
+
+  /**
+   * Record one served acquisition in the metrics.
+   *
+   * @param waitedMs - Time spent waiting for the connection.
+   */
+  private recordAcquisition(waitedMs: number): void {
+    this.acquireCounters.total++;
+    this.waitSamples.push(waitedMs);
+    if (this.waitSamples.length > MAX_WAIT_SAMPLES) this.waitSamples.shift();
+  }
+
+  /**
+   * Serve queued acquisitions while the pool has spare capacity.
+   *
+   * Called when capacity may have appeared without a release: after a failed
+   * opening (slot given back) and after a reload (fresh, empty pool). Each
+   * head waiter gets a slot reserved synchronously, then its own connection.
+   */
+  private dispatch(): void {
+    while (this.waiters.length > 0 && this.hasCapacity()) {
+      const waiter = this.waiters.shift()!;
+      waiter.cleanup();
+      this.creating++;
+      this.openInReservedSlot().then(
+        (connection) => {
+          this.recordAcquisition(Date.now() - waiter.enqueuedAt);
+          waiter.resolve(connection);
+        },
+        (error) => waiter.reject(error),
+      );
+    }
+  }
+
+  /**
+   * Acquire a connection from the pool or create a new one.
+   *
+   * - An idle connection is reused at once, unless acquisitions are already
+   *   queued (they come first).
+   * - Otherwise, a new connection is opened if the pool is below capacity:
+   *   the slot is reserved synchronously, before any await, so concurrent
+   *   callers can never open more than maxConnections connections.
+   * - Otherwise the call joins a FIFO queue; {@link release} hands the freed
+   *   connection directly to the head of the queue. No polling.
+   *
+   * @param signal - Optional cancellation signal: an abort removes the call
+   *   from the queue and rejects it with the abort reason.
+   * @returns A connection wrapper with query methods, marked in use.
+   * @throws {Error} If the queued acquisition times out, or the signal aborts.
+   */
+  async acquire(signal?: AbortSignal): Promise<ConnectionWrapper> {
+    signal?.throwIfAborted();
+
+    // Personne en file : connexion libre réutilisée, ou créneau réservé
+    // synchronement (avant tout await) puis ouverture d'une connexion
+    if (this.waiters.length === 0) {
+      const idle = this.pool.find((conn) => !conn.inUse);
+      if (idle) {
+        idle.inUse = true;
+        this.recordAcquisition(0);
+        return idle;
+      }
+      if (this.hasCapacity()) {
+        this.creating++;
+        const connection = await this.openInReservedSlot();
+        this.recordAcquisition(0);
+        return connection;
+      }
+    }
+
+    // Pool saturé : attente en file FIFO jusqu'à la remise d'une connexion
+    this.acquireCounters.queued++;
+    createContextLogger({ component: 'database' }).database('Waiting for a pool connection', {
+      poolSize: this.pool.length,
+      waiting: this.waiters.length + 1,
+    });
+    return new Promise<ConnectionWrapper>((resolve, reject) => {
+      // Retrait de la file (timeout ou abandon) : la connexion n'est jamais remise.
+      // Appelé de façon asynchrone uniquement, une fois `waiter` défini.
+      const leaveQueue = (): void => {
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        waiter.cleanup();
+      };
+      const onAbort = (): void => {
+        leaveQueue();
+        this.acquireCounters.aborted++;
+        reject(signal?.reason);
+      };
+      const timer = setTimeout(() => {
+        leaveQueue();
+        this.acquireCounters.timeouts++;
         reject(new Error(`Connection acquisition timeout after ${this.acquireTimeout}ms`));
       }, this.acquireTimeout);
+      const waiter: Waiter = {
+        resolve,
+        reject,
+        enqueuedAt: Date.now(),
+        cleanup: () => {
+          clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+        },
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      this.waiters.push(waiter);
+      // Capacité apparue entre-temps (ouverture échouée) : service immédiat
+      this.dispatch();
     });
-
-    // Promesse d'acquisition de la connexion
-    const acquirePromise = new Promise<ConnectionWrapper>(
-      // eslint-disable-next-line no-async-promise-executor
-      async (resolve, reject) => {
-        try {
-          // Recherche d'une connexion existante et non utilisée
-          const connection = this.pool.find((conn) => !conn.inUse);
-          // Réutilisation si disponible
-          if (connection) {
-            connection.inUse = true;
-            return resolve(connection);
-          }
-
-          // Création d'une nouvelle connexion si le pool n'est pas plein
-          if (this.pool.length < this.maxConnections) {
-            // Initialisation paresseuse de l'instance partagée (idempotente)
-            const instance = await this.initializeInstance();
-
-            // Nouvelle connexion à l'instance partagée
-            const duckdbConnection = await instance.connect();
-
-            // Création d'un wrapper exposant les méthodes de requête
-            const newConnection: ConnectionWrapper = {
-              instance,
-              conn: duckdbConnection,
-              inUse: true,
-
-              /**
-               * Execute a query and return results as objects.
-               * Values are serialized by the single DuckDB → JSON converter.
-               *
-               * @param query - SQL query to execute.
-               * @param params - Parameters for prepared statement.
-               * @returns Query results as array of row objects.
-               */
-              all: async (
-                query: string,
-                params: unknown[] = [],
-              ): Promise<Record<string, Json>[]> => {
-                const result = await runQuery(duckdbConnection, query, params);
-                return result.convertRowObjects(jsonValueConverter);
-              },
-
-              /**
-               * Execute a query and return results as a JSON array.
-               * Optimized for D3 visualization (array of arrays).
-               *
-               * @param query - SQL query to execute.
-               * @param params - Parameters for prepared statement.
-               * @returns Query results as JSON array of arrays.
-               */
-              getAsJsonArray: async (query: string, params: unknown[] = []): Promise<Json[][]> => {
-                const result = await runQuery(duckdbConnection, query, params);
-                return result.convertRows(jsonValueConverter);
-              },
-
-              /**
-               * Execute a query and return D3-friendly result with column metadata.
-               *
-               * @param query - SQL query to execute.
-               * @param params - Parameters for prepared statement.
-               * @returns Data with columns, rows, count, and numeric/temporal extents.
-               */
-              getWithMetadata: async (
-                query: string,
-                params: unknown[] = [],
-              ): Promise<WithMetadataResult> => {
-                const result = await runQuery(duckdbConnection, query, params);
-                const columnNames = result.columnNames();
-                const columnTypes = result.columnTypes();
-                const rows = await result.convertRowObjects(jsonValueConverter);
-
-                return {
-                  columns: columnNames,
-                  data: rows,
-                  metadata: {
-                    count: rows.length,
-                    extents: computeExtents(columnNames, columnTypes, rows),
-                  },
-                };
-              },
-
-              /**
-               * Execute a SQL statement without returning results (DDL, utilities).
-               *
-               * @param query - SQL statement to execute.
-               */
-              exec: async (query: string): Promise<void> => {
-                await duckdbConnection.run(query);
-              },
-
-              /**
-               * Close this specific connection.
-               */
-              close: async (): Promise<void> => {
-                duckdbConnection.closeSync();
-              },
-            };
-
-            // Ajout de la connexion à l'ensemble
-            this.pool.push(newConnection);
-            resolve(newConnection);
-          } else {
-            // Attente d'une connexion disponible si le pool est à saturation
-            waitInterval = setInterval(() => {
-              const availableConnection = this.pool.find((conn) => !conn.inUse);
-              if (availableConnection) {
-                clearInterval(waitInterval!);
-                waitInterval = null;
-                availableConnection.inUse = true;
-                resolve(availableConnection);
-              }
-            }, this.retryDelay);
-          }
-        } catch (error) {
-          reject(error);
-        }
-      },
-    );
-
-    // Course entre l'acquisition et le timeout
-    return Promise.race([acquirePromise, timeoutPromise]);
   }
 
   /**
    * Release a connection back to the pool.
+   *
+   * When acquisitions are queued, the connection is handed directly to the
+   * head of the queue (it stays in use); otherwise it is marked available.
    *
    * @param connection - The connection wrapper to release.
    */
   release(connection: ConnectionWrapper): void {
     const connIndex = this.pool.findIndex((conn) => conn.conn === connection.conn);
     if (connIndex >= 0) {
+      const waiter = this.waiters.shift();
+      if (waiter) {
+        // Remise directe à la tête de file : aucune acquisition ne peut doubler
+        waiter.cleanup();
+        this.recordAcquisition(Date.now() - waiter.enqueuedAt);
+        waiter.resolve(this.pool[connIndex]);
+        return;
+      }
       // Marquage comme disponible pour la prochaine acquisition
       this.pool[connIndex].inUse = false;
       return;
@@ -784,10 +939,48 @@ class DuckDBPool {
   }
 
   /**
+   * Snapshot of the pool occupation, queue and acquisition wait times.
+   *
+   * @returns Statistics exposed by /ready and /metrics.
+   */
+  getStats(): PoolStats {
+    const samples = this.waitSamples;
+    const sorted = [...samples].sort((a, b) => a - b);
+    const using = this.pool.filter((c) => c.inUse).length;
+    return {
+      available: this.pool.length - using,
+      using,
+      total: this.pool.length,
+      creating: this.creating,
+      waiting: this.waiters.length,
+      maxConnections: this.maxConnections,
+      attachedCatalogs: this.catalogs.map((c) => c.alias),
+      acquire: {
+        ...this.acquireCounters,
+        waitMs: {
+          avg:
+            samples.length > 0
+              ? Math.round(samples.reduce((a, b) => a + b, 0) / samples.length)
+              : 0,
+          p95: sorted.length > 0 ? sorted[Math.floor(sorted.length * 0.95)] : 0,
+          max: sorted.length > 0 ? sorted[sorted.length - 1] : 0,
+          samples: samples.length,
+        },
+      },
+    };
+  }
+
+  /**
    * Close all connections and the shared DuckDB instance.
    */
   async close(): Promise<void> {
     const dbLogger = createContextLogger({ component: 'database' });
+
+    // Acquisitions en file rejetées : aucune connexion ne leur sera remise
+    for (const waiter of this.waiters.splice(0)) {
+      waiter.cleanup();
+      waiter.reject(new Error('Connection pool closed'));
+    }
 
     // allSettled pour fermer toutes les connexions même si l'une échoue,
     // y compris celles encore en cours de drainage après un reload

@@ -8,6 +8,7 @@ import { RecordBatchStreamWriter } from 'apache-arrow';
 import type { Response } from 'express';
 import type { DuckDBMaterializedResult, DuckDBResult } from '@duckdb/node-api';
 import { bindParam, escapeSqlString } from '../db/pool.js';
+import { runInterruptible } from '../db/interrupt.js';
 import type { ConnectionWrapper } from '../db/pool.js';
 import { buildArrowLayout, chunkToRecordBatch, emptyRecordBatch } from './arrow-writer.js';
 import { FORMAT_SPECS } from './export-params.js';
@@ -62,11 +63,8 @@ function throwIfAborted(signal: AbortSignal): void {
 }
 
 /**
- * Runs a DuckDB step so that an abort interrupts it.
- *
- * The interrupt is only issued while the step is running: interrupting an
- * idle connection is never needed, and the connection goes back to the pool
- * right after.
+ * Runs a DuckDB step so that an abort of the export interrupts it
+ * (see runInterruptible, shared with the loaders).
  *
  * @param ctx - Export context.
  * @param step - DuckDB work to run.
@@ -74,19 +72,8 @@ function throwIfAborted(signal: AbortSignal): void {
  * @throws The abort reason when the signal fired during the step.
  */
 // Interruption de la requête DuckDB en cours si le signal se déclenche
-async function interruptible<T>(ctx: ExportRunContext, step: () => Promise<T>): Promise<T> {
-  throwIfAborted(ctx.signal);
-  const onAbort = (): void => ctx.connection.conn.interrupt();
-  ctx.signal.addEventListener('abort', onAbort, { once: true });
-  try {
-    return await step();
-  } catch (error) {
-    // Une requête interrompue échoue avec « Interrupted! » : la vraie cause est le signal
-    throwIfAborted(ctx.signal);
-    throw error;
-  } finally {
-    ctx.signal.removeEventListener('abort', onAbort);
-  }
+function interruptible<T>(ctx: ExportRunContext, step: () => Promise<T>): Promise<T> {
+  return runInterruptible(ctx.connection, ctx.signal, step);
 }
 
 /**

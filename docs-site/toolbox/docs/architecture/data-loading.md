@@ -7,12 +7,12 @@ sidebar_position: 4
 
 ## DuckDB connection pool
 
-Each registered DuckLake catalog has its own connection pool (`src/db/pool.ts`). The pool:
+Every DuckLake catalog is attached to one shared DuckDB instance, served by one connection pool (`src/db/pool.ts`). The pool:
 
-- Maintains up to `MAX_CONNECTIONS` (5) open DuckDB connections per catalog
-- Queues acquisition requests when all connections are in use
-- Times out after `ACQUIRE_TIMEOUT` (60 000 ms) if no connection becomes available
-- Retries failed acquisitions with `POOL_RETRY_DELAY` (500 ms) between attempts
+- Never opens more than `MAX_CONNECTIONS` (5) connections: the slot is reserved synchronously, before the connection is opened, so concurrent callers cannot overshoot
+- Queues acquisition requests in FIFO order when all connections are in use; a released connection is handed directly to the head of the queue (no polling)
+- Rejects a queued request after `ACQUIRE_TIMEOUT` (60 000 ms), or as soon as its caller's `AbortSignal` fires
+- Reports its queue length and acquisition waits in `/metrics` (`database.waiting`, `database.acquire`)
 
 All connections are opened in **read-only** mode (`READ_ONLY: true`) — DuckDB enforces this at the file level, providing an extra guarantee that no mutation can reach the data.
 
@@ -46,8 +46,12 @@ src/loaders/
 `base-loader.ts` handles:
 
 - Constructing the cache key from query parameters
-- Checking/populating the Redis cache
+- Checking/populating the Redis cache **before** taking a connection: a batch served entirely from Redis never touches the pool, and the misses of a batch share one connection
+- The batch deadline (`queryTimeout`, aligned on the resolver timeouts of `API.TIMEOUTS`): past it, a queued acquisition leaves the queue and a running query is interrupted (`connection.interrupt()`), so its connection is released right away instead of being held until DuckDB finishes
 - Error normalisation so a single loader failure does not corrupt the whole batch
+
+A Redis failure (read or write) falls back to the database; a loader error is
+returned as is and never retried (`src/utils/cache.ts`).
 
 Cache keys are namespaced by `(catalog, schema)` so two schemas of the same catalog never share a cache entry — important because categorical IDs are assigned per-schema and the same integer ID can label different modalities across schemas. Table names are likewise qualified as `"catalog".schema.table_name` at every SQL boundary (`base-loader.ts:qualifyTable`).
 

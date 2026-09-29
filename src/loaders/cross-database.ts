@@ -139,14 +139,18 @@ class CrossDatabaseLoader extends FactQueryLoader {
    * Creates a CrossDatabaseLoader with no specific catalog binding.
    *
    * Catalog/schema identifiers are passed through the query params at load time.
+   *
+   * @param queryTimeout - Deadline of one batch, aligned on the timeout of the
+   *   resolver consuming the loader.
    */
-  constructor() {
+  constructor(queryTimeout: number = config.API.TIMEOUTS.FACT_COMPLEX) {
     super({
       batchSize: 1,
       cachePrefix: 'cross-database',
       cache: true,
       cacheTimeout: config.API.LOADERS.FACT_CACHE_TIMEOUT,
       catalogId: null,
+      queryTimeout,
     });
   }
 
@@ -494,7 +498,7 @@ const createCompareFacts = () => {
  * @returns DataLoader keyed by CompareAggregatedFactsParams, returning ComparisonResult.
  */
 const createCompareAggregatedFacts = () => {
-  const loader = new CrossDatabaseLoader();
+  const loader = new CrossDatabaseLoader(config.API.TIMEOUTS.AGGREGATED_SIMPLE);
   return loader.createLoader<CompareAggregatedFactsParams, ComparisonResult>((connection, params) =>
     loader.compareAggregatedFacts(connection, params),
   );
@@ -507,7 +511,7 @@ const createCompareAggregatedFacts = () => {
  * @returns DataLoader keyed by CrossDatabaseSelectOptionsParams.
  */
 const createCrossDatabaseSelectOptions = () => {
-  const loader = new CrossDatabaseLoader();
+  const loader = new CrossDatabaseLoader(config.API.TIMEOUTS.FACT_SIMPLE);
   return loader.createLoader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>(
     (connection, params) => loader.crossDatabaseSelectOptions(connection, params),
   );

@@ -83,6 +83,8 @@ class DatasetInfoLoader extends BaseQueryLoader {
       cache: true,
       // Même TTL que catalogMetadata : les deux décrivent le contrat du schéma
       cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.METADATA,
       catalogId: null,
     });
   }

@@ -26,6 +26,16 @@ interface LoaderConfig {
       MAX_LIMIT: number;
       MAX_OFFSET: number;
     };
+    TIMEOUTS: Record<
+      | 'FACT_SIMPLE'
+      | 'FACT_COMPLEX'
+      | 'AGGREGATED_SIMPLE'
+      | 'AGGREGATED_COMPLEX'
+      | 'METADATA'
+      | 'SELECT_OPTIONS'
+      | 'CACHE_DEFAULT',
+      number
+    >;
   };
 }
 
@@ -76,6 +86,16 @@ export const makeLoaderConfig = (): LoaderConfig => ({
       MAX_BATCH_SIZE: 50,
     },
     PAGINATION: { MAX_LIMIT: 1000, MAX_OFFSET: 10000 },
+    // Échéances des lots (queryTimeout des loaders)
+    TIMEOUTS: {
+      FACT_SIMPLE: 10000,
+      FACT_COMPLEX: 15000,
+      AGGREGATED_SIMPLE: 10000,
+      AGGREGATED_COMPLEX: 15000,
+      METADATA: 5000,
+      SELECT_OPTIONS: 5000,
+      CACHE_DEFAULT: 300,
+    },
   },
 });
 

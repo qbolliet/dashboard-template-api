@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
 import { toLoaderError } from './loader-errors.js';
+import { runInterruptible } from '../db/interrupt.js';
 
 // ─── Interfaces de la connexion DuckDB ───────────────────────────────────────
 
@@ -39,12 +40,13 @@ interface DuckDBConnection {
   exec: (query: string) => Promise<void>;
   close: () => Promise<void>;
   inUse: boolean;
-  conn: unknown;
+  /** Raw DuckDB connection; only its interrupt is used here (query timeout). */
+  conn: { interrupt: () => void };
 }
 
 /** Interface of a DuckDB connection pool. */
 interface DuckDBPool {
-  acquire: () => Promise<DuckDBConnection>;
+  acquire: (signal?: AbortSignal) => Promise<DuckDBConnection>;
   release: (connection: DuckDBConnection) => void;
   close: () => Promise<void>;
 }
@@ -67,7 +69,19 @@ interface BaseLoaderConfig {
    * invalidation patterns `prefix:catalog:schema@*:*` still match.
    */
   cacheVariant?: string | null;
+  /**
+   * Deadline (ms) of one batch: connection wait plus queries. When it expires
+   * the running DuckDB query is interrupted and the connection released.
+   * Aligned on the resolver timeout (API.TIMEOUTS) of the loader's consumer.
+   */
+  queryTimeout?: number;
 }
+
+/**
+ * Runs a step on the batch's connection, acquired on first use and
+ * interrupted when the batch deadline expires.
+ */
+type RunOnConnection = <T>(step: (connection: DuckDBConnection) => Promise<T>) => Promise<T>;
 
 /** Sort criterion for SQL ORDER BY clauses. */
 interface SortItem {
@@ -124,6 +138,7 @@ class BaseQueryLoader {
   catalogId: string | null;
   schema: string | null;
   cacheVariant: string | null;
+  queryTimeout: number;
 
   // Initialisation des propriétés du loader
   /**
@@ -139,40 +154,65 @@ class BaseQueryLoader {
     this.catalogId = config.catalogId ?? null;
     this.schema = config.schema ?? null;
     this.cacheVariant = config.cacheVariant ?? null;
+    // Échéance par défaut : le plus long timeout de resolver
+    this.queryTimeout = config.queryTimeout ?? globalConfig.API.TIMEOUTS.FACT_COMPLEX;
   }
 
-  // Méthode exécutant une fonction à partir d'une connexion à la base de données
+  // Méthode exécutant un lot avec une connexion acquise à la demande
   /**
-   * Executes a function with a managed database connection.
+   * Runs a batch body with a connection acquired lazily, under a deadline.
    *
-   * Acquires a connection from the pool before calling queryFn and
-   * releases it in the finally block, even when queryFn throws.
+   * The body receives `run`: the first call acquires one connection from the
+   * pool (shared by every later call of the batch), so a batch served
+   * entirely from the cache never takes a connection. The deadline
+   * (`queryTimeout`) starts now and covers both the wait in the pool queue
+   * and the queries: when it expires, a queued acquisition leaves the queue
+   * and a running query is interrupted (`connection.conn.interrupt()`), the
+   * step then failing with the timeout error. The connection is released once
+   * the body has settled — right after the interrupted query returns.
    *
-   * @param queryFn - Async function that receives a DuckDB connection.
-   * @returns Result of queryFn.
-   * @throws {Error} When pool acquisition fails or queryFn throws.
+   * @param body - Batch work, calling `run` for each database step.
+   * @returns Result of body.
+   * @throws Whatever body throws (timeout, acquisition or query error).
    */
-  async executeWithConnection<T>(
-    queryFn: (connection: DuckDBConnection) => Promise<T>,
-  ): Promise<T> {
-    let connection: DuckDBConnection | undefined;
+  async withLazyConnection<T>(body: (run: RunOnConnection) => Promise<T>): Promise<T> {
+    // Échéance du lot : attente dans la file comprise
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new Error(`${this.cachePrefix} query timeout after ${this.queryTimeout}ms`),
+        ),
+      this.queryTimeout,
+    );
     let pool: DuckDBPool | undefined;
-    try {
-      // Garde de version : un schéma non conforme est refusé avant toute requête.
-      // Les loaders cross-catalog (catalogId null, catalogues passés en arguments)
-      // appliquent la garde eux-mêmes sur chacune de leurs cibles.
-      if (this.catalogId) {
-        assertSchemaSupported(this.catalogId, this.resolvedSchema());
-      }
+    let acquisition: Promise<DuckDBConnection> | undefined;
 
-      // Récupération du pool associé à l'identifiant de catalogue
-      pool = (databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }).getPool(
-        this.catalogId,
-      );
-      // Acquisition de la connexion
-      connection = await pool.acquire();
-      // Exécution de la fonction avec la connexion
-      return await queryFn(connection);
+    // Acquisition unique, au premier besoin réel d'une connexion
+    const connect = (): Promise<DuckDBConnection> => {
+      if (!acquisition) {
+        // Garde de version : un schéma non conforme est refusé avant toute requête.
+        // Les loaders cross-catalog (catalogId null, catalogues passés en arguments)
+        // appliquent la garde eux-mêmes sur chacune de leurs cibles.
+        if (this.catalogId) {
+          assertSchemaSupported(this.catalogId, this.resolvedSchema());
+        }
+        // Récupération du pool associé à l'identifiant de catalogue
+        pool = (
+          databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }
+        ).getPool(this.catalogId);
+        acquisition = pool.acquire(controller.signal);
+      }
+      return acquisition;
+    };
+
+    const run: RunOnConnection = async (step) => {
+      const connection = await connect();
+      return runInterruptible(connection, controller.signal, () => step(connection));
+    };
+
+    try {
+      return await body(run);
     } catch (error) {
       logger.error(
         `Error in ${this.cachePrefix} loader (catalog: ${this.catalogId || 'default'}, schema: ${this.schema || 'default'}):`,
@@ -180,11 +220,31 @@ class BaseQueryLoader {
       );
       throw error;
     } finally {
-      // Libération de la connexion dans tous les cas
-      if (connection && pool) {
-        pool.release(connection);
+      clearTimeout(timer);
+      // Libération de la connexion si elle a été acquise
+      if (acquisition && pool) {
+        const connection = await acquisition.catch(() => undefined);
+        if (connection) pool.release(connection);
       }
     }
+  }
+
+  // Méthode exécutant une fonction à partir d'une connexion à la base de données
+  /**
+   * Executes a function with a managed database connection.
+   *
+   * Acquires a connection from the pool before calling queryFn and releases
+   * it afterwards, even when queryFn throws. The loader's `queryTimeout`
+   * applies: past it, the query is interrupted (see {@link withLazyConnection}).
+   *
+   * @param queryFn - Async function that receives a DuckDB connection.
+   * @returns Result of queryFn.
+   * @throws {Error} When pool acquisition fails, queryFn throws or the deadline expires.
+   */
+  async executeWithConnection<T>(
+    queryFn: (connection: DuckDBConnection) => Promise<T>,
+  ): Promise<T> {
+    return this.withLazyConnection((run) => run(queryFn));
   }
 
   // Méthode de qualification d'un nom de table avec le catalogue DuckLake courant
@@ -279,9 +339,10 @@ class BaseQueryLoader {
    * Loads data with optional Redis caching.
    *
    * On cache miss, calls loader(), stores the result, then returns it.
-   * Falls back to a direct loader call on a Redis error — but never on a
-   * loader error: those belong to the caller (a GraphQLError must reach the
-   * client, and retrying a failed query would only run it twice).
+   * A Redis failure falls back to the loader (handled by `withCache`), and so
+   * does a key that cannot be built; a loader error is never retried: it
+   * belongs to the caller (a GraphQLError must reach the client, and
+   * retrying a failed query would only run it twice).
    *
    * The cache key is `<prefix>:<catalog>:<schema>@<version>:<variant><hash>`,
    * where catalog/schema come from {@link cacheNamespace} (always resolved,
@@ -304,17 +365,8 @@ class BaseQueryLoader {
       return await loader();
     }
 
-    // Distinction entre une panne du cache et une erreur du loader lui-même
-    let loaderFailed = false;
-    const guardedLoader = async (): Promise<T> => {
-      try {
-        return await loader();
-      } catch (error) {
-        loaderFailed = true;
-        throw error;
-      }
-    };
-
+    // Initialisation de la clé de cache
+    let cacheKey: string;
     try {
       // Le schéma fait partie de la clé : deux schémas d'un même catalogue ne
       // doivent jamais partager une entrée de cache (colonnes et modalités différentes).
@@ -329,27 +381,28 @@ class BaseQueryLoader {
         .digest('hex');
       // Version des données servies dans l'espace de noms : une mise à jour du
       // catalogue rend les anciennes entrées inaccessibles (expiration par TTL)
-      const cacheKey = buildCacheKey(
+      cacheKey = buildCacheKey(
         { prefix: this.cachePrefix, catalog, schema, variant: this.cacheVariant ?? '', hash },
         (c, s) => databaseManager.getDataVersion(c, s),
       );
-      return await withCache<T>(cacheKey, guardedLoader, this.cacheTimeoutFor(key));
     } catch (error) {
-      // L'erreur vient du loader : elle appartient à l'appelant
-      if (loaderFailed) throw error;
-      logger.error(`Cache error in ${this.cachePrefix} loader:`, error);
-      // En cas d'erreur de cache, exécution directe du loader
+      // Clé impossible à construire : chargement direct, sans cache
+      logger.error(`Cache key error in ${this.cachePrefix} loader:`, error);
       return await loader();
     }
+    // Pannes Redis absorbées par withCache ; une erreur du loader remonte telle quelle
+    return await withCache<T>(cacheKey, loader, this.cacheTimeoutFor(key));
   }
 
   // Méthode de création d'un DataLoader avec gestion du cache et de la connexion
   /**
    * Creates a DataLoader that processes one key per database call.
    *
-   * Each key is loaded independently (with optional caching). Use
-   * createBatchLoader when the underlying query can handle multiple
-   * keys in a single round-trip.
+   * Each key is loaded independently (with optional caching). The cache is
+   * read before any connection is acquired: a batch served entirely from
+   * Redis never touches the pool, and the misses of a batch share one
+   * connection (see {@link withLazyConnection}). Use createBatchLoader when
+   * the underlying query can handle multiple keys in a single round-trip.
    *
    * An error never becomes null: it is classified by toLoaderError and
    * returned as the value of the failing key, so DataLoader rejects that key
@@ -368,17 +421,16 @@ class BaseQueryLoader {
   ): DataLoader<K, V, string> {
     return new DataLoader<K, V, string>(
       async (keys) => {
-        return this.executeWithConnection(async (connection) => {
+        return this.withLazyConnection(async (run) => {
           return Promise.all(
             keys.map(async (key): Promise<V | Error> => {
               try {
                 // Contrôle de la clé avant le cache (garde de version)
                 this.assertKeyAllowed(key);
-                // Appel direct pour éviter la récursion dans le DataLoader
-                if (!this.cacheEnabled) {
-                  return await loadFn(connection, key);
-                }
-                return await this.loadWithCache(key, async () => await loadFn(connection, key));
+                // Connexion acquise seulement si la clé doit être lue en base
+                return await this.loadWithCache(key, () =>
+                  run((connection) => loadFn(connection, key)),
+                );
               } catch (error) {
                 // L'erreur devient la valeur de la clé : DataLoader ne rejette
                 // que cette clé, jamais de null silencieux
