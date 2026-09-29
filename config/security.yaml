@@ -33,39 +33,66 @@ SECURITY:
     MAX_BURST_REQUESTS: 10
     BURST_WINDOW_MS: 60000
 
-  # Configuration de la complexité — évaluée avant exécution (didResolveOperation)
+  # Configuration de la complexité — évaluée avant exécution (didResolveOperation).
+  # Barème détaillé : docs-site/toolbox/docs/architecture/security.md
   COMPLEXITY:
     # Complexité maximale autorisée pour une opération
     # Calibré sur les requêtes réelles du dashboard : la page la plus lourde
-    # (tableau + graphique + menus + métadonnées) score ~50, soit une marge de 4x.
+    # (tableau + graphique + menus + métadonnées) score ~60, soit une marge de 3x.
     # Marge verrouillée par tests/integration/complexity-guard.test.ts.
     MAX_ALLOWED: 200
-    # Coûts par type d'opération
+    # Nombre maximal de champs racine par opération, alias compris (__typename
+    # exclu) : chaque champ racine est au moins une requête SQL ou un accès au cache
+    MAX_ROOT_FIELDS: 20
+    # Coûts par type de champ (les champs d'objet sont multipliés par
+    # DEPTH_FACTOR^profondeur)
     SCALAR_COST: 0
     OBJECT_COST: 1
-    LIST_FACTOR: 10
     DEPTH_FACTOR: 1.5
+    # __schema et __type seulement (__typename est gratuit)
     INTROSPECTION_COST: 1000
-    # Scores personnalisés par champ — s'appliquent à n'importe quel champ, à
-    # n'importe quelle profondeur. Pondérer une nouvelle query se fait ici, par
-    # l'ajout d'une seule entrée.
-    CUSTOM_SCORES:
+    # Coût d'une ligne demandée par `limit`, borné à API.PAGINATION.MAX_LIMIT
+    # (au-delà, le resolver répond BAD_USER_INPUT avant tout SQL) ; un `limit`
+    # omis est facturé à la valeur par défaut déclarée dans le SDL
+    ROW_COST: 0.1
+    # Metadata.stats : une requête SQL par colonne (MIN, MAX, COUNT DISTINCT),
+    # facturée pour chaque colonne de la liste englobante (nombre de colonnes du
+    # schéma lu dans le cache catalogMetadata) — soit un getFieldStats par colonne
+    STATS_COST_PER_COLUMN: 5
+    # Score d'un champ racine absent de ROOT_FIELD_SCORES (jamais nul)
+    DEFAULT_ROOT_FIELD_SCORE: 5
+    # Score de base de CHAQUE champ racine du type Query (appliqué à la racine
+    # seulement). Toute nouvelle query doit y figurer : un test le vérifie.
+    ROOT_FIELD_SCORES:
+      _empty: 1
+      # Lecture de la configuration en mémoire
+      getCatalogs: 1
+      # Lecture des tables metadata / dataset_metadata (petites, en cache)
+      getCatalogSchema: 2
+      getDatasetInfo: 2
+      getMetaData: 2
+      getFields: 2
+      getSharedFields: 3
+      # DISTINCT sur une colonne, borné par `limit`
+      getSelectOptions: 3
       getFactTable: 5
-      getAggregatedFacts: 10
-      getFactTableWithMetadata: 8
-      # Scalaire JSON (coût de feuille nul sinon) : un DISTINCT sur toute la
-      # chaîne de colonnes, borné par API.SELECT_OPTIONS.TREE_MAX_NODES
-      getSelectOptionsTree: 5
-      # Statistiques de colonne : une requête SQL par colonne (MIN, MAX, COUNT DISTINCT).
-      # `stats` sur Metadata coûte N requêtes pour N colonnes sélectionnées : son
-      # score, fixé au-dessus de getFieldStats, décourage de l'ouvrir sur tout un catalogue.
+      # Une requête d'agrégats (MIN, MAX, COUNT DISTINCT) sur toute la table
       getFieldStats: 5
-      stats: 10
+      # Scalaire JSON : un DISTINCT sur toute la chaîne de colonnes, borné par
+      # API.SELECT_OPTIONS.TREE_MAX_NODES
+      getSelectOptionsTree: 5
+      getFactTableWithMetadata: 8
+      getAggregatedFacts: 10
+      crossDatabaseSelectOptions: 10
+      getAggregatedFactsWithMetadata: 12
+      # Jointure de deux datasets
+      compareFacts: 15
+      compareAggregatedFacts: 15
 
   # Pas de section SANITIZATION : la sanitization XSS/SQL des valeurs n'a pas
-  # d'objet sur ce chemin (SQL paramétré via treeToSQL, identifiants validés par
-  # validateIdentifier, motifs interdits rejetés par PatternValidator) et
-  # corromprait des libellés légitimes (« Côte-d'Or »). Cf. src/security/manager.ts.
+  # d'objet sur ce chemin (SQL paramétré via treeToSQL, identifiants validés
+  # contre la table metadata) et corromprait des libellés légitimes
+  # (« Côte-d'Or »). Cf. src/security/manager.ts.
 
   # Bornes anti-abus de l'arbre de filtres (structuredFilters)
   FILTER_TREE:
@@ -100,9 +127,3 @@ SECURITY_LIMITS:
   DEFAULT_DEPTH_LIMIT: 5
   # Longueur maximale des chaînes d'entrée
   MAX_INPUT_LENGTH: 1000
-  # Facteur de complexité pour les listes
-  COMPLEXITY_LIST_FACTOR: 10
-  # Facteur de complexité pour la profondeur
-  COMPLEXITY_DEPTH_FACTOR: 1.5
-  # Constante pour le calcul de complexité
-  COMPLEXITY_CALCULATION_FACTOR: 0.1

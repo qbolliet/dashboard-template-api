@@ -33,15 +33,16 @@ Limits apply per client IP. If you deploy behind a reverse proxy, configure `TRU
 
 ## Query protection
 
-Beyond rate limiting, every query is validated against three independent checks before execution:
+Beyond rate limiting, every query is validated against these checks before execution:
 
-| Check              | Default (dev / prod) | Config key                        |
-| ------------------ | -------------------- | --------------------------------- |
-| Max depth          | 15 / 7               | `SECURITY.MAX_QUERY_DEPTH`        |
-| Max complexity     | 100                  | `SECURITY.COMPLEXITY.MAX_ALLOWED` |
-| Input sanitization | enabled              | `SECURITY.SANITIZATION`           |
+| Check                  | Default (dev / prod) | Config key                               |
+| ---------------------- | -------------------- | ---------------------------------------- |
+| Max depth              | 15 / 7               | `SECURITY.MAX_QUERY_DEPTH`               |
+| Max root fields        | 20                   | `SECURITY.COMPLEXITY.MAX_ROOT_FIELDS`    |
+| Max complexity         | 200                  | `SECURITY.COMPLEXITY.MAX_ALLOWED`        |
+| Max `limit` / `offset` | 1000 / 10000         | `API.PAGINATION.MAX_LIMIT`, `MAX_OFFSET` |
 
-Complexity is computed per query using configurable cost weights: scalar fields cost 0, object fields cost 1, lists multiply child cost by 10, and depth adds a 1.5× factor. Expensive operations (`getAggregatedFacts`, `getFactTable`) carry additional base scores.
+Every root field pays a base score (1 for `getCatalogs` up to 15 for `compareFacts`), plus 0.1 per row requested through `limit` (an omitted `limit` counts at its default), +2 for a filter tree and +1 for a sort; nested objects cost 1 × 1.5^depth, and `Metadata.stats` costs 5 per column of its list. `getCatalogSchema { stats }` therefore stays within budget up to 39 columns: to read the bounds of a few columns, prefer `getFieldStats` on the columns you display. An operation above a ceiling gets `QUERY_COMPLEXITY_EXCEEDED` (HTTP 400) with its score in `extensions`.
 
 ## Multi-catalog routing
 

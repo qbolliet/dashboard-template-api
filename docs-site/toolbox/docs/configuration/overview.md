@@ -17,8 +17,6 @@ All configuration files live in `config/` and are loaded and deep-merged by `src
 | [`config/cache.yaml`](./cache)       | Redis connection, TTL values, cache invalidation      |
 | [`config/logging.yaml`](./logging)   | Log levels, transports, sampling, sanitized fields    |
 
-`config/security-patterns.yaml` holds the regex patterns used by `src/security/pattern-validator.ts` for input validation and is not documented here as it rarely needs modification.
-
 ## Environment variables quick reference
 
 The most commonly used variables:

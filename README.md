@@ -97,7 +97,7 @@ dashboard-template-api/
 │   ├── generated/            # Resolver types generated from schema.graphql (codegen)
 │   ├── loaders/              # DataLoader implementations
 │   ├── export/               # REST bulk export (Arrow / CSV / Parquet)
-│   ├── security/             # Rate limiter, complexity, sanitization
+│   ├── security/             # Rate limiter, complexity, depth, CORS
 │   ├── cache/                # Redis cache helpers
 │   └── utils/                # Config loader, logger, utilities
 ├── config/
@@ -105,8 +105,7 @@ dashboard-template-api/
 │   ├── database.yaml         # DuckLake catalog paths and pool
 │   ├── security.yaml         # Rate limits, complexity, depth
 │   ├── cache.yaml            # Redis connection and TTL
-│   ├── logging.yaml          # Log levels and transports
-│   └── security-patterns.yaml
+│   └── logging.yaml          # Log levels and transports
 ├── tests/
 │   ├── setup/                # Jest setup and DI container
 │   ├── unit/                 # Unit tests mirroring src/

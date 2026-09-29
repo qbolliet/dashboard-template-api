@@ -1,16 +1,19 @@
 /**
  * Integration tests for the query-complexity guard.
  *
- * Two concerns are covered: the Apollo plugin wiring (an over-budget query is
- * rejected in didResolveOperation, before any resolver runs) and the
- * calibration of SECURITY.COMPLEXITY.MAX_ALLOWED in config/security.yaml
- * against the queries the dashboard actually sends.
+ * Three concerns are covered: the Apollo plugin wiring (an over-budget query is
+ * rejected in didResolveOperation, before any resolver runs), the calibration
+ * of SECURITY.COMPLEXITY in config/security.yaml against the queries the
+ * dashboard actually sends, and the abusive shapes the scale must refuse
+ * (aliases, stats over a whole catalog, large limits). The operations are
+ * scored against the published SDL (schema.graphql), whose `limit` defaults
+ * are charged when the argument is omitted.
  */
 
 import { jest, describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { ApolloServer } from '@apollo/server';
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { parse } from 'graphql';
+import { buildSchema, parse } from 'graphql';
 import type { DocumentNode, FragmentDefinitionNode, OperationDefinitionNode } from 'graphql';
 import fs from 'fs';
 import path from 'path';
@@ -18,6 +21,7 @@ import { fileURLToPath } from 'url';
 import YAML from 'yaml';
 import { SecurityManager } from '../../src/security/manager.js';
 import { QueryComplexityAnalyzer } from '../../src/security/complexity-analyzer.js';
+import type { ColumnCounter } from '../../src/security/complexity-analyzer.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -26,12 +30,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /** Complexity section of config/security.yaml. */
 interface ComplexityYaml {
   MAX_ALLOWED: number;
+  MAX_ROOT_FIELDS: number;
   SCALAR_COST: number;
   OBJECT_COST: number;
-  LIST_FACTOR: number;
   DEPTH_FACTOR: number;
   INTROSPECTION_COST: number;
-  CUSTOM_SCORES: Record<string, number>;
+  ROW_COST: number;
+  STATS_COST_PER_COLUMN: number;
+  DEFAULT_ROOT_FIELD_SCORE: number;
+  ROOT_FIELD_SCORES: Record<string, number>;
 }
 
 // ─── Configuration réelle ────────────────────────────────────────────────────
@@ -43,7 +50,34 @@ const securityYaml = YAML.parse(
 ) as { SECURITY: { COMPLEXITY: ComplexityYaml } };
 const complexityConfig = securityYaml.SECURITY.COMPLEXITY;
 
+// SDL publié : défauts de `limit` et liste des champs racine
+const publishedSchema = buildSchema(
+  fs.readFileSync(path.resolve(__dirname, '../../schema.graphql'), 'utf8'),
+);
+
 // ─── Utilitaires ─────────────────────────────────────────────────────────────
+
+/**
+ * Builds a column counter answering fixed counts.
+ *
+ * @param perSchema - Columns of any single schema.
+ * @param all - Columns of every schema of every catalog.
+ * @returns The counter.
+ */
+const fixedColumns = (perSchema: number, all: number = perSchema): ColumnCounter => ({
+  columnsOf: async () => perSchema,
+  allColumns: async () => all,
+});
+
+/**
+ * Repeats an aliased root field.
+ *
+ * @param count - Number of aliases.
+ * @param field - Field with its arguments and selection.
+ * @returns The operation source.
+ */
+const aliased = (count: number, field: string): string =>
+  `{ ${Array.from({ length: count }, (_unused, i) => `a${i}: ${field}`).join(' ')} }`;
 
 /**
  * Splits a document into its first operation and its named fragments.
@@ -96,10 +130,6 @@ const REALISTIC_QUERIES: Record<string, string> = {
     date: getFieldStats(fieldName: "date", structuredFilters: {}) { min max }
     horizon: getFieldStats(fieldName: "horizon", structuredFilters: {}) { min max distinctCount nullCount }
   }`,
-  // Colonnes du schéma et leurs bornes globales en une seule requête
-  catalogWithStats: `{
-    getCatalogSchema { name label sqlType unit displayFormat stats { min max distinctCount nullCount } }
-  }`,
   fullPage: `{
     table: getFactTableWithMetadata(limit: 100, structuredFilters: {}, sort: []) {
       columns
@@ -115,34 +145,141 @@ const REALISTIC_QUERIES: Record<string, string> = {
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-describe('Calibrage de MAX_ALLOWED (config/security.yaml)', () => {
+describe('Barème de complexité (config/security.yaml)', () => {
   const analyzer = new QueryComplexityAnalyzer(
     complexityConfig as unknown as Record<string, unknown>,
   );
 
-  test.each(Object.entries(REALISTIC_QUERIES))(
-    'la requête « %s » reste sous le tiers du plafond',
-    (_name, source) => {
-      const { operation, fragments } = parseOperation(source);
-      const score = analyzer.calculateForOperation(operation, fragments, {});
-
-      // Marge d'au moins 3x : une requête légitime ne doit jamais frôler le plafond
-      expect(score).toBeLessThanOrEqual(complexityConfig.MAX_ALLOWED / 3);
-    },
-  );
-
-  test('une requête pathologiquement imbriquée dépasse le plafond', () => {
-    // Arbre large et profond — le cas que le plafond doit effectivement arrêter
-    const leaves = Array.from(
-      { length: 12 },
-      (_unused, i) => `f${i} { g { h { i { j { k { value } } } } } }`,
-    );
-    const source = `{ ${leaves.join(' ')} }`;
+  /**
+   * Scores a query against the shipped scale and the published SDL.
+   *
+   * @param source - GraphQL document source.
+   * @param columns - Column counter (16 columns, the test `main` schema, by default).
+   * @returns The complexity score.
+   */
+  const score = (source: string, columns: ColumnCounter = fixedColumns(16)): Promise<number> => {
     const { operation, fragments } = parseOperation(source);
-
-    expect(analyzer.calculateForOperation(operation, fragments, {})).toBeGreaterThan(
-      complexityConfig.MAX_ALLOWED,
+    return analyzer.calculateForOperation(
+      operation,
+      fragments,
+      {},
+      {
+        schema: publishedSchema,
+        columns,
+      },
     );
+  };
+
+  /**
+   * Counts the root fields of a query.
+   *
+   * @param source - GraphQL document source.
+   * @returns Number of data root fields.
+   */
+  const rootFields = (source: string): number => {
+    const { operation, fragments } = parseOperation(source);
+    return analyzer.countRootFields(operation, fragments);
+  };
+
+  test('chaque champ de Query a une entrée dans ROOT_FIELD_SCORES', () => {
+    const queryFields = Object.keys(publishedSchema.getQueryType()?.getFields() ?? {});
+    const missing = queryFields.filter((name) => !(name in complexityConfig.ROOT_FIELD_SCORES));
+    expect(missing).toEqual([]);
+    // Aucune entrée orpheline : chaque score désigne un champ réel
+    const orphans = Object.keys(complexityConfig.ROOT_FIELD_SCORES).filter(
+      (name) => !queryFields.includes(name),
+    );
+    expect(orphans).toEqual([]);
+  });
+
+  test('le score par défaut d’un champ racine n’est jamais nul', () => {
+    expect(complexityConfig.DEFAULT_ROOT_FIELD_SCORE).toBeGreaterThan(0);
+    expect(Object.values(complexityConfig.ROOT_FIELD_SCORES).every((s) => s > 0)).toBe(true);
+  });
+
+  describe('requêtes du dashboard', () => {
+    test.each(Object.entries(REALISTIC_QUERIES))(
+      'la requête « %s » reste sous le tiers du plafond',
+      async (_name, source) => {
+        // Marge d'au moins 3x : une requête légitime ne doit jamais frôler le plafond
+        expect(await score(source)).toBeLessThanOrEqual(complexityConfig.MAX_ALLOWED / 3);
+        expect(rootFields(source)).toBeLessThanOrEqual(complexityConfig.MAX_ROOT_FIELDS);
+      },
+    );
+
+    test('les colonnes et leurs bornes d’un schéma de 16 colonnes restent sous la moitié du plafond', async () => {
+      // `stats` sur tout un schéma : le chemin coûteux (une requête SQL par colonne)
+      const source = `{
+        getCatalogSchema { name label sqlType unit displayFormat stats { min max distinctCount nullCount } }
+      }`;
+      expect(await score(source)).toBeLessThanOrEqual(complexityConfig.MAX_ALLOWED / 2);
+    });
+
+    test('une page de 1 000 lignes reste sous le plafond', async () => {
+      expect(
+        await score('{ getFactTableWithMetadata(limit: 1000) { columns data } }'),
+      ).toBeLessThanOrEqual(complexityConfig.MAX_ALLOWED);
+    });
+
+    test('getSelectOptions(limit: 1000000) passe le garde pour recevoir le BAD_USER_INPUT du resolver', async () => {
+      const source = '{ getSelectOptions(fieldName: "country", limit: 1000000) { value } }';
+      expect(await score(source)).toBeLessThanOrEqual(complexityConfig.MAX_ALLOWED);
+    });
+  });
+
+  describe('formes abusives refusées', () => {
+    test('50 alias de compareFacts dépassent le plafond de champs racine et de score', async () => {
+      const source = aliased(
+        50,
+        'compareFacts(catalogA: "default", catalogB: "macroeconomics", joinFields: ["country"]) { total }',
+      );
+      expect(rootFields(source)).toBeGreaterThan(complexityConfig.MAX_ROOT_FIELDS);
+      expect(await score(source)).toBeGreaterThan(complexityConfig.MAX_ALLOWED);
+    });
+
+    test('40 alias de getFieldStats dépassent le plafond de champs racine', () => {
+      const source = aliased(40, 'getFieldStats(fieldName: "value") { min max }');
+      expect(rootFields(source)).toBeGreaterThan(complexityConfig.MAX_ROOT_FIELDS);
+    });
+
+    test('getCatalogSchema { stats } sur 40 colonnes dépasse le plafond, 39 non', async () => {
+      const source = '{ getCatalogSchema { name stats { min max } } }';
+      expect(await score(source, fixedColumns(40))).toBeGreaterThan(complexityConfig.MAX_ALLOWED);
+      expect(await score(source, fixedColumns(39))).toBeLessThanOrEqual(
+        complexityConfig.MAX_ALLOWED,
+      );
+    });
+
+    test('stats sur toutes les colonnes de tous les catalogues dépasse le plafond', async () => {
+      const source = '{ getCatalogs { schemas { fields { name stats { min } } } } }';
+      expect(await score(source, fixedColumns(16, 60))).toBeGreaterThan(
+        complexityConfig.MAX_ALLOWED,
+      );
+    });
+
+    test('20 alias de getAggregatedFactsWithMetadata(limit: 1000) dépassent le plafond', async () => {
+      const source = aliased(
+        20,
+        'getAggregatedFactsWithMetadata(groupBy: "country", measure: "value", limit: 1000) { data { key } }',
+      );
+      expect(rootFields(source)).toBeLessThanOrEqual(complexityConfig.MAX_ROOT_FIELDS);
+      expect(await score(source)).toBeGreaterThan(complexityConfig.MAX_ALLOWED);
+    });
+
+    test('un limit omis est facturé à sa valeur par défaut du SDL', async () => {
+      expect(await score('{ getFactTable { total } }')).toBeCloseTo(
+        await score('{ getFactTable(limit: 100) { total } }'),
+      );
+    });
+
+    test('une requête pathologiquement imbriquée dépasse le plafond', async () => {
+      // Arbre large et profond — le cas que le plafond doit effectivement arrêter
+      const leaves = Array.from(
+        { length: 12 },
+        (_unused, i) => `f${i} { g { h { i { j { k { value } } } } } }`,
+      );
+      expect(await score(`{ ${leaves.join(' ')} }`)).toBeGreaterThan(complexityConfig.MAX_ALLOWED);
+    });
   });
 });
 
@@ -155,7 +292,11 @@ describe('Branchement Apollo du garde de complexité', () => {
     // Plafond volontairement bas pour éprouver le rejet sans requête géante
     securityManager = new SecurityManager({
       RATE_LIMIT: { MAX_REQUESTS: 1000, WINDOW_MS: 60000 },
-      COMPLEXITY: { ...complexityConfig, MAX_ALLOWED: 2 },
+      COMPLEXITY: {
+        ...complexityConfig,
+        MAX_ALLOWED: 5,
+        ROOT_FIELD_SCORES: { cheap: 1, nested: 1 },
+      },
     } as never);
 
     const schema = makeExecutableSchema({
@@ -180,7 +321,7 @@ describe('Branchement Apollo du garde de complexité', () => {
             return {
               async didResolveOperation({ document, operation, request }) {
                 if (operation) {
-                  securityManager.validateComplexity(
+                  await securityManager.validateComplexity(
                     document,
                     operation,
                     (request.variables ?? {}) as Record<string, unknown>,
@@ -219,7 +360,7 @@ describe('Branchement Apollo du garde de complexité', () => {
     expect(result?.errors?.[0]?.extensions?.code).toBe('QUERY_COMPLEXITY_EXCEEDED');
     // Message explicite : score, plafond et piste de correction
     expect(result?.errors?.[0]?.message).toContain('Query too complex');
-    expect(result?.errors?.[0]?.message).toContain('exceeds the maximum of 2');
+    expect(result?.errors?.[0]?.message).toContain('exceeds the maximum of 5');
     expect(resolverSpy).not.toHaveBeenCalled();
   });
 

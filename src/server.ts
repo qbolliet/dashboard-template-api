@@ -26,12 +26,14 @@ import {
   createCorsMiddleware,
 } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+import { createColumnCounter } from './security/column-counter.js';
 import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 import { createCatalogRoutes } from './db/catalog-routes.js';
 import { catalogFreshnessMonitor } from './db/catalog-freshness.js';
 import { createExportRoutes } from './export/export-routes.js';
+import { formatGraphQLError, logGraphQLError } from './utils/graphql-errors.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -70,7 +72,7 @@ interface ExpressError extends Error {
   status?: number;
 }
 
-/** Apollo response body shape used to access errors in willSendResponse. */
+/** Apollo response body shape used to count errors in willSendResponse. */
 interface MutableSingleResult {
   singleResult?: {
     errors?: GraphQLFormattedError[];
@@ -122,11 +124,14 @@ function createApolloServer(
 
       return {
         // Validation de sécurité avant l'exécution de l'opération
-        async didResolveOperation({ document, operation, request: opRequest }): Promise<void> {
-          await securityManager.validateRequest(
+        async didResolveOperation({
+          document,
+          operation,
+          request: opRequest,
+          schema: operationSchema,
+        }): Promise<void> {
+          securityManager.validateRequest(
             operation as { name?: { value?: string }; operation?: string },
-            opRequest as { query?: string },
-            contextValue,
           );
 
           // Rejet avant exécution des requêtes trop coûteuses
@@ -142,16 +147,24 @@ function createApolloServer(
               rawVariables,
             );
 
-            securityManager.validateComplexity(
+            // Nombre de colonnes (prix de Metadata.stats) lu par les loaders de
+            // la requête : les resolvers réutilisent la même lecture
+            await securityManager.validateComplexity(
               document,
               operation,
               coerced ?? rawVariables,
               contextValue,
+              {
+                schema: operationSchema,
+                columns: contextValue?.loaders
+                  ? createColumnCounter(contextValue.loaders)
+                  : undefined,
+              },
             );
           }
         },
 
-        // Logging de la complétion de la requête et formatage en production
+        // Logging de la complétion de la requête
         async willSendResponse({ response }): Promise<void> {
           const duration = Date.now() - requestStart;
           const mutableBody = response.body as MutableSingleResult;
@@ -168,26 +181,15 @@ function createApolloServer(
           if (metrics.responseTimes.length > metrics.maxStoredTimes) {
             metrics.responseTimes.shift();
           }
-
-          // Masquage des messages d'erreur détaillés en production
-          if (errors && config.ENVIRONMENT === 'production' && mutableBody.singleResult) {
-            mutableBody.singleResult.errors = errors.map((error) => ({
-              message: 'An error occurred',
-              extensions: {
-                errorId: error.extensions?.['errorId'] as string | undefined,
-                code: error.extensions?.['code'] as string | undefined,
-              },
-            }));
-          }
         },
 
-        // Logging des erreurs GraphQL rencontrées lors de la résolution
+        // Seule journalisation des erreurs de la requête : un identifiant par
+        // erreur, porté par ses extensions jusqu'à formatError et au client
         async didEncounterErrors({ errors: graphqlErrors }): Promise<void> {
           graphqlErrors.forEach((error) => {
-            contextLogger.error('GraphQL error', error, {
-              path: error.path,
-              locations: error.locations,
-            });
+            const errorId = uuidv4();
+            error.extensions['errorId'] = errorId;
+            logGraphQLError(contextLogger, error, errorId);
           });
         },
       };
@@ -199,22 +201,20 @@ function createApolloServer(
     schema,
     // Introspection : autorisée en développement seulement (NoIntrospection d'Apollo sinon)
     introspection: overrides.introspection ?? config.API.GRAPHQL.INTROSPECTION,
-    // Formatage des erreurs avec identifiant unique de traçabilité
+    // Formatage des erreurs : message conservé pour une erreur client, masqué
+    // en production pour une erreur interne ; errorId toujours présent
     formatError: (formattedError, error) => {
-      // Génération d'un identifiant unique associé à l'erreur
-      const errorId = uuidv4();
-      logger.error(`Error [${errorId}]: ${formattedError.message}`, {
-        stack: (error as Error)?.stack,
+      // Identifiant posé (et journalisé) par didEncounterErrors ; à défaut —
+      // erreur levée hors du pipeline de la requête —, généré et journalisé ici
+      const carriedId = formattedError.extensions?.['errorId'];
+      const errorId = typeof carriedId === 'string' ? carriedId : uuidv4();
+      if (errorId !== carriedId) {
+        logGraphQLError(createContextLogger({}), error, errorId);
+      }
+      return formatGraphQLError(formattedError, {
+        errorId,
+        production: config.ENVIRONMENT === 'production',
       });
-      // Distinction du message d'erreur selon l'environnement
-      const isProduction = config.ENVIRONMENT === 'production';
-      return {
-        message: isProduction ? 'An error occurred' : formattedError.message,
-        extensions: {
-          code: formattedError.extensions?.['code'] ?? 'INTERNAL_SERVER_ERROR',
-          errorId,
-        },
-      };
     },
     // Règles de validation ajoutées à celles d'Apollo : profondeur maximale
     validationRules: [

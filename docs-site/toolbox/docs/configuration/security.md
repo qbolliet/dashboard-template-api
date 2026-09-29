@@ -76,27 +76,29 @@ The 11th request from one IP within a minute gets a `429` with `Retry-After`. Th
 ```yaml
 SECURITY:
   COMPLEXITY:
-    MAX_ALLOWED: ${MAX_QUERY_COMPLEXITY:-100}
+    MAX_ALLOWED: 200 # ceiling on the score of one operation
+    MAX_ROOT_FIELDS: 20 # root fields per operation, aliases included
     SCALAR_COST: 0
     OBJECT_COST: 1
-    LIST_FACTOR: 10
     DEPTH_FACTOR: 1.5
-    INTROSPECTION_COST: 1000
-    CUSTOM_SCORES:
+    INTROSPECTION_COST: 1000 # __schema and __type; __typename is free
+    ROW_COST: 0.1 # per row of `limit`, bounded by API.PAGINATION.MAX_LIMIT
+    STATS_COST_PER_COLUMN: 5 # Metadata.stats, per column of the enclosing list
+    DEFAULT_ROOT_FIELD_SCORE: 5 # root field missing from the table
+    ROOT_FIELD_SCORES:
+      getCatalogs: 1
+      getCatalogSchema: 2
+      getSelectOptions: 3
       getFactTable: 5
-      getAggregatedFacts: 10
       getFactTableWithMetadata: 8
+      getAggregatedFacts: 10
+      compareFacts: 15
+      # … one entry per root field of the Query type
 ```
 
-The complexity score for a query is computed as:
+Every root field pays its score from `ROOT_FIELD_SCORES` (never zero), plus `ROW_COST` per requested row (an omitted `limit` is charged at its SDL default), +2 for a filter tree and +1 for a sort; nested objects pay `OBJECT_COST × DEPTH_FACTOR^depth`, and `Metadata.stats` pays `STATS_COST_PER_COLUMN` for each column of the list it belongs to. Operations with more than `MAX_ROOT_FIELDS` root fields, or a score above `MAX_ALLOWED`, are rejected before execution with `QUERY_COMPLEXITY_EXCEEDED` (HTTP 400). The full scale and worked examples are in [Security architecture](../architecture/security.md#complexity-scale-srcsecuritycomplexity-analyzerts).
 
-```
-score = sum(field_costs) × depth_factor
-```
-
-Where list fields multiply their children's cost by `LIST_FACTOR`. Expensive operations carry additional base scores via `CUSTOM_SCORES`.
-
-Queries exceeding `MAX_ALLOWED` are rejected before execution.
+Adding a root query means adding its entry to `ROOT_FIELD_SCORES`: `tests/integration/complexity-guard.test.ts` fails when a `Query` field has none.
 
 ## Query depth
 
@@ -109,23 +111,9 @@ SECURITY:
 
 The maximum nesting depth of a GraphQL selection set. Deeply nested queries are rejected to prevent abuse.
 
-## Input sanitization
+## No input sanitization
 
-```yaml
-SECURITY:
-  SANITIZATION:
-    ENABLE_XSS: true
-    ENABLE_SQL: true
-    MAX_STRING_LENGTH: ${MAX_INPUT_LENGTH:-1000}
-    ALLOWED_TAGS: []
-    CUSTOM_SANITIZERS: {}
-```
-
-All string inputs are:
-
-1. Truncated to `MAX_STRING_LENGTH`
-2. Stripped of XSS payloads via the `xss` library
-3. Checked for SQL injection patterns
+There is no `SANITIZATION` section and no pattern file: filter values are bound parameters and identifiers are checked against the `metadata` table, so escaping values would only corrupt legitimate labels (« Côte-d'Or »), and patterns applied to the query text would reject legitimate queries (`__typename`, a search for "ecosystem") while the same value passes through variables. See [Security architecture](../architecture/security.md#no-text-patterns-no-value-sanitization).
 
 ## Timeouts (complexity-based)
 

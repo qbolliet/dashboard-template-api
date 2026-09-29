@@ -313,7 +313,9 @@ const catalogResolvers = {
     ): Promise<string[]> => {
       // Validation de la présence d'au moins une cible
       if (!targets || targets.length === 0) {
-        throw new GraphQLError('At least one target must be specified');
+        throw new GraphQLError('At least one target must be specified', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
       }
 
       // Validation de chaque cible : catalogue connu et schéma (si fourni) dans l'allow-list
@@ -321,6 +323,7 @@ const catalogResolvers = {
         if (!databaseManager.isValidCatalog(catalog)) {
           throw new GraphQLError(
             `Catalog '${catalog}' is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
+            { extensions: { code: 'BAD_USER_INPUT' } },
           );
         }
         validateSchemaForCatalog(catalog, schema);

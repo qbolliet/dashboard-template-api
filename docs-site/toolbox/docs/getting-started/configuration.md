@@ -9,16 +9,15 @@ All configuration lives in the `config/` directory as YAML files. They are deep-
 
 ## File overview
 
-| File                            | Purpose                                               |
-| ------------------------------- | ----------------------------------------------------- |
-| `config/main.yaml`              | Application name and environment                      |
-| `config/api.yaml`               | Port, CORS, pagination, timeouts, data loaders        |
-| `config/database.yaml`          | DuckLake catalog paths and connection pool            |
-| `config/security.yaml`          | Rate limiting, complexity, depth limits, sanitization |
-| `config/cache.yaml`             | Redis connection and per-type TTL values              |
-| `config/logging.yaml`           | Log level, transports, sampling                       |
-| `config/security-patterns.yaml` | Regex patterns for input validation                   |
-| `config/test/`                  | Environment-specific overrides for tests              |
+| File                   | Purpose                                        |
+| ---------------------- | ---------------------------------------------- |
+| `config/main.yaml`     | Application name and environment               |
+| `config/api.yaml`      | Port, CORS, pagination, timeouts, data loaders |
+| `config/database.yaml` | DuckLake catalog paths and connection pool     |
+| `config/security.yaml` | Rate limiting, complexity, depth limits        |
+| `config/cache.yaml`    | Redis connection and per-type TTL values       |
+| `config/logging.yaml`  | Log level, transports, sampling                |
+| `config/test/`         | Environment-specific overrides for tests       |
 
 ## Environment variable substitution
 

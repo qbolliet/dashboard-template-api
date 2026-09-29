@@ -5,12 +5,12 @@ import type { RequestHandler } from 'express';
 import { createContextLogger } from '../utils/logger.js';
 import { RateLimiter } from './rate-limiter.js';
 import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
-import { PatternValidator } from './pattern-validator.js';
 import { createRateLimitMiddleware } from './rate-limit-middleware.js';
 import { config } from '../utils/config-loader.js';
 import type { ContextLogger } from '../utils/logger.js';
 import type { RateLimitInfo, HttpRequest } from './rate-limiter.js';
 import type { SecurityConfig } from '../utils/config-loader.js';
+import type { ScoringOptions } from './complexity-analyzer.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -28,11 +28,6 @@ interface GraphQLOperation {
   operation?: string;
 }
 
-/** Minimal representation of an HTTP request used for document-level validation. */
-interface GraphQLRequest {
-  query?: string;
-}
-
 // ─── Classe gestionnaire de sécurité ────────────────────────────────────────
 
 // Budget par défaut des routes d'administration : 10 requêtes par minute et par IP
@@ -43,22 +38,25 @@ const ADMIN_RATE_LIMIT_DEFAULTS: Record<string, unknown> = {
   BURST_WINDOW_MS: 60_000,
 };
 
-// Pas de sanitization XSS/SQL sur le chemin GraphQL — décision assumée :
+// Ni sanitization des valeurs ni motifs interdits sur le texte de la requête —
+// décision assumée :
 //  - les valeurs de filtre ne sont jamais concaténées au SQL (treeToSQL produit
 //    { sql, params } et DuckDB reçoit des paramètres liés) ;
 //  - les identifiants (fields, sort, groupBy, measure…) sont contrôlés contre
 //    la table metadata (assertColumns) puis quotés (quoteIdent) ;
-//  - les motifs interdits sont rejetés en amont par PatternValidator, et les
-//    mutations/subscriptions par validateRequest.
-// Échapper en plus les valeurs corromprait des données légitimes : les libellés
-// stockés en base contiennent apostrophes et tirets (« Côte-d'Or »), et le
-// rejet sur « -- » ou « /* » produirait des faux positifs sur du texte libre.
+//  - les mutations et subscriptions sont refusées par validateRequest (et le
+//    schéma n'a pas de type Mutation), l'introspection par la règle
+//    NoIntrospection d'Apollo quand API.GRAPHQL.INTROSPECTION est faux.
+// Un motif appliqué au texte brut ne protège rien (la même valeur passe par
+// les variables) et rejette des requêtes légitimes (`__typename`, une
+// recherche « ecosystem », une colonne « mutation_rate ») ; échapper les
+// valeurs corromprait des libellés légitimes (« Côte-d'Or »).
 
 /**
  * Orchestrates all security modules for GraphQL request processing.
  *
  * Acts as the single coordinator for rate limiting, complexity analysis, and
- * pattern validation. Exposes an Express middleware factory for rate limiting
+ * operation-type validation. Exposes an Express middleware factory for rate limiting
  * and document-level validation hooks for Apollo Server's plugin system.
  */
 class SecurityManager {
@@ -67,7 +65,6 @@ class SecurityManager {
   private rateLimiter: RateLimiter;
   private adminRateLimiter: RateLimiter;
   private complexityAnalyzer: QueryComplexityAnalyzer;
-  private patternValidator: PatternValidator;
 
   /**
    * Initializes all security sub-modules from the provided configuration.
@@ -90,11 +87,10 @@ class SecurityManager {
     this.complexityAnalyzer = new QueryComplexityAnalyzer(
       this.config.COMPLEXITY as unknown as Record<string, unknown>,
     );
-    this.patternValidator = new PatternValidator();
 
     // Journalisation de l'initialisation complète
     this.logger.operation('SecurityManager initialized', {
-      modules: ['rateLimiter', 'adminRateLimiter', 'complexityAnalyzer', 'patternValidator'],
+      modules: ['rateLimiter', 'adminRateLimiter', 'complexityAnalyzer'],
     });
   }
 
@@ -128,25 +124,30 @@ class SecurityManager {
   }
 
   /**
-   * Rejects operations whose complexity score exceeds the configured ceiling.
+   * Rejects operations whose complexity exceeds the configured ceilings.
    *
    * Called from the Apollo `didResolveOperation` hook, i.e. after parsing and
    * validation but before any resolver runs: an over-budget query never
-   * reaches the database. Per-field scores come from
-   * SECURITY.COMPLEXITY.CUSTOM_SCORES in config/security.yaml.
+   * reaches the database. Two ceilings apply, both answered with
+   * QUERY_COMPLEXITY_EXCEEDED: the number of root fields
+   * (SECURITY.COMPLEXITY.MAX_ROOT_FIELDS, aliases included) and the score
+   * (MAX_ALLOWED), computed with the scale of config/security.yaml.
    *
    * @param document - Parsed GraphQL document, source of the named fragments.
    * @param operation - Operation definition selected for execution.
    * @param variables - Resolved variable values for the operation.
    * @param context - GraphQL execution context, used for log correlation.
-   * @throws {GraphQLError} QUERY_COMPLEXITY_EXCEEDED when the score is too high.
+   * @param options - Executable schema (defaults of `limit`) and column
+   *   counter of the request (price of `Metadata.stats`).
+   * @throws {GraphQLError} QUERY_COMPLEXITY_EXCEEDED when a ceiling is exceeded.
    */
-  validateComplexity(
+  async validateComplexity(
     document: DocumentNode,
     operation: OperationDefinitionNode,
     variables: Record<string, unknown> = {},
     context: GraphQLContext = {},
-  ): void {
+    options: ScoringOptions = {},
+  ): Promise<void> {
     // Exemption de l'introspection : son coût dédié (INTROSPECTION_COST) dépasse
     // volontairement le plafond et rejetterait Sandbox, le codegen et la
     // génération de doc. L'introspection reste désactivée en production.
@@ -161,30 +162,61 @@ class SecurityManager {
         fragments[definition.name.value] = definition;
       }
     }
+    const operationName = operation.name?.value ?? 'anonymous';
 
-    const complexity = this.complexityAnalyzer.calculateForOperation(
+    // Plafond du nombre de champs racine, avant tout calcul de score : chaque
+    // champ racine est au moins une requête SQL ou un accès au cache
+    const rootFields = this.complexityAnalyzer.countRootFields(operation, fragments);
+    const maxRootFields = this.complexityAnalyzer.maxRootFields;
+    if (rootFields > maxRootFields) {
+      this.logger.security('Too many root fields', {
+        requestId: context.requestId,
+        operationName,
+        rootFields,
+        maxRootFields,
+      });
+
+      throw new GraphQLError(
+        `Query too complex: ${rootFields} root fields exceed the maximum of ${maxRootFields}. ` +
+          'Split the operation into several requests.',
+        {
+          extensions: {
+            code: 'QUERY_COMPLEXITY_EXCEEDED',
+            rootFields,
+            maxRootFields,
+            http: { status: 400 },
+          },
+        },
+      );
+    }
+
+    const complexity = await this.complexityAnalyzer.calculateForOperation(
       operation,
       fragments,
       variables,
+      options,
     );
     const maxAllowed = this.config.COMPLEXITY.MAX_ALLOWED;
 
     if (complexity > maxAllowed) {
       this.logger.security('Query complexity exceeded', {
         requestId: context.requestId,
-        operationName: operation.name?.value ?? 'anonymous',
+        operationName,
         complexity,
         maxAllowed,
       });
 
       throw new GraphQLError(
         `Query too complex: score ${Math.round(complexity)} exceeds the maximum of ${maxAllowed}. ` +
-          'Request fewer fields, reduce the nesting depth, or lower the limit argument.',
+          'Request fewer fields, reduce the nesting depth, lower the limit argument, ' +
+          'or read column statistics with getFieldStats on the columns you display.',
         {
           extensions: {
             code: 'QUERY_COMPLEXITY_EXCEEDED',
             complexity,
             maxAllowed,
+            // Refus d'une requête cliente : 400 et non 500 (retiré de la réponse par Apollo)
+            http: { status: 400 },
           },
         },
       );
@@ -194,7 +226,7 @@ class SecurityManager {
     if (this.config.MONITORING?.LOG_ALL_METRICS) {
       this.logger.security('Query complexity accepted', {
         requestId: context.requestId,
-        operationName: operation.name?.value ?? 'anonymous',
+        operationName,
         complexity,
         maxAllowed,
       });
@@ -220,50 +252,28 @@ class SecurityManager {
   /**
    * Validates a GraphQL operation before execution begins.
    *
-   * Checks for forbidden query patterns, disallowed operation names,
-   * and non-query operation types (mutations and subscriptions are blocked).
+   * Checks disallowed operation names and non-query operation types
+   * (mutations and subscriptions are blocked). The text of the query is not
+   * pattern-matched: see the note at the top of this module.
    *
    * @param operation - Parsed GraphQL operation definition.
-   * @param request - Raw HTTP request containing the query string.
-   * @param context - GraphQL execution context for logging.
    * @throws {GraphQLError} When the operation fails any validation check.
    */
-  async validateRequest(
-    operation: GraphQLOperation,
-    request: GraphQLRequest,
-    context: GraphQLContext,
-  ): Promise<void> {
-    const validations: Promise<void>[] = [];
-
-    // 1. Validation des patterns dangereux dans la chaîne de requête brute
-    if (request.query) {
-      validations.push(
-        this.patternValidator.validateQuery(request.query).catch((err: unknown) => {
-          this.logger.security('Pattern validation failed', {
-            error: (err as Error).message,
-            requestId: context.requestId,
-          });
-          throw err;
-        }),
-      );
-    }
-
-    // 2. Validation du nom de l'opération
+  validateRequest(operation: GraphQLOperation): void {
+    // 1. Validation du nom de l'opération
     const operationName = operation?.name?.value;
     if (operationName && !this.isOperationAllowed(operationName)) {
       throw new GraphQLError(`Operation ${operationName} is not allowed`, {
-        extensions: { code: 'OPERATION_NOT_ALLOWED' },
+        extensions: { code: 'OPERATION_NOT_ALLOWED', http: { status: 400 } },
       });
     }
 
-    // 3. Restriction aux requêtes (mutations et subscriptions interdites)
+    // 2. Restriction aux requêtes (mutations et subscriptions interdites)
     if (operation?.operation && operation.operation !== 'query') {
       throw new GraphQLError(`Only queries are allowed, got ${operation.operation}`, {
-        extensions: { code: 'OPERATION_TYPE_NOT_ALLOWED' },
+        extensions: { code: 'OPERATION_TYPE_NOT_ALLOWED', http: { status: 400 } },
       });
     }
-
-    await Promise.all(validations);
   }
 
   /**
@@ -324,4 +334,4 @@ const getSecurityManager = (): SecurityManager => {
 };
 
 export { SecurityManager, initializeSecurityManager, getSecurityManager };
-export type { GraphQLContext, GraphQLOperation, GraphQLRequest };
+export type { GraphQLContext, GraphQLOperation };

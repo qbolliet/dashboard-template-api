@@ -4,7 +4,8 @@
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  * Mocks config-loader and logger; imports from the security index barrel.
  * Covers constructor, createRateLimitMiddleware, validateRequest,
- * validateComplexity, isOperationAllowed, and integration scenarios.
+ * validateComplexity (score and root-field ceilings), isOperationAllowed, and
+ * integration scenarios.
  */
 
 import { jest } from '@jest/globals';
@@ -26,16 +27,17 @@ interface MockConfig {
     };
     COMPLEXITY: {
       MAX_ALLOWED: number;
+      MAX_ROOT_FIELDS: number;
       SCALAR_COST: number;
       OBJECT_COST: number;
-      LIST_FACTOR: number;
       DEPTH_FACTOR: number;
       INTROSPECTION_COST: number;
-      CUSTOM_SCORES: Record<string, number>;
+      ROW_COST: number;
+      STATS_COST_PER_COLUMN: number;
+      DEFAULT_ROOT_FIELD_SCORE: number;
+      ROOT_FIELD_SCORES: Record<string, number>;
     };
   };
-  SECURITY_LIMITS: { COMPLEXITY_CALCULATION_FACTOR: number };
-  SECURITY_PATTERNS: { blocked: unknown[]; allowed: unknown[] };
   API: { SECURITY_THRESHOLDS: { QUERY_SNIPPET_LENGTH: number } };
 }
 
@@ -62,11 +64,6 @@ interface MockOperation {
   name?: { value: string };
 }
 
-/** Requête HTTP minimale pour les tests de validateRequest. */
-interface MockRequest {
-  query?: string;
-}
-
 /**
  * Interface étendue du SecurityManager exposant les propriétés privées
  * nécessaires aux assertions des tests.
@@ -79,23 +76,25 @@ interface SecurityManagerTest {
   rateLimiter: { checkLimit: jest.Mock | ((req: unknown) => Promise<unknown>) };
   adminRateLimiter: { cleanupInterval: unknown };
   complexityAnalyzer: {
-    calculateForOperation: jest.Mock | ((op: unknown, fr?: unknown, va?: unknown) => number);
+    calculateForOperation:
+      | jest.Mock
+      | ((op: unknown, fr?: unknown, va?: unknown, opts?: unknown) => Promise<number>);
   };
-  patternValidator: { validateQuery: jest.Mock | ((query: unknown) => Promise<void>) };
   createRateLimitMiddleware: () => (req: unknown, res: unknown, next: unknown) => void;
   createAdminRateLimitMiddleware: () => (req: unknown, res: unknown, next: unknown) => void;
-  validateRequest: (op: MockOperation, req: MockRequest, ctx: MockContext) => Promise<void>;
+  validateRequest: (op: MockOperation) => void;
   validateComplexity: (
     document: DocumentNode,
     operation: OperationDefinitionNode,
     variables?: Record<string, unknown>,
     context?: MockContext,
-  ) => void;
+    options?: Record<string, unknown>,
+  ) => Promise<void>;
   isOperationAllowed: (name: string) => boolean;
   cleanup: () => Promise<void>;
 }
 
-/** Constructeur d'un module de sécurité (RateLimiter, PatternValidator, etc.). */
+/** Constructeur d'un module de sécurité (RateLimiter, QueryComplexityAnalyzer). */
 interface SecurityModuleConstructor {
   new (...args: unknown[]): unknown;
 }
@@ -119,20 +118,16 @@ const mockConfig: MockConfig = {
     },
     COMPLEXITY: {
       MAX_ALLOWED: 1000,
+      MAX_ROOT_FIELDS: 3,
       SCALAR_COST: 0,
       OBJECT_COST: 1,
-      LIST_FACTOR: 10,
       DEPTH_FACTOR: 2,
       INTROSPECTION_COST: 100,
-      CUSTOM_SCORES: {},
+      ROW_COST: 0.1,
+      STATS_COST_PER_COLUMN: 5,
+      DEFAULT_ROOT_FIELD_SCORE: 1,
+      ROOT_FIELD_SCORES: {},
     },
-  },
-  SECURITY_LIMITS: {
-    COMPLEXITY_CALCULATION_FACTOR: 0.1,
-  },
-  SECURITY_PATTERNS: {
-    blocked: [],
-    allowed: [],
   },
   API: {
     SECURITY_THRESHOLDS: {
@@ -165,15 +160,13 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 let SecurityManager!: SecurityManagerConstructor;
 let RateLimiter!: SecurityModuleConstructor;
 let QueryComplexityAnalyzer!: SecurityModuleConstructor;
-let PatternValidator!: SecurityModuleConstructor;
 
 beforeAll(async () => {
-  ({ SecurityManager, RateLimiter, QueryComplexityAnalyzer, PatternValidator } =
+  ({ SecurityManager, RateLimiter, QueryComplexityAnalyzer } =
     (await import('../../../src/security/index.js')) as {
       SecurityManager: SecurityManagerConstructor;
       RateLimiter: SecurityModuleConstructor;
       QueryComplexityAnalyzer: SecurityModuleConstructor;
-      PatternValidator: SecurityModuleConstructor;
     });
 });
 
@@ -211,15 +204,7 @@ describe('SecurityManager', () => {
           BURST_WINDOW_MS: 60000,
           TRUSTED_PROXIES: [],
         },
-        COMPLEXITY: {
-          MAX_ALLOWED: 500,
-          SCALAR_COST: 0,
-          OBJECT_COST: 1,
-          LIST_FACTOR: 10,
-          DEPTH_FACTOR: 2,
-          INTROSPECTION_COST: 100,
-          CUSTOM_SCORES: {},
-        },
+        COMPLEXITY: { ...mockConfig.SECURITY.COMPLEXITY, MAX_ALLOWED: 500 },
       };
       const custom = new SecurityManager(customConfig);
       expect(custom.config).toEqual(customConfig);
@@ -231,7 +216,6 @@ describe('SecurityManager', () => {
       expect(securityManager.adminRateLimiter).toBeInstanceOf(RateLimiter);
       expect(securityManager.adminRateLimiter).not.toBe(securityManager.rateLimiter);
       expect(securityManager.complexityAnalyzer).toBeInstanceOf(QueryComplexityAnalyzer);
-      expect(securityManager.patternValidator).toBeInstanceOf(PatternValidator);
     });
   });
 
@@ -266,103 +250,132 @@ describe('SecurityManager', () => {
 
   describe('validateComplexity', () => {
     /**
-     * Parses a query and validates it against the manager's ceiling.
+     * Parses a query and validates it against the manager's ceilings.
      *
      * @param source - GraphQL document source.
-     * @returns Nothing; throws when the operation is over budget.
+     * @param options - Scoring options forwarded to the analyzer.
+     * @returns Resolves when the operation is within budget.
      */
-    const validate = (source: string): void => {
+    const validate = (source: string, options: Record<string, unknown> = {}): Promise<void> => {
       const document: DocumentNode = parse(source);
       const operation = document.definitions.find(
         (d): d is OperationDefinitionNode => d.kind === 'OperationDefinition',
       ) as OperationDefinitionNode;
-      securityManager.validateComplexity(document, operation, {}, mockContext);
+      return securityManager.validateComplexity(document, operation, {}, mockContext, options);
     };
 
-    test('accepts an operation below the ceiling', () => {
-      expect(() => validate('{ getFactTable { id } }')).not.toThrow();
-    });
-
-    test('throws QUERY_COMPLEXITY_EXCEEDED above the ceiling', () => {
-      // Score simulé très au-dessus du MAX_ALLOWED de 1000
-      securityManager.complexityAnalyzer.calculateForOperation = jest.fn().mockReturnValue(5000);
+    /**
+     * Runs a validation expected to fail and returns its error.
+     *
+     * @param source - GraphQL document source.
+     * @returns The rejection error, or undefined when the validation passed.
+     */
+    const rejectionOf = async (source: string): Promise<GraphQLError | undefined> => {
       try {
-        validate('{ getFactTable { id } }');
-        throw new Error('expected validateComplexity to throw');
+        await validate(source);
+        return undefined;
       } catch (e) {
-        expect(e).toBeInstanceOf(GraphQLError);
-        const error = e as GraphQLError;
-        expect(error.extensions.code).toBe('QUERY_COMPLEXITY_EXCEEDED');
-        expect(error.extensions.complexity).toBe(5000);
-        expect(error.extensions.maxAllowed).toBe(1000);
-        // Message explicite : score, plafond et piste de correction
-        expect(error.message).toContain('5000');
-        expect(error.message).toContain('1000');
+        return e as GraphQLError;
       }
+    };
+
+    test('accepts an operation below the ceiling', async () => {
+      await expect(validate('{ getFactTable { id } }')).resolves.toBeUndefined();
     });
 
-    test('skips the check for introspection-only operations', () => {
-      // Le coût d'introspection dépasse volontairement le plafond
-      securityManager.complexityAnalyzer.calculateForOperation = jest.fn();
-      expect(() =>
-        validate('query IntrospectionQuery { __schema { types { name } } }'),
-      ).not.toThrow();
+    test('throws QUERY_COMPLEXITY_EXCEEDED above the ceiling', async () => {
+      // Score simulé très au-dessus du MAX_ALLOWED de 1000
+      securityManager.complexityAnalyzer.calculateForOperation = jest
+        .fn<() => Promise<number>>()
+        .mockResolvedValue(5000);
+      const error = await rejectionOf('{ getFactTable { id } }');
+
+      expect(error).toBeInstanceOf(GraphQLError);
+      expect(error?.extensions.code).toBe('QUERY_COMPLEXITY_EXCEEDED');
+      expect(error?.extensions.complexity).toBe(5000);
+      expect(error?.extensions.maxAllowed).toBe(1000);
+      // Refus d'une requête cliente : statut HTTP 400 plutôt que 500
+      expect(error?.extensions.http).toEqual({ status: 400 });
+      // Message explicite : score, plafond et piste de correction
+      expect(error?.message).toContain('5000');
+      expect(error?.message).toContain('1000');
+    });
+
+    test('rejects more root fields than MAX_ROOT_FIELDS before scoring', async () => {
+      securityManager.complexityAnalyzer.calculateForOperation = jest.fn<() => Promise<number>>();
+      // Quatre alias pour un plafond de trois champs racine
+      const error = await rejectionOf('{ a: f { id } b: f { id } c: f { id } d: f { id } }');
+
+      expect(error?.extensions.code).toBe('QUERY_COMPLEXITY_EXCEEDED');
+      expect(error?.extensions.rootFields).toBe(4);
+      expect(error?.extensions.maxRootFields).toBe(3);
+      expect(error?.message).toContain('4 root fields');
       expect(
         securityManager.complexityAnalyzer.calculateForOperation as jest.Mock,
       ).not.toHaveBeenCalled();
     });
 
-    test('still scores an operation mixing introspection and data fields', () => {
-      securityManager.complexityAnalyzer.calculateForOperation = jest.fn().mockReturnValue(1);
-      validate('{ __typename getFactTable { id } }');
+    test('does not count __typename as a root field', async () => {
+      await expect(
+        validate('{ __typename a: f { id } b: f { id } c: f { id } }'),
+      ).resolves.toBeUndefined();
+    });
+
+    test('skips the check for introspection-only operations', async () => {
+      // Le coût d'introspection dépasse volontairement le plafond
+      securityManager.complexityAnalyzer.calculateForOperation = jest.fn<() => Promise<number>>();
+      await expect(
+        validate('query IntrospectionQuery { __schema { types { name } } }'),
+      ).resolves.toBeUndefined();
+      expect(
+        securityManager.complexityAnalyzer.calculateForOperation as jest.Mock,
+      ).not.toHaveBeenCalled();
+    });
+
+    test('still scores an operation mixing introspection and data fields', async () => {
+      securityManager.complexityAnalyzer.calculateForOperation = jest
+        .fn<() => Promise<number>>()
+        .mockResolvedValue(1);
+      await validate('{ __typename getFactTable { id } }');
       expect(
         securityManager.complexityAnalyzer.calculateForOperation as jest.Mock,
       ).toHaveBeenCalled();
     });
 
-    test('passes named fragments of the document to the analyzer', () => {
-      securityManager.complexityAnalyzer.calculateForOperation = jest.fn().mockReturnValue(1);
-      validate('{ getFactTable { ...F } } fragment F on Fact { id }');
+    test('passes named fragments and scoring options to the analyzer', async () => {
+      securityManager.complexityAnalyzer.calculateForOperation = jest
+        .fn<() => Promise<number>>()
+        .mockResolvedValue(1);
+      const options = { columns: { columnsOf: jest.fn(), allColumns: jest.fn() } };
+      await validate('{ getFactTable { ...F } } fragment F on Fact { id }', options);
       const call = (securityManager.complexityAnalyzer.calculateForOperation as jest.Mock).mock
         .calls[0];
       expect(Object.keys(call[1] as Record<string, unknown>)).toEqual(['F']);
+      expect(call[3]).toBe(options);
     });
   });
 
   describe('validateRequest', () => {
-    test('passes for a normal query', async () => {
+    test('passes for a normal query', () => {
       const operation: MockOperation = { operation: 'query', name: { value: 'MyQuery' } };
-      const request: MockRequest = { query: 'query { test }' };
-      await expect(
-        securityManager.validateRequest(operation, request, mockContext),
-      ).resolves.toBeUndefined();
+      expect(() => securityManager.validateRequest(operation)).not.toThrow();
     });
 
-    test('throws for mutation operations', async () => {
+    test('throws for mutation operations', () => {
       // Mutation interdite — seules les queries sont autorisées
       const operation: MockOperation = { operation: 'mutation', name: { value: 'MyMutation' } };
-      const request: MockRequest = {};
-      await expect(
-        securityManager.validateRequest(operation, request, mockContext),
-      ).rejects.toThrow(GraphQLError);
+      expect(() => securityManager.validateRequest(operation)).toThrow(GraphQLError);
     });
 
-    test('throws for subscription operations', async () => {
+    test('throws for subscription operations', () => {
       const operation: MockOperation = { operation: 'subscription', name: { value: 'MySub' } };
-      const request: MockRequest = {};
-      await expect(
-        securityManager.validateRequest(operation, request, mockContext),
-      ).rejects.toThrow(GraphQLError);
+      expect(() => securityManager.validateRequest(operation)).toThrow(GraphQLError);
     });
 
-    test('calls patternValidator when request.query is present', async () => {
-      securityManager.patternValidator.validateQuery = jest.fn().mockResolvedValue(undefined);
-      const operation: MockOperation = { operation: 'query' };
-      const request: MockRequest = { query: 'query { test }' };
-      await securityManager.validateRequest(operation, request, mockContext);
-      expect(securityManager.patternValidator.validateQuery as jest.Mock).toHaveBeenCalledWith(
-        'query { test }',
-      );
+    test('never pattern-matches the operation (removed text checks)', () => {
+      // « mutation », « system » : plus aucun motif appliqué au texte de la requête
+      const operation: MockOperation = { operation: 'query', name: { value: 'MutationSystem' } };
+      expect(() => securityManager.validateRequest(operation)).not.toThrow();
     });
   });
 
@@ -423,7 +436,7 @@ describe('Security integration', () => {
     expect(res.set).toHaveBeenCalledWith('Retry-After', expect.any(String));
   });
 
-  test('validateComplexity rejects a deeply nested query end-to-end', () => {
+  test('validateComplexity rejects a deeply nested query end-to-end', async () => {
     // Plafond très bas — une requête imbriquée réelle doit le dépasser
     securityManager = new SecurityManager({
       RATE_LIMIT: mockConfig.SECURITY.RATE_LIMIT,
@@ -433,8 +446,8 @@ describe('Security integration', () => {
     const document: DocumentNode = parse('{ a { b { c { d { e } } } } }');
     const operation = document.definitions[0] as OperationDefinitionNode;
 
-    expect(() =>
+    await expect(
       securityManager.validateComplexity(document, operation, {}, integrationContext),
-    ).toThrow(GraphQLError);
+    ).rejects.toThrow(GraphQLError);
   });
 });

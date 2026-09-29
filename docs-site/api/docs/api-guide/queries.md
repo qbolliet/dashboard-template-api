@@ -160,6 +160,14 @@ comparison and select-option queries); anything else is rejected with
 measure, invalid regex) is a `BAD_USER_INPUT`, and a server-side failure is an
 `INTERNAL_SERVER_ERROR` carrying an `errorId` to quote when reporting it.
 
+Client errors keep their message in production too — `BAD_USER_INPUT` (unknown
+column or catalog, limit out of bounds…), `SCHEMA_VERSION_UNSUPPORTED`,
+`QUERY_COMPLEXITY_EXCEEDED`, `GRAPHQL_VALIDATION_FAILED`, `GRAPHQL_PARSE_FAILED`,
+`OPERATION_TYPE_NOT_ALLOWED`, `CROSS_DATABASE_DISABLED`. Only
+`INTERNAL_SERVER_ERROR` (and any unexpected code) is reduced in production to
+`An error occurred` with its `code` and `errorId`. Every error carries an
+`errorId`.
+
 Example — `kind = 1 AND NOT (country = 1 OR country = 2)`:
 
 ```graphql

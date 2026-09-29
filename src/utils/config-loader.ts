@@ -33,13 +33,6 @@ export interface ErrorTransportConfig {
   filename: string;
 }
 
-/** Raw entry for a security pattern (block-list). */
-interface SecurityPatternEntry {
-  pattern: string;
-  message: string;
-  flags?: string;
-}
-
 /** Rate limiter configuration. */
 interface RateLimitConfig {
   /** Set to false to disable enforcement entirely (test configurations). */
@@ -62,15 +55,27 @@ interface AdminRateLimitConfig {
   BURST_WINDOW_MS?: number;
 }
 
-/** Query complexity analysis configuration. */
+/**
+ * Query complexity analysis configuration (scoring rules in
+ * docs-site/toolbox/docs/architecture/security.md).
+ */
 interface ComplexityConfig {
+  /** Maximum score of one operation. */
   MAX_ALLOWED: number;
+  /** Maximum number of root fields (aliases included) of one operation. */
+  MAX_ROOT_FIELDS: number;
   SCALAR_COST: number;
   OBJECT_COST: number;
-  LIST_FACTOR: number;
   DEPTH_FACTOR: number;
   INTROSPECTION_COST: number;
-  CUSTOM_SCORES: Record<string, number>;
+  /** Cost of one row requested by `limit` (bounded by API.PAGINATION.MAX_LIMIT). */
+  ROW_COST: number;
+  /** Cost of `Metadata.stats` per column of the enclosing list. */
+  STATS_COST_PER_COLUMN: number;
+  /** Score of a root field missing from ROOT_FIELD_SCORES. */
+  DEFAULT_ROOT_FIELD_SCORE: number;
+  /** Base score of each root field of the Query type. */
+  ROOT_FIELD_SCORES: Record<string, number>;
 }
 
 /** Security monitoring configuration. */
@@ -101,15 +106,6 @@ interface SecurityConfig {
 interface SecurityLimitsConfig {
   DEFAULT_DEPTH_LIMIT: number;
   MAX_INPUT_LENGTH: number;
-  COMPLEXITY_LIST_FACTOR: number;
-  COMPLEXITY_DEPTH_FACTOR: number;
-  COMPLEXITY_CALCULATION_FACTOR: number;
-}
-
-/** Request validation patterns (SECURITY_PATTERNS section of the YAML). */
-interface SecurityPatternsConfig {
-  blocked: SecurityPatternEntry[];
-  allowed: string[];
 }
 
 /** Security thresholds exposed in the API section of the YAML. */
@@ -363,7 +359,6 @@ interface AppConfig {
   CATALOGS: Record<string, CatalogConfig>;
   SECURITY: SecurityConfig;
   SECURITY_LIMITS: SecurityLimitsConfig;
-  SECURITY_PATTERNS: SecurityPatternsConfig;
   LOGGING: {
     LEVEL: string;
     FORMAT: string;
@@ -425,7 +420,6 @@ export class ConfigLoader {
       'api.yaml',
       'cache.yaml',
       'security.yaml',
-      'security-patterns.yaml',
       'logging.yaml',
     ];
 
@@ -548,7 +542,7 @@ export class ConfigLoader {
 
       // Détection d'un objet contenant des clés d'environnement
       if (obj['development'] || obj['production']) {
-        // Fusion avec la section commune si présente (ex. SECURITY_PATTERNS)
+        // Fusion avec la section commune si présente (clé `common`)
         if (obj['common']) {
           const envSpecific = (obj[env] ?? obj['development'] ?? {}) as ConfigRecord;
           const result: ConfigRecord = { ...(obj['common'] as ConfigRecord) };
@@ -731,8 +725,6 @@ export type {
   CacheHttpConfig,
   SecurityConfig,
   SecurityLimitsConfig,
-  SecurityPatternsConfig,
-  SecurityPatternEntry,
   SecurityThresholdsConfig,
   RateLimitConfig,
   AdminRateLimitConfig,

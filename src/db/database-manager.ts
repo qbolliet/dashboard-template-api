@@ -1,4 +1,5 @@
 // Importation des modules nécessaires pour la gestion des bases de données
+import { GraphQLError } from 'graphql';
 import { DuckDBPool, type CatalogEntry, type PoolStats } from './pool.js';
 import { dirname, resolve } from 'path';
 import fs from 'fs';
@@ -471,7 +472,7 @@ class DatabaseManager {
    * @param requestedCatalog - Catalog requested by the client.
    * @param fallbackCatalog - Catalog to use when none was requested, before the default.
    * @returns Validated catalog ID to use.
-   * @throws {Error} If the resolved catalog is not available.
+   * @throws {GraphQLError} BAD_USER_INPUT if the resolved catalog is not available.
    */
   validateCatalogRouting(
     requestedCatalog: string | null = null,
@@ -481,9 +482,11 @@ class DatabaseManager {
     const targetCatalog = requestedCatalog || fallbackCatalog || this.defaultCatalog;
 
     if (!this.isValidCatalog(targetCatalog)) {
-      throw new Error(
+      // Erreur de saisie du client : message exposé tel quel, même en production
+      throw new GraphQLError(
         `Catalog '${targetCatalog}' is not available. ` +
           `Available catalogs: ${this.getAvailableCatalogs().join(', ')}`,
+        { extensions: { code: 'BAD_USER_INPUT' } },
       );
     }
 

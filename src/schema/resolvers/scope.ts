@@ -35,7 +35,7 @@ export interface ScopeFields {
  *
  * @param catalog - Catalog the schema must belong to.
  * @param schema - Schema name to validate, or null/undefined to skip.
- * @throws {GraphQLError} When the schema is not in the catalog's allow-list.
+ * @throws {GraphQLError} BAD_USER_INPUT when the schema is not in the catalog's allow-list.
  */
 // Validation d'un schéma optionnel contre l'allow-list du catalogue
 export function validateSchemaForCatalog(catalog: string, schema?: string | null): void {
@@ -44,6 +44,7 @@ export function validateSchemaForCatalog(catalog: string, schema?: string | null
     throw new GraphQLError(
       `Schema '${schema}' is not available for catalog '${catalog}'. ` +
         `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
+      { extensions: { code: 'BAD_USER_INPUT' } },
     );
   }
 }
@@ -72,7 +73,7 @@ export function effectiveScope(catalog: string, schema?: string | null): FieldSc
  * @param catalog - Catalog argument of the query, if any.
  * @param schema - Schema argument of the query, if any.
  * @returns The effective catalog and schema.
- * @throws {Error} When the catalog is unknown.
+ * @throws {GraphQLError} BAD_USER_INPUT when the catalog is unknown.
  * @throws {GraphQLError} When the schema is not in the catalog's allow-list.
  */
 // Scope d'une requête : argument, sinon le défaut du catalogue

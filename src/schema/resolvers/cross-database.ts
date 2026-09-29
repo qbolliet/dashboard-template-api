@@ -77,7 +77,9 @@ function assertCrossDatabaseAllowed(): void {
 // Validation d'un identifiant de catalogue
 function assertValidCatalog(catalog: string): void {
   if (!databaseManager.isValidCatalog(catalog)) {
-    throw new GraphQLError(`Catalog '${catalog}' is not available.`);
+    throw new GraphQLError(`Catalog '${catalog}' is not available.`, {
+      extensions: { code: 'BAD_USER_INPUT' },
+    });
   }
 }
 
@@ -265,7 +267,7 @@ const crossDatabaseResolvers = {
 
       // Vérification de la présence du champ de regroupement
       if (!groupBy) {
-        throw new GraphQLError('groupBy is required');
+        throw new GraphQLError('groupBy is required', { extensions: { code: 'BAD_USER_INPUT' } });
       }
 
       // Validation de la pagination
@@ -323,7 +325,9 @@ const crossDatabaseResolvers = {
 
       // Vérification de la présence d'au moins deux catalogues
       if (!catalogs || catalogs.length < 2) {
-        throw new GraphQLError('At least two catalogs must be specified');
+        throw new GraphQLError('At least two catalogs must be specified', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
       }
 
       // Validation de chaque identifiant de catalogue
