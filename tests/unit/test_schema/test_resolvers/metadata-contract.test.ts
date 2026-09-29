@@ -224,26 +224,45 @@ describe('DatasetInfo', () => {
     expect(Number.isNaN(Date.parse(updatedAt))).toBe(false);
   });
 
-  test('le champ lazy info est bien résolu, et gardé, pour chaque schéma', async () => {
-    // `info` est non-nullable : dans un catalogue hébergeant un schéma non
-    // conforme, demander info sur TOUS les schémas propage l'erreur jusqu'à la
-    // racine. C'est la conséquence assumée de « aucun chemin de compatibilité »
-    // — et cela prouve que le resolver lazy s'exécute bien par schéma.
+  test('le champ lazy info est résolu pour chaque schéma listé', async () => {
+    // `info` est non-nullable, mais getCatalogs n'expose que les schémas que la
+    // garde de version accepte : la cascade complète aboutit, chaque schéma
+    // portant SA version et SES méta-données.
     const result = await execute(server, {
       query: `query { getCatalogs { id schemas { name info { ${INFO_FIELDS} } } } }`,
     });
 
-    expect(result.errors).toBeDefined();
-    for (const error of result.errors!) {
-      expect(error.extensions?.code).toBe('SCHEMA_VERSION_UNSUPPORTED');
-      // Seules les fixtures non conformes échouent
-      expect(String(error.message)).toMatch(/unsupported_version|missing_dataset_metadata/);
+    expect(result.errors).toBeUndefined();
+    const catalogs = result.data!.getCatalogs as Array<{
+      schemas: Array<{ name: string; info: { schemaVersion: number; label: string | null } }>;
+    }>;
+    const schemas = catalogs.flatMap((cat) => cat.schemas);
+    expect(schemas.length).toBeGreaterThan(0);
+    for (const schema of schemas) {
+      expect(schema.info.schemaVersion).toBe(1);
     }
+    expect(schemas.find((s) => s.name === 'geography')?.info.label).toBe('Territoires');
+  });
+
+  test('les schémas refusés ne sont pas listés, mais leur info reste gardée', async () => {
+    const listed = await execute(server, {
+      query: 'query { getCatalogs { schemas { name } } }',
+    });
+    const names = (listed.data!.getCatalogs as Array<{ schemas: Array<{ name: string }> }>).flatMap(
+      (cat) => cat.schemas.map((s) => s.name),
+    );
+    expect(names).not.toContain('unsupported_version');
+
+    const direct = await execute(server, {
+      query: `query { getDatasetInfo(schema: "unsupported_version") { ${INFO_FIELDS} } }`,
+    });
+    expect(direct.errors).toBeDefined();
+    expect(direct.errors![0].extensions?.code).toBe('SCHEMA_VERSION_UNSUPPORTED');
+    expect(String(direct.errors![0].message)).toMatch(/unsupported_version/);
   });
 
   test('le champ info n’est pas chargé quand il n’est pas demandé', async () => {
-    // Le catalogue `default` héberge deux schémas non conformes : les lister
-    // sans demander `info` ne doit déclencher aucune lecture, donc aucune erreur
+    // Lister les schémas sans demander `info` ne doit déclencher aucune lecture
     const result = await execute(server, {
       query: 'query { getCatalogs { id schemas { name } } }',
     });

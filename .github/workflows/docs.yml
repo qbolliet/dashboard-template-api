@@ -50,7 +50,6 @@ jobs:
       DEFAULT_CATALOG_PATH: /tmp/test.ducklake
       DEFAULT_DATA_PATH: /tmp/test_data/
       DEFAULT_READ_ONLY: 'false'
-      DEFAULT_SCHEMAS: '["main"]'
       DEFAULT_CATALOG: default
       ALLOWED_CATALOGS: '["default"]'
       S3_ENABLED: 'false'

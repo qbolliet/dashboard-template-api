@@ -173,9 +173,10 @@ The chart renders the following env vars per catalog:
 `<NAME>_PG_HOST`, `<NAME>_PG_PORT`, `<NAME>_PG_DATABASE` (in the ConfigMap)
 and `<NAME>_PG_USER`, `<NAME>_PG_PASSWORD` (in the Secret).
 
-`SCHEMAS` is a JSON-encoded list of DuckLake schemas hosted by the catalog;
-the first element is the default when a request omits the `schema` argument.
-Leave it as `'["main"]'` for single-schema catalogs.
+`schemas` is an optional JSON-encoded allow-list of DuckLake schemas. When unset the
+variable is not rendered and the API serves every schema of the catalog, discovered
+at startup and at each reload (`main` first, so it is the default). When set, the
+first element is the default when a request omits the `schema` argument.
 
 ## Redis: in-chart vs external
 

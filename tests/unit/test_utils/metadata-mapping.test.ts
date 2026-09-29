@@ -17,6 +17,7 @@ import {
   METADATA_FIELD_WITH_LABELS_WHERE,
   indexMetadataByName,
   resolveLabelField,
+  sortByColumnPosition,
   toFieldMetadata,
   toFieldMetadataWithLabels,
   withLabelFields,
@@ -265,5 +266,82 @@ describe('resolveLabelField', () => {
 
   test('labelField désignant la colonne de code elle-même → BAD_USER_INPUT', () => {
     expect(() => resolveLabelField('nc8', byName, 'nc8')).toThrow(GraphQLError);
+  });
+});
+
+// ─── Ordre physique des colonnes ──────────────────────────────────────────────
+
+describe('sortByColumnPosition', () => {
+  /** A metadata row carrying only its name. */
+  const row = (name: string): FieldMetadata => toFieldMetadata({ name, sql_type: 'VARCHAR' });
+  const names = (fields: readonly FieldMetadata[]): string[] => fields.map((f) => f.name);
+
+  test('ordonne les lignes selon la position de leur colonne dans fact_table', () => {
+    // La base écrit metadata par ordre alphabétique, non par ordre des colonnes
+    const alphabetical = [row('amount'), row('label'), row('observed_on'), row('quantity')];
+    const positions = new Map([
+      ['label', 1],
+      ['observed_on', 2],
+      ['amount', 3],
+      ['quantity', 4],
+    ]);
+
+    const { fields, unplaced } = sortByColumnPosition(alphabetical, positions);
+
+    expect(names(fields)).toEqual(['label', 'observed_on', 'amount', 'quantity']);
+    expect(unplaced).toEqual([]);
+  });
+
+  test('ne dépend que de l’ordre des positions, pas de leur valeur', () => {
+    const positions = new Map([
+      ['b', 40],
+      ['a', 90],
+      ['c', 7],
+    ]);
+
+    expect(names(sortByColumnPosition([row('a'), row('b'), row('c')], positions).fields)).toEqual([
+      'c',
+      'b',
+      'a',
+    ]);
+  });
+
+  test('place en fin de liste, par nom, une ligne dont la colonne est absente, et la signale', () => {
+    const positions = new Map([
+      ['country', 1],
+      ['value', 2],
+    ]);
+
+    const { fields, unplaced } = sortByColumnPosition(
+      [row('zeta'), row('value'), row('alpha'), row('country')],
+      positions,
+    );
+
+    expect(names(fields)).toEqual(['country', 'value', 'alpha', 'zeta']);
+    expect(unplaced).toEqual(['alpha', 'zeta']);
+  });
+
+  test('sans aucune position (fact_table illisible), tout est en fin de liste, par nom', () => {
+    const { fields, unplaced } = sortByColumnPosition([row('b'), row('a')], new Map());
+
+    expect(names(fields)).toEqual(['a', 'b']);
+    expect(unplaced).toEqual(['a', 'b']);
+  });
+
+  test('ne modifie pas la liste reçue', () => {
+    const input = [row('b'), row('a')];
+    sortByColumnPosition(
+      input,
+      new Map([
+        ['a', 1],
+        ['b', 2],
+      ]),
+    );
+
+    expect(names(input)).toEqual(['b', 'a']);
+  });
+
+  test('une liste vide reste vide', () => {
+    expect(sortByColumnPosition([], new Map([['a', 1]]))).toEqual({ fields: [], unplaced: [] });
   });
 });

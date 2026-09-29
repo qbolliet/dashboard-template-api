@@ -431,6 +431,107 @@ describe('DatabaseManager', () => {
     });
   });
 
+  // ── Schémas servis : garde de version, défaut, ordre de découverte ─────────
+
+  describe('supported schemas (version guard)', () => {
+    /**
+     * Fakes the connection of the version probe.
+     *
+     * @param versions - `catalog.schema` → schema_version (absent = table missing).
+     */
+    // Connexion factice : dataset_metadata lue par schéma, absente si non listée
+    const probeWith = (versions: Record<string, number>): void => {
+      const connection = {
+        all: jest.fn(async (sql: string) => {
+          const found = Object.entries(versions).find(([key]) => {
+            const [catalog, schema] = key.split('.');
+            return sql.includes(`"${catalog}"."${schema}"."dataset_metadata"`);
+          });
+          if (!found) throw new Error('Table dataset_metadata does not exist');
+          return [{ schema_version: found[1], data_version: '1', updated_at_iso: null }];
+        }),
+      };
+      manager.sharedPool!.acquire.mockResolvedValue(connection);
+    };
+
+    test('orders a discovered list: main first, the others alphabetically', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['zeta', 'trade', 'main', 'alpha'],
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getSchemas('test')).toEqual(['main', 'alpha', 'trade', 'zeta']);
+      // Une liste configurée garde l'ordre de la config (le premier est le défaut)
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+    });
+
+    test('getSupportedSchemas leaves out the schemas the guard refuses', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['main', 'legacy', 'v99', 'trade'],
+        analytics: ['main'],
+      });
+      probeWith({
+        'main.main': 1,
+        'main.staging': 1,
+        'test.main': 1,
+        'test.v99': 99,
+        'test.trade': 1,
+        'analytics.main': 1,
+        // test.legacy : pas de table dataset_metadata
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getSupportedSchemas('test')).toEqual(['main', 'trade']);
+      // getSchemas garde tout : un schéma refusé reste adressable (erreur explicite)
+      expect(manager.getSchemas('test')).toEqual(['main', 'legacy', 'trade', 'v99']);
+      expect(manager.isValidSchema('test', 'v99')).toBe(true);
+      expect(manager.getSupportedSchemas('analytics')).toEqual(['main']);
+    });
+
+    test('the default schema is the first one that passes the guard', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'], // config : ['main', 'staging']
+        test: ['main'],
+        analytics: ['main'],
+      });
+      probeWith({ 'main.main': 99, 'main.staging': 1, 'test.main': 1, 'analytics.main': 1 });
+
+      await manager.initSchemas();
+
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+      expect(manager.getDefaultSchema('main')).toBe('staging');
+      expect(manager.getSupportedSchemas('main')).toEqual(['staging']);
+    });
+
+    test('with no supported schema, the default is the first of the list and none is listed', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['legacy', 'other'],
+        analytics: ['main'],
+      });
+      probeWith({ 'main.main': 1, 'main.staging': 1, 'analytics.main': 1 });
+
+      await manager.initSchemas();
+
+      expect(manager.getSupportedSchemas('test')).toEqual([]);
+      expect(manager.getDefaultSchema('test')).toBe('legacy');
+    });
+
+    test('before the first probe, every schema counts as supported', () => {
+      expect(manager.getSupportedSchemas('main')).toEqual(['main', 'staging']);
+      expect(manager.getDefaultSchema('main')).toBe('main');
+    });
+
+    test('an unknown catalog falls back on the default catalog list', () => {
+      expect(manager.getSupportedSchemas('unknown')).toEqual(manager.getSchemas('main'));
+    });
+  });
+
   describe('isValidSchema', () => {
     test('returns true for each schema in the configured list', () => {
       expect(manager.isValidSchema('main', 'main')).toBe(true);

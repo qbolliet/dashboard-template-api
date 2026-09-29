@@ -8,6 +8,7 @@ import { withCache } from '../utils/cache.js';
 import { buildCacheKey } from '../cache/cache-keys.js';
 import { logger } from '../utils/logger.js';
 import { config as globalConfig } from '../utils/config-loader.js';
+import { ALL_COLUMNS_FIELD } from '../utils/default-sort.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
 import { toLoaderError } from './loader-errors.js';
 import { runInterruptible } from '../db/interrupt.js';
@@ -525,12 +526,15 @@ class FactQueryLoader extends BaseQueryLoader {
    * metadata table, or against the output aliases of the query) and the
    * direction is restricted to ASC / DESC before interpolation.
    *
+   * The lone {@link ALL_COLUMNS_SORT} item is rendered as `ORDER BY ALL`.
+   *
    * @param sort - Array of sort items, each with a field name and direction.
    * @returns ORDER BY clause string, or empty string when sort is empty or null.
    * @throws {GraphQLError} When a direction is invalid.
    */
   buildSortClause(sort: SortItem[] | null | undefined): string {
     if (!sort || sort.length === 0) return '';
+    if (sort.length === 1 && sort[0].field === ALL_COLUMNS_FIELD) return 'ORDER BY ALL';
     const items = sort.map((s) => {
       const field = quoteIdent(s.field);
       // Direction restreinte à ASC / DESC (défaut ASC)

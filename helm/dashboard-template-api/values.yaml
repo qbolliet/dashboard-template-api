@@ -112,7 +112,9 @@ config:
 
   # DuckLake catalog routing
   DEFAULT_CATALOG: default
-  ALLOWED_CATALOGS: '["default"]'
+  # Unset: every catalog declared under `catalogs:` is allowed. Set a
+  # JSON-encoded list to narrow it.
+  # ALLOWED_CATALOGS: '["default"]'
   ALLOW_CROSS_CATALOG_QUERIES: 'false'
 
   # Catalog freshness: every pod re-reads dataset_metadata.updated_at on a fresh
@@ -157,9 +159,11 @@ catalogs:
     path: s3://my-bucket/default.ducklake
     dataPath: s3://my-bucket/default_data/
     readOnly: true
-    # JSON-encoded list of schemas hosted by the catalog. The first element is
-    # the default schema when a request omits the `schema` argument.
-    schemas: '["main"]'
+    # Optional JSON-encoded allow-list of schemas. Unset: the API serves every
+    # conformant schema of the catalog, discovered at attach and at reload
+    # ("main" first). When set, the first element is the default schema when a
+    # request omits the `schema` argument.
+    # schemas: '["main"]'
     # Postgres connection details (used only when type=postgres).
     # Credentials go in secrets.postgresCatalogs.<name> below.
     # postgres:

@@ -4,9 +4,22 @@ import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable } from '../utils/identifiers.js';
-import { METADATA_SELECT, toFieldMetadata, withLabelFields } from '../utils/metadata-mapping.js';
+import { createContextLogger } from '../utils/logger.js';
+import {
+  METADATA_SELECT,
+  sortByColumnPosition,
+  toFieldMetadata,
+  withLabelFields,
+} from '../utils/metadata-mapping.js';
 import type { CacheNamespace, DuckDBConnection } from './base-loader.js';
 import type { FieldMetadata } from '../utils/metadata-mapping.js';
+
+const catalogLogger = createContextLogger({ component: 'loaders', module: 'catalog' });
+
+// Position (1, 2, …) de chaque colonne de la table des faits d'un schéma
+const COLUMN_POSITIONS_SQL =
+  'SELECT column_name, column_index FROM duckdb_columns() ' +
+  "WHERE database_name = ? AND schema_name = ? AND table_name = 'fact_table'";
 
 // ─── Interfaces des résultats catalog ────────────────────────────────────────
 
@@ -21,9 +34,10 @@ interface CatalogSchemaKey {
 /**
  * Loader for catalog-level metadata queries.
  *
- * Loads every metadata row of a given catalog/schema. Rows are returned in
- * camelCase: the snake_case → camelCase mapping lives in
- * utils/metadata-mapping.ts. `labelFields` is derived from the same rows.
+ * Loads every metadata row of a given catalog/schema, in the order of the
+ * columns of `fact_table`. Rows are returned in camelCase: the snake_case →
+ * camelCase mapping lives in utils/metadata-mapping.ts. `labelFields` is
+ * derived from the same rows.
  */
 class CatalogMetadataLoader extends BaseQueryLoader {
   // Initialisation sans identifiant de base de données (requêtes cross-catalog)
@@ -74,7 +88,12 @@ class CatalogMetadataLoader extends BaseQueryLoader {
 
   // Méthode de chargement de toutes les méta-données d'un catalogue
   /**
-   * Loads all metadata rows for a given catalog/schema.
+   * Loads all metadata rows for a given catalog/schema, in table order.
+   *
+   * The `metadata` table is stored alphabetically, so the rows are ordered by
+   * the position of their column in `fact_table` — read in the same load, hence
+   * in the same cache entry. A row whose column is missing from the table is
+   * placed last and warned about.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param key - Catalog alias and optional schema to query.
@@ -87,8 +106,24 @@ class CatalogMetadataLoader extends BaseQueryLoader {
     const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
     const query = `SELECT ${METADATA_SELECT} FROM ${qualifiedTable(catalog, resolvedSchema, 'metadata')}`;
     const rows = await connection.all(query);
+
+    // Position de chaque colonne de la table des faits, lue sur la même connexion
+    const columns = await connection.all(COLUMN_POSITIONS_SQL, [catalog, resolvedSchema]);
+    const positions = new Map(columns.map((c) => [String(c.column_name), Number(c.column_index)]));
+
+    const { fields, unplaced } = sortByColumnPosition(
+      rows.map((row) => toFieldMetadata(row)),
+      positions,
+    );
+    if (unplaced.length > 0) {
+      catalogLogger.warn(
+        `Metadata rows without a column in ${catalog}.${resolvedSchema}.fact_table; listed last`,
+        { catalog, schema: resolvedSchema, columns: unplaced },
+      );
+    }
+
     // Inverse de label_for calculé sur les lignes lues, sans requête de plus
-    return withLabelFields(rows.map((row) => toFieldMetadata(row)));
+    return withLabelFields(fields);
   }
 }
 

@@ -156,7 +156,7 @@ describe('Object types — fact', () => {
 
     // Description SDL : bornes de la PAGE, renvoi vers Metadata.stats pour les globales
     const extents = assertObjectType(schema.getType('DatasetMetadata')).getFields().extents;
-    expect(extents.description).toMatch(/THIS PAGE/);
+    expect(extents.description).toMatch(/this page/i);
     expect(extents.description).toMatch(/Metadata\.stats/);
   });
 

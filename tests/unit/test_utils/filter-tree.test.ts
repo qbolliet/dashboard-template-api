@@ -38,6 +38,12 @@ const metadataByName = new Map<string, ColumnMetadata>([
   ['label', { sqlType: 'VARCHAR' }],
   ['flag', { sqlType: 'BOOLEAN' }],
   ['blob_col', { sqlType: 'BLOB' }],
+  // Types déclarés tels quels par la base (map_python_to_sql_type)
+  ['bare_amount', { sqlType: 'DECIMAL' }],
+  ['huge_id', { sqlType: 'UHUGEINT' }],
+  ['huge_signed', { sqlType: 'HUGEINT' }],
+  ['slot', { sqlType: 'TIME' }],
+  ['duration', { sqlType: 'INTERVAL' }],
 ]);
 
 // ─── Fonctions utilitaires ────────────────────────────────────────────────────
@@ -106,6 +112,33 @@ const expectBadInput = (fn: () => unknown, fragment?: string): void => {
 // ─── sqlTypeFamily ────────────────────────────────────────────────────────────
 
 describe('sqlTypeFamily', () => {
+  // Table de vérité : TOUS les types que produit map_python_to_sql_type
+  // (dt_ducklake_manager/utils/types.py), avec la famille attendue
+  test.each<[string, string]>([
+    ['VARCHAR', 'text'],
+    ['TINYINT', 'numeric'],
+    ['SMALLINT', 'numeric'],
+    ['INTEGER', 'numeric'],
+    ['BIGINT', 'numeric'],
+    ['HUGEINT', 'numeric'],
+    ['UTINYINT', 'numeric'],
+    ['USMALLINT', 'numeric'],
+    ['UINTEGER', 'numeric'],
+    ['UBIGINT', 'numeric'],
+    ['UHUGEINT', 'numeric'],
+    ['FLOAT', 'numeric'],
+    ['DOUBLE', 'numeric'],
+    ['DECIMAL', 'numeric'],
+    ['DATE', 'date'],
+    ['TIMESTAMP', 'date'],
+    ['INTERVAL', 'other'],
+    ['TIME', 'other'],
+    ['BOOLEAN', 'boolean'],
+    ['BLOB', 'other'],
+  ])('writer type %s → %s', (type, family) => {
+    expect(sqlTypeFamily(type)).toBe(family);
+  });
+
   test.each([
     'TINYINT',
     'SMALLINT',
@@ -116,11 +149,17 @@ describe('sqlTypeFamily', () => {
     'USMALLINT',
     'UINTEGER',
     'UBIGINT',
+    'UHUGEINT',
     'FLOAT',
     'DOUBLE',
+    'DECIMAL',
+    ' decimal ',
     'DECIMAL(18,3)',
     'DECIMAL(4, 1)',
     'decimal(38,10)',
+    'DECIMAL(10)',
+    'DECIMAL(1,0)',
+    'DECIMAL(38,38)',
   ])('%s → numeric', (type) => {
     expect(sqlTypeFamily(type)).toBe('numeric');
   });
@@ -144,18 +183,34 @@ describe('sqlTypeFamily', () => {
     expect(sqlTypeFamily('BOOLEAN')).toBe('boolean');
   });
 
+  // Ni exception ni famille par défaut : ces types ne se filtrent pas
   test.each([
     'BLOB',
     'JSON',
     'INTERVAL',
     'TIME',
-    'DECIMAL',
-    'DECIMAL(18,3); DROP',
+    'TIME WITH TIME ZONE',
+    'UUID',
     'LIST',
-    '',
     'VARCHAR[]',
-  ])('rejects unknown type %p (no default family)', (type) => {
-    expect(() => sqlTypeFamily(type)).toThrow('Unsupported SQL type');
+    'INTEGER[3]',
+    'STRUCT(a INTEGER)',
+    'MAP(VARCHAR, INTEGER)',
+    '',
+    // DECIMAL hors bornes ou mal formé
+    'DECIMAL(39,2)',
+    'DECIMAL(0,0)',
+    'DECIMAL(5,6)',
+    'DECIMAL(',
+    'DECIMAL()',
+    'DECIMAL(18,3); DROP',
+  ])('type %p → other (never throws)', (type) => {
+    expect(sqlTypeFamily(type)).toBe('other');
+  });
+
+  test('a non-string type is `other`, not an exception', () => {
+    expect(sqlTypeFamily(undefined as unknown as string)).toBe('other');
+    expect(sqlTypeFamily(null as unknown as string)).toBe('other');
   });
 });
 
@@ -205,6 +260,32 @@ describe('treeToSQL — SQL generation', () => {
       sql: '"amount" BETWEEN CAST(? AS DECIMAL(18,3)) AND CAST(? AS DECIMAL(18,3))',
       params: ['1.5', 10],
     });
+  });
+
+  test('BETWEEN on a DECIMAL declared bare, as the database writes it', () => {
+    // La précision physique est inconnue : le CAST ne peut être le DECIMAL(18,3)
+    // par défaut de DuckDB, qui arrondirait la valeur avant la comparaison
+    expect(one(leaf('bare_amount', 'BETWEEN', { min: '1.5', max: 10 }))).toEqual({
+      sql: '"bare_amount" BETWEEN CAST(? AS DECIMAL(38,9)) AND CAST(? AS DECIMAL(38,9))',
+      params: ['1.5', 10],
+    });
+    expect(one(leaf('bare_amount', 'EQ', 0.125)).sql).toBe(
+      '"bare_amount" = CAST(? AS DECIMAL(38,9))',
+    );
+  });
+
+  test('UHUGEINT is an unsigned integer: strings beyond 2^53, no negative, no fraction', () => {
+    const max = '340282366920938463463374607431768211455';
+    expect(one(leaf('huge_id', 'EQ', max))).toEqual({
+      sql: '"huge_id" = CAST(? AS UHUGEINT)',
+      params: [max],
+    });
+    expectBadInput(() => one(leaf('huge_id', 'EQ', -1)), 'unsigned');
+    expectBadInput(() => one(leaf('huge_id', 'EQ', 1.5)), 'expects an integer');
+    // HUGEINT, signé, accepte le négatif
+    expect(one(leaf('huge_signed', 'LT', '-170141183460469231731687303715884105728')).sql).toBe(
+      '"huge_signed" < CAST(? AS HUGEINT)',
+    );
   });
 
   test('date BETWEEN with ISO 8601 values', () => {
@@ -449,6 +530,25 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
 
   test('unknown SQL type in metadata', () => {
     expectBadInput(() => one(leaf('blob_col', 'EQ', 'x')), 'unsupported SQL type "BLOB"');
+  });
+
+  test.each(['blob_col', 'slot', 'duration'])(
+    'a column of the `other` family (%s) cannot be filtered, whatever the operation',
+    (column) => {
+      expectBadInput(() => one(leaf(column, 'EQ', 'x')), 'cannot be filtered');
+      expectBadInput(() => one(leaf(column, 'IS_NULL')), 'cannot be filtered');
+    },
+  );
+
+  test('the error on an `other` column names the type and the filterable ones', () => {
+    expectBadInput(
+      () => one(leaf('slot', 'BETWEEN', { min: '08:00:00', max: '09:00:00' })),
+      'unsupported SQL type "TIME"',
+    );
+    expectBadInput(
+      () => one(leaf('slot', 'EQ', '08:00:00')),
+      'filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN',
+    );
   });
 
   test('unknown column', () => {

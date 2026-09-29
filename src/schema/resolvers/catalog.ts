@@ -67,22 +67,20 @@ export interface CatalogEntry {
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
 
 /**
- * Resolves the SQL type family of a metadata row.
+ * Resolves the type a metadata row is compared by in getSharedFields.
  *
- * A column whose SQL type is unknown to the filter compiler yields null: it
- * then only matches another column that is equally unknown, which keeps the
- * intersection conservative instead of silently pairing incompatible columns.
+ * The family, except for the `other` family (TIME, INTERVAL, BLOB, nested
+ * types…), which is too coarse to pair columns: two `other` columns only match
+ * when they have the very same SQL type, which keeps the intersection
+ * conservative instead of silently pairing incompatible columns.
  *
  * @param row - Metadata row of a catalog/schema.
- * @returns The type family, or null when the SQL type is unsupported.
+ * @returns The family, or `other:<SQL type>` for the `other` family.
  */
-// Famille de type SQL d'une colonne, null si le type n'est pas reconnu
-function typeFamilyOf(row: FieldMetadata): string | null {
-  try {
-    return sqlTypeFamily(row.sqlType);
-  } catch {
-    return null;
-  }
+// Clé de comparaison du type d'une colonne : sa famille, ou son type exact si « other »
+function typeKeyOf(row: FieldMetadata): string {
+  const family = sqlTypeFamily(row.sqlType);
+  return family === 'other' ? `other:${row.sqlType.trim().toUpperCase()}` : family;
 }
 
 // Construction d'un resolver pour le catalogue multi-bases
@@ -144,12 +142,14 @@ const catalogResolvers = {
 
   Query: {
     /**
-     * Lists all available catalogs with their hosted schemas.
+     * Lists all available catalogs with their servable schemas.
      *
      * Returns catalog identifiers and per-schema sources usable by the
-     * CatalogSchemaInfo type resolvers. The `fields` sub-field of each
-     * schema is loaded only when explicitly selected by the client
-     * (lazy cascade via GraphQL selection sets).
+     * CatalogSchemaInfo type resolvers. Only the schemas that pass the schema
+     * version guard are listed (the others were warned about at attach), so
+     * the whole `schemas { fields info }` cascade can be resolved. The `fields`
+     * sub-field of each schema is loaded only when explicitly selected by the
+     * client (lazy cascade via GraphQL selection sets).
      *
      * @param _ - Parent resolver result (unused at root).
      * @param __ - Query arguments (none).
@@ -163,7 +163,7 @@ const catalogResolvers = {
         defaultSchema: databaseManager.getDefaultSchema(id),
         // Source objects carry catalogId so CatalogSchemaInfo's field
         // resolvers can scope their DataLoader keys to the right schema.
-        schemas: databaseManager.getSchemas(id).map((name) => ({ catalogId: id, name })),
+        schemas: databaseManager.getSupportedSchemas(id).map((name) => ({ catalogId: id, name })),
       }));
     },
 
@@ -337,10 +337,10 @@ const catalogResolvers = {
 
       // Indexation par nom de colonne catégorielle hors libellés, avec sa famille de type
       const indexed = metadataSets.map((rows) => {
-        const families = new Map<string, string | null>();
+        const families = new Map<string, string>();
         rows
           .filter((row) => row.isCategorical && row.labelFor === null)
-          .forEach((row) => families.set(String(row.name), typeFamilyOf(row)));
+          .forEach((row) => families.set(String(row.name), typeKeyOf(row)));
         return families;
       });
 

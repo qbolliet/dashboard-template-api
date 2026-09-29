@@ -113,12 +113,19 @@ row is not selected — except `NOR`, which is true as soon as both sides are fa
 
 Allowed operations per column type family:
 
-| Family  | SQL types                                                                                           | Operations                                                                                                                       |
-| ------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| numeric | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `U*INT` `UBIGINT` `FLOAT` `DOUBLE` `DECIMAL(p,s)` | `EQ NEQ GT GTE LT LTE BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                                         |
-| date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                             | `EQ NEQ BEFORE AFTER ON_OR_BEFORE ON_OR_AFTER BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                 |
-| text    | `VARCHAR`                                                                                           | `EQ NEQ IEQ CONTAINS NOT_CONTAINS ICONTAINS STARTS NOT_STARTS ISTARTS ENDS NOT_ENDS IENDS MATCHES IN NOT_IN IS_NULL IS_NOT_NULL` |
-| boolean | `BOOLEAN`                                                                                           | `EQ NEQ IS_TRUE IS_FALSE IS_NOT_TRUE IS_NOT_FALSE IS_NULL IS_NOT_NULL`                                                           |
+| Family  | SQL types                                                                                                                                                   | Operations                                                                                                                       |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| numeric | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `UTINYINT` `USMALLINT` `UINTEGER` `UBIGINT` `UHUGEINT` `FLOAT` `DOUBLE` `DECIMAL` `DECIMAL(p,s)` (p ≤ 38) | `EQ NEQ GT GTE LT LTE BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                                         |
+| date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                                                                                     | `EQ NEQ BEFORE AFTER ON_OR_BEFORE ON_OR_AFTER BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                 |
+| text    | `VARCHAR`                                                                                                                                                   | `EQ NEQ IEQ CONTAINS NOT_CONTAINS ICONTAINS STARTS NOT_STARTS ISTARTS ENDS NOT_ENDS IENDS MATCHES IN NOT_IN IS_NULL IS_NOT_NULL` |
+| boolean | `BOOLEAN`                                                                                                                                                   | `EQ NEQ IS_TRUE IS_FALSE IS_NOT_TRUE IS_NOT_FALSE IS_NULL IS_NOT_NULL`                                                           |
+| other   | `TIME` `INTERVAL` `BLOB` and every other type (nested, `UUID`…)                                                                                             | none: a filter on such a column is a `BAD_USER_INPUT`                                                                            |
+
+The database declares a decimal column as a bare `DECIMAL` in `metadata.sql_type`
+as readily as `DECIMAL(p,s)`; both are numeric. A column of the `other` family is
+listed, projected, sorted and described (`stats`, `getFields`) like any other —
+only filtering it is refused, with an error naming its type. `SUM`, `AVG` and
+`MEDIAN` are refused on it; `COUNT` and `MODE` are allowed.
 
 The `I*` operations (`IEQ`, `ICONTAINS`, `ISTARTS`, `IENDS`) are the case-insensitive
 twins of their `LIKE` counterparts (SQL `ILIKE`); `IEQ` adds no wildcard, so it is a
@@ -194,6 +201,15 @@ input SortInput {
   order: SortOrder # ASC (default) | DESC
 }
 ```
+
+Without `sort`, fact rows come in the physical order of the table
+(`dataset_metadata.cluster_by`, else the primary keys), so pages are disjoint. A
+schema with neither — no primary key, hence no `cluster_by` — is ordered by **every
+column**, in table order (`ORDER BY ALL`): the pages stay exact, at the cost of
+sorting the whole table for each page, and the API warns once per schema in its
+logs. An explicit `sort` is completed with the primary keys, or with the other
+columns when there is none, so ties never make pages overlap. The export follows
+the same rule.
 
 ### Aggregation enum
 
@@ -382,7 +398,10 @@ type Metadata {
 ### `getCatalogs`
 
 Lists all registered catalogs with their default schema and the list of
-hosted schemas. Each schema is a `CatalogSchemaInfo` whose `fields`
+served schemas — the ones the catalog holds (every one by default, or those of the
+`SCHEMAS` allow-list) that pass the schema version guard; a schema in an unsupported
+format is left out (and warned about in the API logs). Each schema is a
+`CatalogSchemaInfo` whose `fields`
 sub-field is **resolved lazily** — it only hits the database when the client
 selects it, so `schemas { name }` is just as cheap as the old string-list and
 `schemas { name fields { ... } }` fetches the whole cascade in one round-trip.
@@ -404,8 +423,10 @@ type CatalogSchemaInfo {
 
 ### `getCatalogSchema`
 
-Returns all field metadata for a given `(catalog, schema)` pair. Both
-arguments are optional: `catalog` falls back to the routed catalog
+Returns all field metadata for a given `(catalog, schema)` pair, **in the order
+of the columns of the fact table** (the `metadata` table itself is stored
+alphabetically). A metadata row without a column in the fact table comes last.
+Both arguments are optional: `catalog` falls back to the routed catalog
 (query argument, header, then default); `schema` falls back to the
 catalog's default schema.
 
@@ -419,7 +440,8 @@ Returns the field names present in all specified targets — the columns that
 are safe to use as `joinFields` in a cross-catalog comparison. Each target is
 a `(catalog, schema)` pair; `schema` is optional and defaults to the catalog's
 default schema. A field is shared when every target declares it **categorical**
-under the same name and with the same SQL type family.
+under the same name and with the same SQL type family (two columns of the `other`
+family, such as `TIME` or `BLOB`, must have the very same SQL type).
 
 ```graphql
 getSharedFields(targets: [CatalogSchemaInput!]!): [String!]!

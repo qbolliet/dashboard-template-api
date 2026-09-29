@@ -15,14 +15,14 @@ query {
     id
     defaultSchema
     schemas {
-      name # list of DuckLake schemas hosted by the catalog (1st = default)
+      name # served schemas of the catalog (1st = default, `main` when present)
     }
   }
 }
 ```
 
 `getCatalogs` returns each catalog with its identifier, default schema, and
-the list of hosted schemas. Per-schema details (`fields`) are exposed as
+the list of served schemas (those in a format the API supports). Per-schema details (`fields`) are exposed as
 sub-fields and only loaded when the client requests them —
 see the cascade example below — or via `getCatalogSchema` / `getFields`.
 

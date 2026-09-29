@@ -179,3 +179,105 @@ describe('pagination avec tri explicite', () => {
     expect(result.errors).toBeDefined();
   });
 });
+
+// ─── Schéma sans clé primaire ni cluster_by ───────────────────────────────────
+
+describe('pagination sur un schéma sans clé primaire (ORDER BY ALL)', () => {
+  // no_primary_key : 240 lignes toutes distinctes, écrites dans le désordre ;
+  // toutes les colonnes sont des mesures (is_primary_key = false)
+  const TOTAL = 240;
+  const PAGE_SIZE = 25;
+
+  /** One row of the fixture, reduced to the columns that order it. */
+  interface NoKeyRow {
+    label: string;
+    observed_on: string;
+    amount: number;
+    quantity: number;
+  }
+
+  /**
+   * Fetches one page of `no_primary_key`, optionally sorted.
+   *
+   * @param offset - Page offset.
+   * @param sort - Inline sort argument, or an empty string to omit it.
+   * @returns The rows of that page, reduced to label, observed_on and amount.
+   */
+  // Lecture d'une page du schéma sans clé
+  const nokeyPage = async (offset: number, sort: string = ''): Promise<NoKeyRow[]> => {
+    const sortArg = sort ? `sort: ${sort}, ` : '';
+    const result = await execute(server, {
+      query: `query {
+        getFactTable(schema: "no_primary_key", ${sortArg}limit: ${PAGE_SIZE}, offset: ${offset}) {
+          data { measures { name value } }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    return (result.data!.getFactTable as { data: FactRow[] }).data.map((row) => {
+      const byName = Object.fromEntries(row.measures.map((m) => [m.name, m.value]));
+      return {
+        label: String(byName.label),
+        observed_on: String(byName.observed_on),
+        amount: Number(byName.amount),
+        quantity: Number(byName.quantity),
+      };
+    });
+  };
+
+  /** Reads every page of the schema, in order. */
+  const sweep = async (sort: string = ''): Promise<NoKeyRow[]> => {
+    const rows: NoKeyRow[] = [];
+    for (let offset = 0; offset < TOTAL; offset += PAGE_SIZE) {
+      rows.push(...(await nokeyPage(offset, sort)));
+    }
+    return rows;
+  };
+
+  // Ordre de la table : label, observed_on, amount (puis slot, quantity, inutiles ici)
+  const byTable = (a: NoKeyRow, b: NoKeyRow): number =>
+    a.label.localeCompare(b.label) ||
+    a.observed_on.localeCompare(b.observed_on) ||
+    a.amount - b.amount;
+
+  test('les pages successives sont disjointes et couvrent toute la table', async () => {
+    const rows = await sweep();
+
+    expect(rows).toHaveLength(TOTAL);
+    // `amount` est unique : deux pages qui se chevauchent le trahiraient
+    expect(new Set(rows.map((r) => r.amount)).size).toBe(TOTAL);
+  });
+
+  test('les pages suivent l’ordre de toutes les colonnes, dans l’ordre de la table', async () => {
+    const rows = await sweep();
+
+    expect(rows.map((r) => r.amount)).toEqual([...rows].sort(byTable).map((r) => r.amount));
+  });
+
+  test('deux lectures de la même page rendent les mêmes lignes dans le même ordre', async () => {
+    const once = await nokeyPage(75);
+    const twice = await nokeyPage(75);
+
+    expect(twice).toEqual(once);
+  });
+
+  test('un tri explicite à ex æquo reste disjoint et exhaustif (autres colonnes en départage)', async () => {
+    // `label` ne prend que 12 valeurs : 20 lignes à égalité chacune
+    const rows = await sweep('[{ field: "label", order: ASC }]');
+
+    expect(new Set(rows.map((r) => r.amount)).size).toBe(TOTAL);
+    const labels = rows.map((r) => r.label);
+    expect([...labels].sort()).toEqual(labels);
+    // Au sein d'un libellé, le départage suit l'ordre des colonnes de la table
+    expect(rows.map((r) => r.amount)).toEqual([...rows].sort(byTable).map((r) => r.amount));
+  });
+
+  test('un tri explicite DESC conserve son sens, le départage restant croissant', async () => {
+    const rows = await sweep('[{ field: "quantity", order: DESC }]');
+
+    expect(new Set(rows.map((r) => r.amount)).size).toBe(TOTAL);
+    const quantities = rows.map((r) => r.quantity);
+    expect([...quantities].sort((a, b) => b - a)).toEqual(quantities);
+  });
+});

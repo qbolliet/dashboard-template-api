@@ -16,20 +16,23 @@ process.env.DB_PATH = 'test-data/test-database.db';
 process.env.DEFAULT_CATALOG_PATH = 'data/test-default.ducklake';
 process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
 process.env.DEFAULT_READ_ONLY = 'true';
-// Schémas du catalogue default : main (jeu principal), predictions
-// (comparaisons cross-schéma), geography (hiérarchie de colonnes), trade
-// (codes et libellés), emploi (noms de colonnes avec espace et accent), plus
-// les deux fixtures volontairement non conformes de la garde de version.
-process.env.DEFAULT_SCHEMAS =
-  '["main", "predictions", "geography", "trade", "emploi", "unsupported_version", "missing_dataset_metadata"]';
+// Aucune liste de schémas : chaque catalogue sert ce qu'il contient (découverte
+// à l'attach), comme un déploiement sans <NAME>_SCHEMAS. Le catalogue default
+// héberge main, predictions, geography, trade, emploi, no_primary_key et les
+// deux fixtures volontairement non conformes de la garde de version, que
+// getCatalogs n'expose pas. Une valeur héritée du shell fausserait ce contrat.
+delete process.env.DEFAULT_SCHEMAS;
+delete process.env.MACROECONOMICS_SCHEMAS;
+delete process.env.PUBLIC_FINANCE_SCHEMAS;
 // Redirection de macroeconomics et public_finance vers les catalogues synthétiques locaux
+// (macroeconomics héberge main et un second schéma trade : codes nc8 partagés
+// avec default.trade, pour compareFacts)
 process.env.MACROECONOMICS_CATALOG_PATH = 'data/test-macroeconomics.ducklake';
 process.env.MACROECONOMICS_DATA_PATH = 'data/test-macroeconomics_data/';
-// Second schéma trade : codes nc8 partagés avec default.trade (compareFacts)
-process.env.MACROECONOMICS_SCHEMAS = '["main", "trade"]';
 process.env.PUBLIC_FINANCE_CATALOG_PATH = 'data/test-public-finance.ducklake';
 process.env.PUBLIC_FINANCE_DATA_PATH = 'data/test-public-finance_data/';
-process.env.ALLOWED_CATALOGS = '["default", "macroeconomics", "public_finance"]';
+// Aucun ALLOWED_CATALOGS : tous les catalogues de CATALOGS sont autorisés
+delete process.env.ALLOWED_CATALOGS;
 process.env.ALLOW_CROSS_CATALOG_QUERIES = 'true';
 
 // Sondage des catalogues désactivé : aucun timer de fond pendant les tests

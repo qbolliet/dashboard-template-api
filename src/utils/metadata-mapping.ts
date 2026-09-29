@@ -142,6 +142,43 @@ function withLabelFields(fields: FieldMetadata[]): FieldMetadata[] {
   }));
 }
 
+/** Metadata rows ordered like the fact table, and the rows it had no column for. */
+interface PhysicallyOrderedFields {
+  fields: FieldMetadata[];
+  /** Names of the rows with no column in the fact table (placed last). */
+  unplaced: string[];
+}
+
+/**
+ * Orders metadata rows by the position of their column in the fact table.
+ *
+ * The database writes the `metadata` rows in alphabetical order, not in the
+ * order of the columns; the column order is the one a client expects to show
+ * (tables, forms, exports). A row whose column is absent from the fact table
+ * (stale metadata) goes after the others, by name, and is reported in
+ * `unplaced` so that the caller can warn.
+ *
+ * @param fields - Metadata rows of one schema, in any order.
+ * @param positions - Position of each fact table column (any increasing index).
+ * @returns The rows in table order, and the names of the rows left unplaced.
+ */
+// Tri des lignes de metadata selon la position de leur colonne dans fact_table
+function sortByColumnPosition(
+  fields: readonly FieldMetadata[],
+  positions: ReadonlyMap<string, number>,
+): PhysicallyOrderedFields {
+  const placed = fields.filter((field) => positions.has(field.name));
+  const unplaced = fields.filter((field) => !positions.has(field.name));
+
+  placed.sort((a, b) => (positions.get(a.name) as number) - (positions.get(b.name) as number));
+  unplaced.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+  return {
+    fields: [...placed, ...unplaced],
+    unplaced: unplaced.map((field) => field.name),
+  };
+}
+
 /**
  * Converts the rows of a `name = ? OR label_for = ?` read into one field.
  *
@@ -217,7 +254,8 @@ export {
   toFieldMetadata,
   toFieldMetadataWithLabels,
   withLabelFields,
+  sortByColumnPosition,
   indexMetadataByName,
   resolveLabelField,
 };
-export type { FieldMetadata };
+export type { FieldMetadata, PhysicallyOrderedFields };

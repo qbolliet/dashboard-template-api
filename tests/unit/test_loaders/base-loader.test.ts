@@ -667,6 +667,12 @@ describe('FactQueryLoader', () => {
       expect(loader.buildSortClause([{ field: 'id', order: 'ASC' }])).toBe('ORDER BY "id" ASC');
     });
 
+    test('rend le tri « toutes les colonnes » (champ vide) en ORDER BY ALL', () => {
+      // Dernier repli du tri par défaut : schéma sans cluster_by ni clé primaire
+      const loader = new FactQueryLoader();
+      expect(loader.buildSortClause([{ field: '', order: 'ASC' }])).toBe('ORDER BY ALL');
+    });
+
     test('refuse une direction hors ASC / DESC', () => {
       const loader = new FactQueryLoader();
       expect(() => loader.buildSortClause([{ field: 'id', order: 'SIDEWAYS' }])).toThrow(

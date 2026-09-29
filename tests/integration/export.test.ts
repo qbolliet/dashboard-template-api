@@ -470,6 +470,33 @@ describe('GET /api/export — query shaping', () => {
     expect(populations).toEqual([...populations].sort((a, b) => b - a));
   });
 
+  test('a schema without primary key is exported in ORDER BY ALL order, ties broken by every column', async () => {
+    const { app } = buildApp();
+    const base = { catalog: 'default', schema: 'no_primary_key', format: 'csv', limit: '240' };
+    // Ni cluster_by ni clé primaire : toutes les colonnes, dans l'ordre de la table
+    const expected = (
+      await sourceRows(
+        'SELECT amount FROM "default".no_primary_key.fact_table ' +
+          'ORDER BY label, observed_on, amount, slot, quantity',
+      )
+    ).map((row) => Number(row.amount));
+
+    const amountsOf = (body: Buffer): number[] => {
+      const [header, ...lines] = csvLines(body);
+      const index = header.split(',').indexOf('amount');
+      return lines.map((line) => Number(line.split(',')[index]));
+    };
+
+    const byDefault = await exportRequest(app, base);
+    // `label` ne prend que 12 valeurs : le tri explicite laisse de nombreux ex æquo
+    const byLabel = await exportRequest(app, { ...base, sort: 'label:asc' });
+
+    expect(byDefault.status).toBe(200);
+    expect(byDefault.headers['x-row-count']).toBe('240');
+    expect(amountsOf(byDefault.body as Buffer)).toEqual(expected);
+    expect(amountsOf(byLabel.body as Buffer)).toEqual(expected);
+  });
+
   test('limit is honoured and capped by MAX_ROWS', async () => {
     const { app } = buildApp({ maxRows: 5 });
     const base = { catalog: 'default', schema: 'geography', format: 'csv' };

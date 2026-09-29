@@ -15,27 +15,27 @@ CATALOGS:
     PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
     DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
     READ_ONLY: ${DEFAULT_READ_ONLY:-true}
-    SCHEMAS: ${DEFAULT_SCHEMAS:-["main"]}
+    SCHEMAS: ${DEFAULT_SCHEMAS:-}
   macroeconomics:
     PATH: ${MACROECONOMICS_CATALOG_PATH:-...}
     DATA_PATH: ${MACROECONOMICS_DATA_PATH:-...}
     READ_ONLY: ${MACROECONOMICS_READ_ONLY:-true}
-    SCHEMAS: ${MACROECONOMICS_SCHEMAS:-["main"]}
+    SCHEMAS: ${MACROECONOMICS_SCHEMAS:-}
   public_finance:
     PATH: ${PUBLIC_FINANCE_CATALOG_PATH:-...}
     DATA_PATH: ${PUBLIC_FINANCE_DATA_PATH:-...}
     READ_ONLY: ${PUBLIC_FINANCE_READ_ONLY:-true}
-    SCHEMAS: ${PUBLIC_FINANCE_SCHEMAS:-["main"]}
+    SCHEMAS: ${PUBLIC_FINANCE_SCHEMAS:-}
 ```
 
-Each catalog entry requires:
+Each catalog entry takes:
 
-| Key         | Description                                                                                                                                                                              |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PATH`      | Path to the `.ducklake` catalog file                                                                                                                                                     |
-| `DATA_PATH` | Path to the associated data directory                                                                                                                                                    |
-| `READ_ONLY` | Should always be `true` in production                                                                                                                                                    |
-| `SCHEMAS`   | DuckLake schemas hosted by the catalog (`["main"]` by default). First element is the default when a request omits `schema`. May be a YAML list or a JSON-encoded string from an env var. |
+| Key         | Description                                                                                                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PATH`      | Path to the `.ducklake` catalog file                                                                                                                                                                                                               |
+| `DATA_PATH` | Path to the associated data directory                                                                                                                                                                                                              |
+| `READ_ONLY` | Should always be `true` in production                                                                                                                                                                                                              |
+| `SCHEMAS`   | Optional allow-list of the schemas to serve. Empty or absent (the default): every schema of the catalog is served. Otherwise a YAML list or a JSON-encoded string from an env var; the first element is the default when a request omits `schema`. |
 
 ### Adding a catalog
 
@@ -45,26 +45,36 @@ Each catalog entry requires:
 
 ### Multi-schema catalogs
 
-A catalog can host **one or several schemas**. The first element of `SCHEMAS`
-is the default schema used when a GraphQL request omits the `schema` argument.
+A catalog can host **one or several schemas**. By default the API serves all of
+them: nothing has to be declared, and a schema added to the catalog by the
+updater is served after the next reload. `SCHEMAS` is only an allow-list, for a
+catalog that holds schemas you do not want to expose.
 
 ```yaml
 CATALOGS:
   default:
     PATH: ...
     DATA_PATH: ...
-    SCHEMAS: ['main', 'staging'] # 'main' is the default
+    SCHEMAS: ['main', 'staging'] # optional; 'main' is then the default
 ```
 
 How the API treats `SCHEMAS`:
 
-1. **At startup** the API queries `information_schema.schemata` on the live
-   DuckLake instance to discover what each catalog actually exposes.
-2. If `SCHEMAS` is **explicitly set**, it acts as an **allow-list**: only the
+1. **At startup and at every reload** the API queries `information_schema.schemata`
+   on the live DuckLake instance to discover what each catalog actually exposes.
+2. If `SCHEMAS` is **absent or empty** (the default: an unset `<NAME>_SCHEMAS`
+   variable is the same as an empty one), the discovered list is adopted: `main`
+   first, which makes it the default schema, then the others alphabetically
+   (falls back to `["main"]` when discovery returns nothing).
+3. If `SCHEMAS` is **set**, it acts as an **allow-list**: only the
    intersection (configured ∩ discovered) is exposed. Configured-but-missing
    schemas trigger a warning in the logs and are simply ignored at runtime.
-3. If `SCHEMAS` is **absent**, the discovered list is adopted as-is (falls
-   back to `["main"]` when discovery returns nothing).
+4. Whatever the list, `getCatalogs` only exposes the schemas whose
+   `dataset_metadata.schema_version` is supported. A schema in another format, or
+   without a `dataset_metadata` table, is **warned about in the logs when the
+   catalog is attached** and left out of `getCatalogs`; a query that targets it
+   explicitly fails with `SCHEMA_VERSION_UNSUPPORTED` (rather than "unknown
+   schema"). The default schema of a catalog is its first supported schema.
 
 Routing in resolvers:
 
@@ -83,15 +93,15 @@ re-read. No restart needed.
 ```yaml
 CATALOG_ROUTING:
   DEFAULT_CATALOG: ${DEFAULT_CATALOG:-default}
-  ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-["default", "macroeconomics", "public_finance"]}
+  ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-}
   ALLOW_CROSS_CATALOG_QUERIES: ${ALLOW_CROSS_CATALOG_QUERIES:-false}
 ```
 
-| Key                           | Default   | Description                                                   |
-| ----------------------------- | --------- | ------------------------------------------------------------- |
-| `DEFAULT_CATALOG`             | `default` | Catalog used when no `catalog` argument or header is provided |
-| `ALLOWED_CATALOGS`            | all three | Whitelist of catalog IDs that can be queried                  |
-| `ALLOW_CROSS_CATALOG_QUERIES` | `false`   | Enable `compareFacts` / `compareAggregatedFacts`              |
+| Key                           | Default                 | Description                                                                                                           |
+| ----------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_CATALOG`             | `default`               | Catalog used when no `catalog` argument or header is provided                                                         |
+| `ALLOWED_CATALOGS`            | every key of `CATALOGS` | Whitelist of catalog IDs that can be queried. Empty or absent: all the catalogs of `CATALOGS`; a JSON list narrows it |
+| `ALLOW_CROSS_CATALOG_QUERIES` | `false`                 | Enable `compareFacts` / `compareAggregatedFacts`                                                                      |
 
 :::tip
 Set `ALLOW_CROSS_CATALOG_QUERIES=true` to enable the cross-catalog comparison queries.

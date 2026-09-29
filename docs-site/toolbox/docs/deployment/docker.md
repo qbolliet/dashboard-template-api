@@ -32,7 +32,6 @@ docker run --rm -p 4000:4000 \
   -e DEFAULT_CATALOG_PATH=s3://my-bucket/default.ducklake \
   -e DEFAULT_DATA_PATH=s3://my-bucket/default_data/ \
   -e DEFAULT_READ_ONLY=true \
-  -e DEFAULT_SCHEMAS='["main"]' \
   -e DEFAULT_CATALOG=default \
   -e ALLOWED_CATALOGS='["default"]' \
   -e S3_ENABLED=true \
@@ -52,9 +51,10 @@ Per-catalog env vars follow the `<NAME_UPPER>_*` convention:
 Add another catalog by listing its name in `ALLOWED_CATALOGS` and exporting
 its env-var block.
 
-`SCHEMAS` is a JSON-encoded list. Use `'["main", "staging"]'` for a
-multi-schema catalog; omit to let the API discover schemas at startup and
-fall back to `["main"]` when none is found.
+`SCHEMAS` is an optional JSON-encoded allow-list. Omit it (or leave it empty) to
+serve every schema of the catalog, discovered at startup and at each reload; set
+`'["main", "staging"]'` to serve only those, `main` being the default. `ALLOWED_CATALOGS`
+works the same way: omitted, every catalog declared in `config/database.yaml` is allowed.
 
 Verify it is up:
 
@@ -80,7 +80,6 @@ services:
       DEFAULT_CATALOG_TYPE: file
       DEFAULT_CATALOG_PATH: s3://dta/default.ducklake
       DEFAULT_DATA_PATH: s3://dta/default_data/
-      DEFAULT_SCHEMAS: '["main"]'
       DEFAULT_CATALOG: default
       ALLOWED_CATALOGS: '["default"]'
       S3_ENABLED: 'true'

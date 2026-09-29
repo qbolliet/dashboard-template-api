@@ -62,15 +62,22 @@ describe('aggregatedValueFamily', () => {
     ['MIN', 'DOUBLE', 'numeric'],
     ['MODE', 'VARCHAR', 'text'],
     ['MODE', 'BOOLEAN', 'boolean'],
-    ['MODE', 'BLOB', null],
+    ['MODE', 'BLOB', 'other'],
+    ['MODE', 'TIME', 'other'],
   ] as const)('%s on %s → %s', (aggregation, sqlType, expected) => {
     expect(aggregatedValueFamily(aggregation, sqlType)).toBe(expected);
   });
 });
 
 describe('measureFamily', () => {
-  test('returns null instead of throwing for a type without family', () => {
-    expect(measureFamily('BLOB')).toBeNull();
+  test('returns `other` instead of throwing for a type without family', () => {
+    expect(measureFamily('BLOB')).toBe('other');
+    expect(measureFamily(null)).toBe('other');
     expect(measureFamily('DATE')).toBe('date');
+  });
+
+  test('a bare DECIMAL, as the database declares it, is numeric', () => {
+    expect(measureFamily('DECIMAL')).toBe('numeric');
+    expect(allowedAggregations('DECIMAL')).toEqual(AGGREGATIONS);
   });
 });

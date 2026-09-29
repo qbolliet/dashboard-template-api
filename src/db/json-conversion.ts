@@ -277,17 +277,9 @@ function computeExtents(
   const extents: Record<string, ColumnExtent> = {};
   // Parcours des colonnes
   columnNames.forEach((name, index) => {
-    // Identification de la famille de type
-    let family: SqlTypeFamily;
-    try {
-      family = sqlTypeFamily(columnTypes[index].toString());
-    } catch {
-      // Type sans famille reconnue (LIST, BLOB…) : pas d'extent
-      return;
-    }
-
+    // Famille « other » (TIME, LIST, BLOB…) : extentOf n'en tire aucun extent
     const extent = extentOf(
-      family,
+      sqlTypeFamily(columnTypes[index].toString()),
       rows.map((row) => row[name]),
     );
     if (extent) extents[name] = extent;

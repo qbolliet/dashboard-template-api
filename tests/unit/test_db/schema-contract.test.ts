@@ -22,7 +22,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** Schémas de test, par catalogue. */
 const TEST_SCHEMAS: Array<[catalog: string, catalogFile: string, schemas: string[]]> = [
-  ['default', 'test-default.ducklake', ['main', 'predictions', 'geography', 'trade', 'emploi']],
+  [
+    'default',
+    'test-default.ducklake',
+    ['main', 'predictions', 'geography', 'trade', 'emploi', 'no_primary_key'],
+  ],
   ['macroeconomics', 'test-macroeconomics.ducklake', ['main', 'trade']],
   ['public_finance', 'test-public-finance.ducklake', ['main']],
 ];
@@ -35,6 +39,10 @@ const NONCONFORMANT: Array<[catalog: string, schema: string]> = [
   ['default', 'unsupported_version'],
   ['default', 'missing_dataset_metadata'],
 ];
+
+// Schémas SANS clé primaire : le writer laisse alors cluster_by à NULL (l'API
+// pagine par ORDER BY ALL), au lieu de la liste de colonnes des autres schémas
+const WITHOUT_PRIMARY_KEY = new Set(['default.no_primary_key']);
 
 // Les trois tables d'un schéma — et rien d'autre (spec §2)
 const EXPECTED_TABLES = ['dataset_metadata', 'fact_table', 'metadata'];
@@ -235,7 +243,11 @@ describe('table metadata', () => {
       columnsOf(key, 'fact_table').map((column) => [column.column_name, column.data_type]),
     );
     for (const row of metadataBySchema.get(key) ?? []) {
-      expect(row.sql_type).toBe(actualTypes.get(row.name));
+      const actual = String(actualTypes.get(row.name));
+      // Le writer déclare « DECIMAL » nu pour un DECIMAL(p,s) physique : la
+      // fixture reproduit cette déclaration, que l'API doit accepter
+      const bareDecimal = row.sql_type === 'DECIMAL' && /^DECIMAL\(\d+,\d+\)$/.test(actual);
+      if (!bareDecimal) expect(row.sql_type).toBe(actual);
     }
   });
 
@@ -363,6 +375,12 @@ describe('table dataset_metadata', () => {
   test.each(ALL_SCHEMAS)('%s.%s a un cluster_by JSON de colonnes existantes', (catalog, schema) => {
     const key = `${catalog}.${schema}`;
     const rows = datasetRowsBySchema.get(key) ?? [];
+    // Sans clé primaire : cluster_by NULL, et aucune clé primaire déclarée
+    if (WITHOUT_PRIMARY_KEY.has(key)) {
+      expect(rows[0].cluster_by).toBeNull();
+      expect((metadataBySchema.get(key) ?? []).some((row) => row.is_primary_key)).toBe(false);
+      return;
+    }
     const clusterBy = JSON.parse(String(rows[0].cluster_by)) as string[];
 
     expect(Array.isArray(clusterBy)).toBe(true);

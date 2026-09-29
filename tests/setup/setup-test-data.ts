@@ -306,6 +306,73 @@ function buildEmploiRows(): unknown[][] {
   );
 }
 
+// ─── Schéma « no_primary_key » : ni clé primaire, ni cluster_by ────────────────
+
+// Un jeu sans clé primaire : le writer le dédoublonne sur TOUTES les colonnes et
+// laisse cluster_by à NULL, si bien que l'API n'a que « ORDER BY ALL » pour
+// paginer de façon déterministe. Il porte aussi les types que la base déclare
+// sans les avoir physiquement précisés : `amount` est un DECIMAL(10,2) dont
+// metadata.sql_type dit « DECIMAL » (sortie de map_python_to_sql_type), et
+// `slot` un TIME, sans famille de filtre. Les lignes de metadata sont écrites
+// dans l'ordre ALPHABÉTIQUE, comme le fait le writer, et non dans celui des
+// colonnes de fact_table.
+
+/** Column order of the `no_primary_key` fact_table. */
+const NO_PRIMARY_KEY_COLUMNS = `
+  label       VARCHAR,
+  observed_on DATE,
+  amount      DECIMAL(10,2),
+  slot        TIME,
+  quantity    INTEGER
+`;
+
+// Ordre alphabétique volontaire (≠ ordre des colonnes de fact_table)
+const NO_PRIMARY_KEY_METADATA: MetadataRow[] = [
+  meta('amount', 'Montant', 'DECIMAL', false, false, {
+    unit: '€',
+    displayFormat: ',.2f',
+    family: 'Finances',
+    defaultAggregation: 'SUM',
+  }),
+  meta('label', 'Libellé', 'VARCHAR', false, true, { family: 'Général' }),
+  meta('observed_on', 'Date d’observation', 'DATE', false, false, { family: 'Temps' }),
+  meta('quantity', 'Quantité', 'INTEGER', false, false, {
+    family: 'Général',
+    defaultAggregation: 'SUM',
+  }),
+  meta('slot', 'Créneau', 'TIME', false, false, { family: 'Temps' }),
+];
+
+/** Number of rows of the `no_primary_key` fact_table (several pages of 25). */
+const NO_PRIMARY_KEY_ROW_COUNT = 240;
+
+/**
+ * Builds the fact rows of the `no_primary_key` schema.
+ *
+ * Every row differs from the others (`amount` is unique), as the writer's
+ * deduplication guarantees, while `label` repeats every twelve rows and
+ * `quantity` every seven: sorting on either leaves many ties, and the rows are
+ * NOT generated in any sorted order.
+ *
+ * @returns Rows aligned with NO_PRIMARY_KEY_COLUMNS.
+ */
+// Lignes déterministes, uniques, volontairement non triées
+function buildNoPrimaryKeyRows(): unknown[][] {
+  return Array.from({ length: NO_PRIMARY_KEY_ROW_COUNT }, (_, i) => {
+    // Multiplication par un premier avec 240 : mélange les lignes sans doublon
+    const shuffled = (i * 97) % NO_PRIMARY_KEY_ROW_COUNT;
+    const day = String((shuffled % 28) + 1).padStart(2, '0');
+    const hour = String(shuffled % 24).padStart(2, '0');
+    return [
+      `item-${String(shuffled % 12).padStart(2, '0')}`,
+      `2024-03-${day}`,
+      shuffled * 1.25,
+      `${hour}:${String((shuffled * 7) % 60).padStart(2, '0')}:00`,
+      shuffled % 7,
+    ];
+  });
+}
+
 // ─── Schéma « trade » : codes et libellés (spec §2.6) ────────────────────────────
 
 /** Column order of the `trade` fact_table. */
@@ -765,9 +832,9 @@ async function insertFactRows(
     );
   }
 
-  await conn.run(
-    `INSERT INTO ${qualified} SELECT * FROM staging_fact ORDER BY ${clusterBy.map(quoteIdent).join(', ')}`,
-  );
+  // Sans cluster_by (jeu sans clé primaire), l'ordre d'écriture est celui des lignes
+  const ordering = clusterBy.length > 0 ? ` ORDER BY ${clusterBy.map(quoteIdent).join(', ')}` : '';
+  await conn.run(`INSERT INTO ${qualified} SELECT * FROM staging_fact${ordering}`);
   await conn.run('DROP TABLE staging_fact');
 }
 
@@ -867,7 +934,8 @@ async function createSchema(
         info.source,
         info.updatedAt,
         info.schemaVersion,
-        JSON.stringify(info.clusterBy),
+        // NULL sans cluster_by, comme le writer d'un jeu sans clé primaire
+        info.clusterBy.length > 0 ? JSON.stringify(info.clusterBy) : null,
       ],
     );
   }
@@ -969,7 +1037,8 @@ async function createCatalog(
  *
  * Creates a shared in-memory DuckDB instance, installs the DuckLake extension
  * if needed, then creates the default (main + predictions + geography +
- * trade + emploi), macroeconomics (main + trade), and public_finance catalogs.
+ * trade + emploi + no_primary_key), macroeconomics (main + trade), and
+ * public_finance catalogs.
  */
 async function setupTestData(): Promise<void> {
   // Création du répertoire de données de test si absent
@@ -1057,6 +1126,21 @@ async function setupTestData(): Promise<void> {
         clusterBy: EMPLOI_CLUSTER_BY,
       },
       rows: buildEmploiRows(),
+    });
+
+    // Sixième schéma `no_primary_key` : ni clé primaire ni cluster_by, un DECIMAL
+    // déclaré « DECIMAL » et un TIME, métadonnées écrites par ordre alphabétique
+    await createSchema(conn, 'default', 'no_primary_key', NO_PRIMARY_KEY_COLUMNS, {
+      metadata: NO_PRIMARY_KEY_METADATA,
+      datasetMetadata: {
+        label: 'Sans clé primaire',
+        description: 'Jeu sans clé primaire ni cluster_by, dédoublonné sur toutes ses colonnes',
+        source: 'test-fixture:default.no_primary_key',
+        updatedAt: '2026-09-01 04:37:00',
+        schemaVersion: 1,
+        clusterBy: [],
+      },
+      rows: buildNoPrimaryKeyRows(),
     });
 
     // Deux schémas VOLONTAIREMENT non conformes, réservés au test de la garde

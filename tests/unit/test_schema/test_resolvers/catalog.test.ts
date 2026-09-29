@@ -10,6 +10,39 @@
 import { ApolloServer } from '@apollo/server';
 import { ensureSetup, getServer, execute } from './helpers.js';
 
+// ─── Ordre attendu des colonnes ───────────────────────────────────────────────
+
+// Ordre des colonnes de fact_table (tests/setup/setup-test-data.ts)
+const MAIN_COLUMN_ORDER = [
+  'country',
+  'indicator',
+  'kind',
+  'model',
+  'training',
+  'date',
+  'horizon',
+  'value',
+  'lower_bound',
+  'upper_bound',
+  'headcount',
+  'sample_size',
+  'is_provisional',
+  'ingested_at',
+  'notes',
+  'quality_score',
+];
+const GEOGRAPHY_COLUMN_ORDER = [
+  'region',
+  'departement',
+  'commune',
+  'date',
+  'population',
+  'area_km2',
+  'budget',
+  'density',
+  'is_urban',
+];
+
 // ─── État partagé ─────────────────────────────────────────────────────────────
 
 // Serveur Apollo réutilisé par tous les tests du fichier
@@ -115,24 +148,79 @@ describe('getCatalogs', () => {
     expect(fields.some((f) => f.isPrimaryKey)).toBe(true);
   });
 
-  // ── La cascade traverse chaque schéma, garde de version comprise ──
-  test('cascade — fields est gardé schéma par schéma', async () => {
+  // ── Découverte : aucune liste SCHEMAS n'est configurée dans les tests ──
+  test('sans liste SCHEMAS, liste les schémas conformes découverts, « main » d’abord', async () => {
+    const result = await execute(server, {
+      query: 'query { getCatalogs { id defaultSchema schemas { name } } }',
+    });
+
+    expect(result.errors).toBeUndefined();
+    const catalogs = result.data!.getCatalogs as Array<{
+      id: string;
+      defaultSchema: string;
+      schemas: Array<{ name: string }>;
+    }>;
+    const namesOf = (id: string): string[] | undefined =>
+      catalogs.find((cat) => cat.id === id)?.schemas.map((s) => s.name);
+
+    // main d'abord (c'est le défaut), puis l'ordre alphabétique
+    expect(namesOf('default')).toEqual([
+      'main',
+      'emploi',
+      'geography',
+      'no_primary_key',
+      'predictions',
+      'trade',
+    ]);
+    expect(namesOf('macroeconomics')).toEqual(['main', 'trade']);
+    expect(namesOf('public_finance')).toEqual(['main']);
+    expect(catalogs.map((cat) => cat.defaultSchema)).toEqual(['main', 'main', 'main']);
+  });
+
+  test('n’expose pas les schémas refusés par la garde de version', async () => {
+    const result = await execute(server, {
+      query: 'query { getCatalogs { id schemas { name } } }',
+    });
+
+    const names = (result.data!.getCatalogs as Array<{ schemas: Array<{ name: string }> }>).flatMap(
+      (cat) => cat.schemas.map((s) => s.name),
+    );
+    expect(names).not.toContain('unsupported_version');
+    expect(names).not.toContain('missing_dataset_metadata');
+  });
+
+  test('un schéma exclu de la liste reste refusé par la garde, pas « inconnu »', async () => {
+    // Il est découvert (donc adressable) mais non servi : l'erreur dit pourquoi
+    for (const schema of ['unsupported_version', 'missing_dataset_metadata']) {
+      const result = await execute(server, {
+        query: `query { getCatalogSchema(schema: "${schema}") { name } }`,
+      });
+      expect(result.errors).toBeDefined();
+      expect(result.errors![0].extensions?.code).toBe('SCHEMA_VERSION_UNSUPPORTED');
+    }
+  });
+
+  // ── La cascade traverse chaque schéma listé ──
+  test('cascade — fields se résout pour chaque schéma listé, sans erreur', async () => {
     const result = await execute(server, {
       query: 'query { getCatalogs { id schemas { name fields { name } } } }',
     });
 
-    // Le catalogue `default` héberge deux fixtures non conformes : la cascade
-    // les traverse et la garde les refuse, ce qui prouve que le resolver lazy
-    // s'exécute bien par schéma.
-    expect(result.errors).toBeDefined();
-    for (const error of result.errors!) {
-      expect(error.extensions?.code).toBe('SCHEMA_VERSION_UNSUPPORTED');
+    // Les fixtures non conformes ne sont pas listées : plus rien à refuser, et
+    // la cascade complète (fields non-nullable) aboutit
+    expect(result.errors).toBeUndefined();
+    const catalogs = result.data!.getCatalogs as Array<{
+      schemas: Array<{ name: string; fields: Array<{ name: string }> }>;
+    }>;
+    for (const cat of catalogs) {
+      for (const schema of cat.schemas) {
+        expect(schema.fields.length).toBeGreaterThan(0);
+      }
     }
   });
 
   test('cascade — schemas { name } stays lightweight (no fields requested)', async () => {
-    // Asking only for names must succeed even when schemas exist that would
-    // fail to load if fields were eagerly resolved. Acts as a smoke check
+    // Asking only for names must not load any schema. Acts as a smoke check
     // that the resolver is genuinely lazy.
     const query = `query { getCatalogs { id schemas { name } } }`;
     const result = await execute(server, { query });
@@ -153,6 +241,47 @@ describe('getCatalogs', () => {
 // ─── Tests getCatalogSchema ───────────────────────────────────────────────────
 
 describe('getCatalogSchema', () => {
+  // ── Ordre des colonnes : celui de fact_table, non celui de la table metadata ──
+  test.each<[string, string[]]>([
+    ['main', MAIN_COLUMN_ORDER],
+    ['geography', GEOGRAPHY_COLUMN_ORDER],
+    // La base écrit metadata par ordre alphabétique : amount, label, observed_on…
+    ['no_primary_key', ['label', 'observed_on', 'amount', 'slot', 'quantity']],
+  ])('%s: les champs suivent l’ordre des colonnes de fact_table', async (schema, expected) => {
+    const result = await execute(server, {
+      query: `query { getCatalogSchema(schema: "${schema}") { name } }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    const names = (result.data!.getCatalogSchema as Array<{ name: string }>).map((f) => f.name);
+    expect(names).toEqual(expected);
+  });
+
+  test('getFields et Catalog.schemas.fields suivent le même ordre', async () => {
+    const [fields, cascade] = await Promise.all([
+      execute(server, {
+        query: 'query { getFields(schema: "no_primary_key") { value } }',
+      }),
+      execute(server, {
+        query: 'query { getCatalogs { id schemas { name fields { name } } } }',
+      }),
+    ]);
+
+    expect(fields.errors).toBeUndefined();
+    const expected = ['label', 'observed_on', 'amount', 'slot', 'quantity'];
+    expect((fields.data!.getFields as Array<{ value: string }>).map((f) => f.value)).toEqual(
+      expected,
+    );
+    const catalogs = cascade.data!.getCatalogs as Array<{
+      id: string;
+      schemas: Array<{ name: string; fields: Array<{ name: string }> }>;
+    }>;
+    const nokey = catalogs
+      .find((cat) => cat.id === 'default')!
+      .schemas.find((s) => s.name === 'no_primary_key')!;
+    expect(nokey.fields.map((f) => f.name)).toEqual(expected);
+  });
+
   test('returns field metadata without a catalog parameter (uses default)', async () => {
     const query = `
       query {

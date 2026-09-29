@@ -49,8 +49,14 @@ const FILTER_CONNECTORS = ['AND', 'OR', 'AND_NOT', 'OR_NOT', 'XOR', 'XNOR', 'NAN
 /** Logical connector (GraphQL FilterConnector enum value). */
 type FilterConnector = (typeof FILTER_CONNECTORS)[number];
 
-/** Family of a SQL column type, which determines the allowed operations. */
-type SqlTypeFamily = 'numeric' | 'date' | 'text' | 'boolean';
+/**
+ * Family of a SQL column type, which determines the allowed operations.
+ *
+ * `other` groups every type without a filter semantics (TIME, INTERVAL, BLOB,
+ * nested types…): such a column is listed, projected and sorted like any other,
+ * but a filter on it is a client error.
+ */
+type SqlTypeFamily = 'numeric' | 'date' | 'text' | 'boolean' | 'other';
 
 /** A single criterion of the filter tree (GraphQL FilterCriterion input). */
 interface FilterCriterionInput {
@@ -92,16 +98,26 @@ const INTEGER_TYPES = new Set([
   'USMALLINT',
   'UINTEGER',
   'UBIGINT',
+  'UHUGEINT',
 ]);
 
 // Types numériques non signés (valeur négative refusée)
-const UNSIGNED_TYPES = new Set(['UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT']);
+const UNSIGNED_TYPES = new Set(['UTINYINT', 'USMALLINT', 'UINTEGER', 'UBIGINT', 'UHUGEINT']);
 
 // Types numériques flottants
 const FLOAT_TYPES = new Set(['FLOAT', 'DOUBLE']);
 
-// Motif strict des décimaux à précision fixe
-const DECIMAL_PATTERN = /^DECIMAL\(\d{1,2},\d{1,2}\)$/;
+// Motif strict des décimaux : DECIMAL nu (tel que l'écrit la base), DECIMAL(p) ou DECIMAL(p,s)
+const DECIMAL_PATTERN = /^DECIMAL(?:\((\d{1,2})(?:,(\d{1,2}))?\))?$/;
+
+// Précision maximale d'un DECIMAL DuckDB (chiffres significatifs)
+const DECIMAL_MAX_PRECISION = 38;
+
+// Cible du CAST pour un DECIMAL sans précision : la précision physique de la
+// colonne est inconnue, et le DECIMAL par défaut de DuckDB (18,3) arrondirait la
+// valeur à 3 décimales avant la comparaison. 9 décimales couvrent les usages et
+// laissent 29 chiffres entiers.
+const BARE_DECIMAL_CAST_TYPE = 'DECIMAL(38,9)';
 
 // Types temporels (DATE et variantes de TIMESTAMP)
 const DATE_TYPES = new Set([
@@ -179,6 +195,8 @@ const ALLOWED_OPERATIONS: Record<SqlTypeFamily, readonly FilterOperation[]> = {
     'IS_NULL',
     'IS_NOT_NULL',
   ],
+  // Aucune opération : une colonne « other » n'est pas filtrable
+  other: [],
 };
 
 /**
@@ -316,30 +334,61 @@ const normalizeSqlType = (sqlType: string): string =>
     .replace(/\s*([(),])\s*/g, '$1');
 
 /**
+ * Tells whether a normalized type is a DECIMAL DuckDB can hold.
+ *
+ * Bare `DECIMAL` (how the database writes the type of a decimal column),
+ * `DECIMAL(p)` and `DECIMAL(p,s)` are accepted, with 1 <= p <= 38 and s <= p.
+ *
+ * @param normalized - SQL type after {@link normalizeSqlType}.
+ * @returns True for a well-formed DECIMAL type.
+ */
+// Reconnaissance d'un DECIMAL, nu ou avec précision (p ≤ 38, s ≤ p)
+const isDecimalType = (normalized: string): boolean => {
+  const match = DECIMAL_PATTERN.exec(normalized);
+  if (!match) return false;
+  if (match[1] === undefined) return true;
+  const precision = Number(match[1]);
+  const scale = match[2] === undefined ? 0 : Number(match[2]);
+  return precision >= 1 && precision <= DECIMAL_MAX_PRECISION && scale <= precision;
+};
+
+/**
  * Maps a SQL type produced by the database to its filtering family.
  *
- * The recognition is a strict allow-list: a recognized type is therefore safe
- * to interpolate in a CAST expression.
+ * Total: a type that is not numeric, temporal, text or boolean — TIME,
+ * INTERVAL, BLOB, nested types, an empty or malformed name — belongs to the
+ * `other` family, so no caller needs a try/catch. The numeric, date, text and
+ * boolean families are a strict allow-list, hence safe to interpolate in a CAST
+ * expression (see {@link castTypeOf}); `other` is never interpolated anywhere,
+ * since a filter on it is refused.
  *
  * @param sqlType - SQL type name as stored in metadata.sqlType.
- * @returns The type family ('numeric', 'date', 'text' or 'boolean').
- * @throws {Error} When the type is not recognized (no default family).
+ * @returns The type family.
  */
-// Détermination de la famille d'un type SQL
+// Détermination de la famille d'un type SQL (jamais d'exception)
 function sqlTypeFamily(sqlType: string): SqlTypeFamily {
   const normalized = typeof sqlType === 'string' ? normalizeSqlType(sqlType) : '';
-  if (
-    INTEGER_TYPES.has(normalized) ||
-    FLOAT_TYPES.has(normalized) ||
-    DECIMAL_PATTERN.test(normalized)
-  ) {
+  if (INTEGER_TYPES.has(normalized) || FLOAT_TYPES.has(normalized) || isDecimalType(normalized)) {
     return 'numeric';
   }
   if (DATE_TYPES.has(normalized)) return 'date';
   if (normalized === 'VARCHAR') return 'text';
   if (normalized === 'BOOLEAN') return 'boolean';
-  throw new Error(`Unsupported SQL type "${String(sqlType)}": no filter type family.`);
+  return 'other';
 }
+
+/**
+ * Returns the type a filter value is CAST to before the comparison.
+ *
+ * The column's own type, except for a bare `DECIMAL`, whose precision is
+ * unknown (see {@link BARE_DECIMAL_CAST_TYPE}).
+ *
+ * @param sqlType - Normalized SQL type of a numeric or date column.
+ * @returns A type name from the allow-list, safe to interpolate.
+ */
+// Type cible du CAST d'une valeur de filtre
+const castTypeOf = (sqlType: string): string =>
+  sqlType === 'DECIMAL' ? BARE_DECIMAL_CAST_TYPE : sqlType;
 
 /**
  * Checks that a date/time match describes an existing calendar instant.
@@ -544,6 +593,9 @@ const coerceValue = (
       }
       return value;
     }
+    case 'other':
+      // Inatteignable : compileCriterion refuse la colonne avant tout lien de valeur
+      throw badInput(`Column "${variable}" (${sqlType}) cannot be filtered.`);
   }
 };
 
@@ -656,12 +708,11 @@ const compileCriterion = (
   // Famille de type relue côté serveur (jamais fournie par le client)
   const rawType = typeof meta.sqlType === 'string' ? meta.sqlType : '';
   const sqlType = normalizeSqlType(rawType);
-  let family: SqlTypeFamily;
-  try {
-    family = sqlTypeFamily(sqlType);
-  } catch {
+  const family = sqlTypeFamily(sqlType);
+  if (family === 'other') {
     throw badInput(
-      `Column "${column}" has an unsupported SQL type "${rawType || 'unknown'}" and cannot be filtered.`,
+      `Column "${column}" has an unsupported SQL type "${rawType || 'unknown'}" and cannot be filtered ` +
+        '(filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN).',
     );
   }
 
@@ -680,7 +731,7 @@ const compileCriterion = (
   // Ajout d'une valeur aux paramètres et retour du placeholder adapté au type
   const bind = (raw: unknown): string => {
     params.push(coerceValue(raw, family, sqlType, column));
-    return family === 'numeric' || family === 'date' ? `CAST(? AS ${sqlType})` : '?';
+    return family === 'numeric' || family === 'date' ? `CAST(? AS ${castTypeOf(sqlType)})` : '?';
   };
   const isScalar = (v: unknown): boolean => v !== undefined && v !== null && typeof v !== 'object';
 

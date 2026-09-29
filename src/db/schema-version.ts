@@ -139,6 +139,21 @@ function assertSchemaSupported(catalog: string, schema: string): void {
 }
 
 /**
+ * Tells whether a catalog/schema passes the version guard, without throwing.
+ *
+ * Same verdict as {@link assertSchemaSupported}: a pair that was never probed
+ * counts as supported.
+ *
+ * @param catalog - Catalog alias.
+ * @param schema - Schema name within the catalog.
+ * @returns False only for a schema the attach step found unsupported.
+ */
+// Verdict de la garde sous forme de booléen (listes, résolution du défaut)
+function isSchemaSupported(catalog: string, schema: string): boolean {
+  return statuses.get(statusKey(catalog, schema))?.supported ?? true;
+}
+
+/**
  * Returns the recorded verdict of a catalog/schema, for diagnostics.
  *
  * @param catalog - Catalog alias.
@@ -153,6 +168,7 @@ export {
   assertSchemaSupported,
   getSchemaVersionStatus,
   getSupportedVersions,
+  isSchemaSupported,
   recordSchemaVersion,
   resetSchemaVersions,
 };

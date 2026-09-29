@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable } from '../utils/identifiers.js';
 import { createContextLogger } from '../utils/logger.js';
-import { recordSchemaVersion, resetSchemaVersions } from './schema-version.js';
+import { isSchemaSupported, recordSchemaVersion, resetSchemaVersions } from './schema-version.js';
 
 // Résolution de l'emplacement du fichier et du dossier pour les chemins relatifs
 const __filename = fileURLToPath(import.meta.url);
@@ -110,7 +110,8 @@ export const toDataVersion = (row: Record<string, unknown> | undefined): DataVer
  *       PATH: 'outputs/project_a.ducklake'
  *       DATA_PATH: 'outputs/project_a_data/'
  *       READ_ONLY: true
- *       SCHEMAS: ['main']   # liste des schémas hébergés, le 1er est le défaut
+ *       SCHEMAS: ['main']   # facultatif : liste blanche, le 1er est le défaut ;
+ *                           # absent ou vide = tous les schémas découverts
  *   DATABASE:
  *     POOL:
  *       MAX_CONNECTIONS: 5
@@ -216,8 +217,8 @@ class DatabaseManager {
     for (const [catalogId, catalogConfig] of Object.entries(configuredCatalogs)) {
       const type = catalogConfig.TYPE ?? 'file';
 
-      // Liste des schémas du catalogue (SCHEMAS), défaut ['main']
-      // SCHEMAS peut arriver sous forme de string JSON depuis une variable d'env
+      // Liste des schémas du catalogue (SCHEMAS) : ['main'] provisoire tant que la
+      // découverte n'a pas eu lieu quand SCHEMAS est absent
       const resolved = this.resolveSchemas(catalogConfig);
       this.schemas[catalogId] = [...resolved];
       this.configuredSchemas[catalogId] = [...resolved];
@@ -344,26 +345,21 @@ class DatabaseManager {
   }
 
   /**
-   * Resolve the schema list for a catalog from its SCHEMAS field.
+   * Resolve the initial schema list for a catalog from its SCHEMAS field.
    *
-   * SCHEMAS may be a YAML array or a JSON-string (from an env var). When the
-   * field is absent, the catalog is assumed to host the single 'main' schema.
+   * The config loader has already turned an env-var JSON string into a list and
+   * dropped an absent or empty value. When SCHEMAS is absent, the list is the
+   * placeholder ['main'] until {@link initSchemas} discovers what the catalog
+   * actually holds.
    *
    * @param catalogConfig - Per-catalog configuration block.
-   * @returns Non-empty deduplicated list of schemas (defaults to ['main']).
+   * @returns Non-empty deduplicated list of schemas (['main'] until discovered).
    */
-  private resolveSchemas(catalogConfig: { SCHEMAS?: string[] | string }): string[] {
-    // Liste SCHEMAS absente : on retombe sur le mono-schéma par défaut.
+  private resolveSchemas(catalogConfig: { SCHEMAS?: string[] }): string[] {
     if (catalogConfig.SCHEMAS === undefined) {
       return ['main'];
     }
-    // SCHEMAS peut être un tableau YAML ou une chaîne JSON (variable d'env).
-    const raw = catalogConfig.SCHEMAS;
-    const list = typeof raw === 'string' ? (JSON.parse(raw) as string[]) : raw;
-    if (!Array.isArray(list) || list.length === 0) {
-      throw new Error('CATALOGS.<id>.SCHEMAS must be a non-empty list of schema names.');
-    }
-    return [...new Set(list)];
+    return [...new Set(catalogConfig.SCHEMAS)];
   }
 
   /**
@@ -420,25 +416,49 @@ class DatabaseManager {
   }
 
   /**
-   * Get the default DuckLake schema name for a catalog (first in the list).
+   * Get the default DuckLake schema name for a catalog.
+   *
+   * It is the first schema of the list that passes the version guard, so the
+   * default is always one the API can serve (and one `getCatalogs` lists); when
+   * none does, the first of the list.
    *
    * @param catalogId - Catalog identifier.
-   * @returns First schema configured for the catalog, or 'main' if none.
+   * @returns Default schema of the catalog, or 'main' if it has none.
    */
   getDefaultSchema(catalogId: string): string {
-    const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog];
-    return list?.[0] ?? 'main';
+    const owner = catalogId in this.schemas ? catalogId : this.defaultCatalog;
+    const list = this.schemas[owner] ?? [];
+    return list.find((schema) => isSchemaSupported(owner, schema)) ?? list[0] ?? 'main';
   }
 
   /**
    * Get the full list of schemas known for a catalog.
    *
+   * Includes the schemas the version guard refuses: they stay addressable so a
+   * query on one fails with SCHEMA_VERSION_UNSUPPORTED rather than "unknown
+   * schema". Use {@link getSupportedSchemas} to list what can be served.
+   *
    * @param catalogId - Catalog identifier.
-   * @returns Copy of the configured schema list (at least one element).
+   * @returns Copy of the schema list (at least one element).
    */
   getSchemas(catalogId: string): string[] {
     const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog] ?? ['main'];
     return [...list];
+  }
+
+  /**
+   * Get the schemas of a catalog that pass the schema version guard.
+   *
+   * Those are the schemas `getCatalogs` exposes. A schema found unsupported at
+   * attach (unreadable format, `schema_version` not listed, missing
+   * `dataset_metadata`) is warned about there and left out.
+   *
+   * @param catalogId - Catalog identifier.
+   * @returns The servable schemas, in list order (possibly empty).
+   */
+  getSupportedSchemas(catalogId: string): string[] {
+    const owner = catalogId in this.schemas ? catalogId : this.defaultCatalog;
+    return this.getSchemas(catalogId).filter((schema) => isSchemaSupported(owner, schema));
   }
 
   /**
@@ -572,9 +592,11 @@ class DatabaseManager {
    *  - If SCHEMAS was explicitly configured: intersect with the discovered list
    *    (any configured-but-missing schema triggers a warning). Treat the config
    *    as an allow-list — never widen beyond it.
-   *  - If SCHEMAS was not configured: adopt the discovered list. Fall back to
-   *    ['main'] when the discovery is empty so the API never starts up with an
-   *    empty schema list.
+   *  - If SCHEMAS was not configured (absent or empty, the default): adopt the
+   *    discovered list, `main` first then alphabetical, so the default schema is
+   *    stable. Fall back to ['main'] when the discovery is empty so the API never
+   *    starts up with an empty schema list. A schema added to the catalog later
+   *    appears at the next reload.
    *
    * Idempotent and safe to call repeatedly (start-up, after reloadCatalogs(),
    * after reloadCatalog()). The result is the source of truth for isValidSchema,
@@ -618,9 +640,11 @@ class DatabaseManager {
           this.schemas[catalogId] = intersection;
         }
       } else {
-        // Pas de SCHEMAS dans la config : on adopte la liste découverte.
+        // Pas de SCHEMAS dans la config : on adopte la liste découverte, « main »
+        // d'abord (schéma par défaut) puis l'ordre alphabétique.
         // Fallback à ['main'] si la découverte est vide (catalogue vide / non encore peuplé).
-        this.schemas[catalogId] = discoveredList.length > 0 ? [...discoveredList] : ['main'];
+        this.schemas[catalogId] =
+          discoveredList.length > 0 ? DatabaseManager.orderDiscovered(discoveredList) : ['main'];
       }
 
       dbLogger.database(`Schemas reconciled for ${catalogId}`, {
@@ -632,6 +656,25 @@ class DatabaseManager {
 
     // Sondage de la version de chaque schéma actif, une fois par attach/reload
     await this.probeSchemaVersions();
+  }
+
+  /**
+   * Orders discovered schemas: `main` first, the others alphabetically.
+   *
+   * `information_schema.schemata` gives no ordering guarantee, and the first
+   * schema of the list is the default one.
+   *
+   * @param discovered - Schema names as reported by the engine.
+   * @returns A new, deterministically ordered list.
+   */
+  // Ordre stable des schémas découverts : « main » puis alphabétique
+  private static orderDiscovered(discovered: string[]): string[] {
+    return [...discovered].sort((a, b) => {
+      if (a === b) return 0;
+      if (a === 'main') return -1;
+      if (b === 'main') return 1;
+      return a < b ? -1 : 1;
+    });
   }
 
   /**

@@ -346,7 +346,7 @@ describe('Metadata.stats', () => {
   });
 
   test('catalog schemas: fields carry the stats of their own catalog and schema', async () => {
-    // Appel direct : getCatalogs listerait aussi les schémas de test refusés par la garde de version
+    // Appel direct du resolver de `fields` sur un schéma précis
     const catalog = databaseManager.getDefaultCatalog();
     const context = {
       loaders: createLoaders(catalog),

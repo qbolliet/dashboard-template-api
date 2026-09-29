@@ -70,12 +70,12 @@ Selection priority for the **catalog** and the **schema** (independent axes):
 
 1. GraphQL argument (`catalog: "…"`, `schema: "…"`) on the field
 2. HTTP header (`X-Catalog-ID`, `X-Schema-ID`) on the request
-3. `DEFAULT_CATALOG` config value, then the first element of `SCHEMAS` for that catalog (defaults to `main`)
+3. `DEFAULT_CATALOG` config value, then the default schema of that catalog: the first schema of its list that passes the schema version guard (`main` comes first in a discovered list)
 
 Validation:
 
 - `catalog` is checked against `ALLOWED_CATALOGS`.
-- `schema` is checked against the per-catalog allow-list (`databaseManager.isValidSchema(catalog, schema)`), which is reconciled at startup between the configured `SCHEMAS` and what `information_schema.schemata` actually returns from the live engine.
+- `schema` is checked against the per-catalog allow-list (`databaseManager.isValidSchema(catalog, schema)`), which is reconciled at startup and at every reload between the configured `SCHEMAS` (an optional allow-list: without it every schema is served) and what `information_schema.schemata` actually returns from the live engine. `getCatalogs` lists only the schemas that pass the schema version guard; the others are warned about when the catalog is attached.
 
 An invalid catalog or schema produces a structured `GraphQLError` listing the available values.
 

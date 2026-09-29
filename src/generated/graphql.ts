@@ -49,13 +49,13 @@ export type AggregatedFactsMetadata = {
   /** ISO 8601 timestamp of when this query was executed */
   generatedAt: Scalars['String']['output'];
   groupByFieldInfo?: Maybe<Metadata>;
-  /** Bounds of the group keys of THIS PAGE, the NULL key ignored: [min, max] as numbers for a numeric group column, as ISO 8601 strings for a temporal one, [first, last] in page order otherwise; null when the page has no non-NULL key */
+  /** Bounds of the group keys of this page, the NULL key ignored: [min, max] as numbers for a numeric group column, as ISO 8601 strings for a temporal one, [first, last] in page order otherwise; null when the page has no non-NULL key */
   keyExtent?: Maybe<Scalars['JSON']['output']>;
   /** Metadata of the aggregated measure (unit and display format of the aggregated value) */
   measureFieldInfo?: Maybe<Metadata>;
   /** Descriptive statistics of the non-NULL aggregated values of this page; null when the aggregate is not numeric */
   statistics?: Maybe<AggregationStatistics>;
-  /** Bounds of the aggregated values of THIS PAGE, NULLs ignored: [min, max] as numbers for a numeric aggregate, as ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null when the page is empty, holds only NULLs, or the aggregate is text or boolean (MODE) */
+  /** Bounds of the aggregated values of this page, NULLs ignored: [min, max] as numbers for a numeric aggregate, as ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null when the page is empty, holds only NULLs, or the aggregate is text or boolean (MODE) */
   valueExtent?: Maybe<Scalars['JSON']['output']>;
 };
 
@@ -155,7 +155,7 @@ export type DatasetMetadata = {
   count: Scalars['Int']['output'];
   /** Current page number (1-indexed) */
   currentPage?: Maybe<Scalars['Int']['output']>;
-  /** Bounds of the columns of THIS PAGE (not of the whole dataset), keyed by column name: [min, max] as numbers for numeric columns (integers beyond 2^53, serialized as strings, are compared as numbers, so their bound is approximate), [min, max] as ISO 8601 strings for date and timestamp columns (chronological comparison). NULLs are ignored; a column with no value has no entry. Global bounds of a column: Metadata.stats */
+  /** Bounds of the columns of this page (not of the whole dataset), keyed by column name: [min, max] as numbers for numeric columns (integers beyond 2^53, serialized as strings, are compared as numbers, so their bound is approximate), [min, max] as ISO 8601 strings for date and timestamp columns (chronological comparison). NULLs are ignored; a column with no value has no entry. Global bounds of a column: Metadata.stats */
   extents?: Maybe<Scalars['JSON']['output']>;
   /** ISO 8601 timestamp of when this query was executed */
   generatedAt: Scalars['String']['output'];
@@ -252,7 +252,7 @@ export type FilterNode = {
   negate?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
-/** Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL) */
+/** Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL); a column of any other type (TIME, INTERVAL, BLOB, nested types…) cannot be filtered */
 export type FilterOperation =
   | 'AFTER'
   /** Date comparisons (strict, then inclusive) */
