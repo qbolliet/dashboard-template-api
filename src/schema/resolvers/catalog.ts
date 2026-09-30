@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from '../../utils/preview-value.js';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
 import {
@@ -322,7 +323,7 @@ const catalogResolvers = {
       targets.forEach(({ catalog, schema }) => {
         if (!databaseManager.isValidCatalog(catalog)) {
           throw new GraphQLError(
-            `Catalog '${catalog}' is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
+            `Catalog ${previewValue(catalog)} is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
             { extensions: { code: 'BAD_USER_INPUT' } },
           );
         }

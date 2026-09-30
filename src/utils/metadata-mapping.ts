@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from './preview-value.js';
 
 // ─── Contrat de la table `metadata` ──────────────────────────────────────────
 
@@ -239,7 +240,7 @@ function resolveLabelField(
     if (candidates.includes(requested)) return requested;
     const available = candidates.length > 0 ? candidates.join(', ') : 'none';
     throw new GraphQLError(
-      `'${requested}' is not a label column of '${fieldName}'. Available: ${available}`,
+      `${previewValue(requested)} is not a label column of ${previewValue(fieldName)}. Available: ${available}`,
       { extensions: { code: 'BAD_USER_INPUT' } },
     );
   }

@@ -125,5 +125,3 @@ TIMEOUTS:
 SECURITY_LIMITS:
   # Seuil de profondeur par défaut pour les requêtes simples
   DEFAULT_DEPTH_LIMIT: 5
-  # Longueur maximale des chaînes d'entrée
-  MAX_INPUT_LENGTH: 1000

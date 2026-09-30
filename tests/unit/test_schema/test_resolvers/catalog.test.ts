@@ -353,7 +353,7 @@ describe('getCatalogSchema', () => {
     const result = await execute(server, { query });
 
     expect(result.errors).toBeDefined();
-    expect(result.errors![0].message).toMatch(/Schema 'totally_unknown_schema' is not available/);
+    expect(result.errors![0].message).toMatch(/Schema "totally_unknown_schema" is not available/);
   });
 
   test('multiple catalogs in a single query', async () => {
@@ -635,6 +635,6 @@ describe('getSharedFields', () => {
     const result = await sharedFields('[{ catalog: "default", schema: "totally_unknown_schema" }]');
 
     expect(result.errors).toBeDefined();
-    expect(result.errors![0].message).toMatch(/Schema 'totally_unknown_schema' is not available/);
+    expect(result.errors![0].message).toMatch(/Schema "totally_unknown_schema" is not available/);
   });
 });

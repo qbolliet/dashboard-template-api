@@ -3,6 +3,7 @@ import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
 import { quoteIdent } from '../utils/identifiers.js';
+import { previewValue } from '../utils/preview-value.js';
 import {
   METADATA_SELECT,
   indexMetadataByName,
@@ -239,7 +240,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
       [fieldName],
     );
     if (declared.length === 0) {
-      throw new GraphQLError(`Unknown field '${fieldName}'`, {
+      throw new GraphQLError(`Unknown field ${previewValue(fieldName)}`, {
         extensions: { code: 'BAD_USER_INPUT' },
       });
     }
@@ -351,7 +352,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
     );
 
     if (!parentOf.has(fieldName)) {
-      throw new GraphQLError(`Unknown field '${fieldName}'`, {
+      throw new GraphQLError(`Unknown field ${previewValue(fieldName)}`, {
         extensions: { code: 'BAD_USER_INPUT' },
       });
     }

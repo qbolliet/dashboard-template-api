@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from '../../utils/preview-value.js';
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { compileFilterTree } from '../../utils/filter-tree.js';
@@ -56,7 +57,7 @@ async function loadFieldStats(
   );
   if (!meta) {
     throw new GraphQLError(
-      `Unknown field "${fieldName}" in schema '${scope.schema}' of catalog '${scope.catalog}'.`,
+      `Unknown field ${previewValue(fieldName)} in schema '${scope.schema}' of catalog '${scope.catalog}'.`,
       { extensions: { code: 'BAD_USER_INPUT' } },
     );
   }

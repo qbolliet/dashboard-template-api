@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from '../../utils/preview-value.js';
 import { withTimeout } from '../../utils/timeout.js';
 import { databaseManager } from '../../db/index.js';
 import { config } from '../../utils/config-loader.js';
@@ -77,7 +78,7 @@ function assertCrossDatabaseAllowed(): void {
 // Validation d'un identifiant de catalogue
 function assertValidCatalog(catalog: string): void {
   if (!databaseManager.isValidCatalog(catalog)) {
-    throw new GraphQLError(`Catalog '${catalog}' is not available.`, {
+    throw new GraphQLError(`Catalog ${previewValue(catalog)} is not available.`, {
       extensions: { code: 'BAD_USER_INPUT' },
     });
   }
@@ -107,7 +108,7 @@ async function loadSideMetadata(
 ): Promise<Map<string, FieldMetadata>> {
   if (schema && !databaseManager.isValidSchema(catalog, schema)) {
     throw new GraphQLError(
-      `Schema '${schema}' is not available for catalog '${catalog}'. ` +
+      `Schema ${previewValue(schema)} is not available for catalog ${previewValue(catalog)}. ` +
         `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
     );
   }
@@ -203,7 +204,7 @@ const crossDatabaseResolvers = {
       const badSort = sort.filter(({ field }) => !COMPARISON_SORT_FIELDS.includes(field));
       if (badSort.length > 0) {
         throw new GraphQLError(
-          `Invalid sort field(s): ${badSort.map(({ field }) => `"${field}"`).join(', ')}. ` +
+          `Invalid sort field(s): ${badSort.map(({ field }) => previewValue(field)).join(', ')}. ` +
             `Allowed: ${COMPARISON_SORT_FIELDS.join(', ')}.`,
           { extensions: { code: 'BAD_USER_INPUT' } },
         );

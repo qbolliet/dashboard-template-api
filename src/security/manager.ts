@@ -3,6 +3,7 @@ import { GraphQLError } from 'graphql';
 import type { DocumentNode, FragmentDefinitionNode, OperationDefinitionNode } from 'graphql';
 import type { RequestHandler } from 'express';
 import { createContextLogger } from '../utils/logger.js';
+import { previewValue } from '../utils/preview-value.js';
 import { RateLimiter } from './rate-limiter.js';
 import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
 import { createRateLimitMiddleware } from './rate-limit-middleware.js';
@@ -263,7 +264,7 @@ class SecurityManager {
     // 1. Validation du nom de l'opération
     const operationName = operation?.name?.value;
     if (operationName && !this.isOperationAllowed(operationName)) {
-      throw new GraphQLError(`Operation ${operationName} is not allowed`, {
+      throw new GraphQLError(`Operation ${previewValue(operationName)} is not allowed`, {
         extensions: { code: 'OPERATION_NOT_ALLOWED', http: { status: 400 } },
       });
     }

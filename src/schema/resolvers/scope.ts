@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from '../../utils/preview-value.js';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
 import type { LoadersCollection } from '../../loaders/index.js';
@@ -42,7 +43,7 @@ export function validateSchemaForCatalog(catalog: string, schema?: string | null
   if (!schema) return;
   if (!databaseManager.isValidSchema(catalog, schema)) {
     throw new GraphQLError(
-      `Schema '${schema}' is not available for catalog '${catalog}'. ` +
+      `Schema ${previewValue(schema)} is not available for catalog ${previewValue(catalog)}. ` +
         `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
       { extensions: { code: 'BAD_USER_INPUT' } },
     );

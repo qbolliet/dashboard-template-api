@@ -11,8 +11,6 @@ interface RequestLimits {
   MAX_REQUEST_SIZE: string;
   /** Maximum length of the GraphQL document (`query`), in characters. */
   MAX_QUERY_SIZE: number;
-  /** Maximum length of a single string value inside `variables`, in characters. */
-  MAX_FIELD_SIZE: number;
 }
 
 /** Error raised by body-parser, carrying its machine-readable type. */
@@ -36,52 +34,19 @@ const sendBadRequest = (res: Response, code: string, message: string): void => {
   res.status(400).json({ errors: [{ message, extensions: { code } }] });
 };
 
-// ─── Contrôle de la taille des valeurs ───────────────────────────────────────
+// ─── Contrôle de la taille du document ───────────────────────────────────────
 
 /**
- * Finds the first string longer than the given length inside a JSON value.
- *
- * The walk is iterative: the depth of a filter tree is bounded elsewhere
- * (SECURITY.FILTER_TREE), but this guard runs before any of those checks.
- *
- * @param root - Parsed JSON value to inspect.
- * @param maxLength - Maximum allowed length for a string value.
- * @returns The key of the offending value, or undefined when all fit.
- */
-const findOversizedString = (root: unknown, maxLength: number): string | undefined => {
-  // Initialisation de la liste
-  const stack: Array<{ key: string; value: unknown }> = [{ key: 'variables', value: root }];
-
-  // Parcours de la liste
-  while (stack.length > 0) {
-    // Extraction d'un couple "clé-valeur"
-    const { key, value } = stack.pop() as { key: string; value: unknown };
-    // Vérification de la longueur d'une chaine de caractères
-    if (typeof value === 'string') {
-      if (value.length > maxLength) {
-        return key;
-      }
-      // Ajout des couples "clé-valeur" d'un objet à la liste à parcourir
-    } else if (typeof value === 'object' && value !== null) {
-      for (const [childKey, child] of Object.entries(value)) {
-        stack.push({ key: childKey, value: child });
-      }
-    }
-  }
-  return undefined;
-};
-
-/**
- * Builds the middleware that bounds the GraphQL document and its variables.
+ * Builds the middleware that bounds the GraphQL document.
  *
  * Runs after express.json, on the parsed body: `query` is bounded by its own
- * dedicated size (MAX_QUERY_SIZE) and string values of `variables` by
- * MAX_FIELD_SIZE. The number of keys is deliberately not limited: a filter
- * tree of a few criteria already has dozens of JSON fields, and its size is
- * bounded by SECURITY.FILTER_TREE and by MAX_REQUEST_SIZE.
+ * dedicated size (MAX_QUERY_SIZE). `variables` are not bounded value by value:
+ * filter values are bound parameters, the structure of a filter tree is bounded
+ * by SECURITY.FILTER_TREE and the whole body by MAX_REQUEST_SIZE. Messages
+ * echoing a value truncate it (see previewValue).
  *
  * @param limits - Size limits to enforce.
- * @returns Express middleware replying 400 on an oversized document or value.
+ * @returns Express middleware replying 400 on an oversized document.
  */
 const createRequestSizeGuard =
   (limits: RequestLimits) =>
@@ -93,8 +58,8 @@ const createRequestSizeGuard =
     // Parcours des opérations
     for (const operation of operations) {
       if (typeof operation !== 'object' || operation === null) continue;
-      // Extraction de l'opération et de la variable concernée
-      const { query, variables } = operation as { query?: unknown; variables?: unknown };
+      // Extraction du document GraphQL
+      const { query } = operation as { query?: unknown };
 
       // Vérification de l'opération
       if (typeof query === 'string' && query.length > limits.MAX_QUERY_SIZE) {
@@ -102,17 +67,6 @@ const createRequestSizeGuard =
           res,
           'QUERY_TOO_LARGE',
           `GraphQL document exceeds the maximum size of ${limits.MAX_QUERY_SIZE} characters.`,
-        );
-        return;
-      }
-
-      // Vérification de la taille de la variable
-      const oversized = findOversizedString(variables, limits.MAX_FIELD_SIZE);
-      if (oversized !== undefined) {
-        sendBadRequest(
-          res,
-          'VARIABLE_TOO_LARGE',
-          `Variable value "${oversized}" exceeds the maximum size of ${limits.MAX_FIELD_SIZE} characters.`,
         );
         return;
       }
@@ -149,7 +103,7 @@ const createBodyTooLargeHandler =
  * Mounts the JSON body parser and its size guards on an Express application.
  *
  * Order matters: the parser enforces MAX_REQUEST_SIZE, the handler maps its
- * rejection to a 400, then the guard bounds `query` and `variables`.
+ * rejection to a 400, then the guard bounds `query`.
  *
  * @param app - Express application to configure.
  * @param limits - Size limits; defaults to API.REQUEST_LIMITS.

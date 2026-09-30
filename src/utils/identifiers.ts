@@ -1,5 +1,6 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from './preview-value.js';
 
 // ─── Identifiants SQL ────────────────────────────────────────────────────────
 
@@ -66,7 +67,7 @@ function assertColumns(
   ];
   if (unknown.length > 0) {
     throw new GraphQLError(
-      `Unknown ${context} column(s): ${unknown.map((name) => `"${name}"`).join(', ')}. ` +
+      `Unknown ${context} column(s): ${unknown.map((name) => previewValue(name)).join(', ')}. ` +
         'They do not exist in the metadata table.',
       { extensions: { code: 'BAD_USER_INPUT' } },
     );

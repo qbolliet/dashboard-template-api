@@ -558,7 +558,7 @@ describe('ComparedFact.keyLabel', () => {
       }`,
     });
 
-    expect(result.errors![0].message).toMatch(/Schema 'nope' is not available/);
+    expect(result.errors![0].message).toMatch(/Schema "nope" is not available/);
   });
 });
 

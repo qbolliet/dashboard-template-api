@@ -2,6 +2,7 @@
 import { GraphQLError } from 'graphql';
 import { config } from './config-loader.js';
 import { quoteIdent } from './identifiers.js';
+import { previewValue } from './preview-value.js';
 
 // ─── Types du contrat de filtre ──────────────────────────────────────────────
 
@@ -438,7 +439,7 @@ const escapeLike = (value: string): string => value.replace(/[\\%_]/g, (c) => `\
 // Contrôle de forme d'une variable de filtre (l'existence est vérifiée contre metadata)
 const filterVariable = (variable: unknown): string => {
   if (typeof variable !== 'string' || variable === '') {
-    throw badInput(`Invalid filter variable ${JSON.stringify(variable) ?? 'undefined'}.`);
+    throw badInput(`Invalid filter variable ${previewValue(variable)}.`);
   }
   return variable;
 };
@@ -532,7 +533,9 @@ const coerceValue = (
       } else if (typeof value === 'string') {
         const pattern = isInteger ? INTEGER_STRING_PATTERN : NUMERIC_STRING_PATTERN;
         if (!pattern.test(value)) {
-          throw badInput(`Invalid numeric value "${value}" for column "${variable}" (${sqlType}).`);
+          throw badInput(
+            `Invalid numeric value ${previewValue(value)} for column "${variable}" (${sqlType}).`,
+          );
         }
       } else {
         throw badInput(`Column "${variable}" (${sqlType}) expects a numeric value.`);
@@ -550,7 +553,7 @@ const coerceValue = (
       if (!match || !isValidCalendarDate(match)) {
         const expected = sqlType === 'DATE' ? 'YYYY-MM-DD' : 'ISO 8601 date or date-time';
         throw badInput(
-          `Invalid date value ${JSON.stringify(value)} for column "${variable}" (${sqlType}): expected ${expected}.`,
+          `Invalid date value ${previewValue(value)} for column "${variable}" (${sqlType}): expected ${expected}.`,
         );
       }
       // TIMESTAMP_NS : plage limitée par un entier 64 bits de nanosecondes
@@ -566,7 +569,7 @@ const coerceValue = (
         );
         if (Math.abs(epochMs) > TIMESTAMP_NS_MAX_ABS_MS) {
           throw badInput(
-            `Date value "${String(value)}" is out of range for column "${variable}" (${sqlType}): ` +
+            `Date value ${previewValue(value)} is out of range for column "${variable}" (${sqlType}): ` +
               'expected a date between 1677-09-22 and 2262-04-11.',
           );
         }
@@ -638,11 +641,11 @@ function collectFilterVariables(root: FilterNodeInput): string[] {
       !FILTER_CONNECTORS.includes(node.connector)
     ) {
       throw badInput(
-        `Invalid filter connector "${String(node.connector)}": expected one of ${FILTER_CONNECTORS.join(', ')}.`,
+        `Invalid filter connector ${previewValue(node.connector)}: expected one of ${FILTER_CONNECTORS.join(', ')}.`,
       );
     }
     if (node.negate !== undefined && node.negate !== null && typeof node.negate !== 'boolean') {
-      throw badInput(`Invalid "negate" value "${String(node.negate)}": expected a boolean.`);
+      throw badInput(`Invalid "negate" value ${previewValue(node.negate)}: expected a boolean.`);
     }
     if (isRoot && !hasChildren) {
       throw badInput('Invalid filter tree: the root node must be a group (set "children").');
@@ -670,7 +673,7 @@ function collectFilterVariables(root: FilterNodeInput): string[] {
       throw badInput(`Too many filter criteria: maximum is ${maxCriteria}.`);
     }
     if (!FILTER_OPERATIONS.includes(criterion.operation)) {
-      throw badInput(`Invalid filter operation "${String(criterion.operation)}".`);
+      throw badInput(`Invalid filter operation ${previewValue(criterion.operation)}.`);
     }
     names.add(filterVariable(criterion.variable));
   };
@@ -702,7 +705,9 @@ const compileCriterion = (
   // Colonne connue de la table metadata
   const meta = metadataByName.get(column);
   if (!meta) {
-    throw badInput(`Unknown filter column "${column}": it does not exist in the metadata table.`);
+    throw badInput(
+      `Unknown filter column ${previewValue(column)}: it does not exist in the metadata table.`,
+    );
   }
 
   // Famille de type relue côté serveur (jamais fournie par le client)

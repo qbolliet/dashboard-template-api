@@ -260,7 +260,7 @@ describe('resolveLabelField', () => {
 
   test('labelField sur une colonne sans libellés → BAD_USER_INPUT', () => {
     expect(() => resolveLabelField('year', byName, 'nc8_libelle_fr')).toThrow(
-      /not a label column of 'year'\. Available: none/,
+      /not a label column of "year"\. Available: none/,
     );
   });
 

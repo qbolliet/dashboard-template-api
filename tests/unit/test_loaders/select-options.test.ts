@@ -427,7 +427,7 @@ describe('SelectOptionsTreeLoader', () => {
   test('champ inconnu de metadata → BAD_USER_INPUT, sans requête DISTINCT', async () => {
     mockHierarchy(GEOGRAPHY);
 
-    await expect(loadTree({ fieldName: 'unknown' })).rejects.toThrow("Unknown field 'unknown'");
+    await expect(loadTree({ fieldName: 'unknown' })).rejects.toThrow('Unknown field "unknown"');
     expect(mockConnection.all).toHaveBeenCalledTimes(1);
   });
 

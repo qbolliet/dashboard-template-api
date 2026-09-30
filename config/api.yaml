@@ -24,10 +24,6 @@ API:
     MAX_REQUEST_SIZE: '100kb'
     # Taille maximale du document GraphQL (`query`), en caractères
     MAX_QUERY_SIZE: 20000
-    # Longueur maximale d'une valeur texte de `variables`, en caractères.
-    # Ne s'applique pas à `query` ; le nombre de champs JSON n'est pas borné
-    # (un arbre de filtres en compte des dizaines : cf. SECURITY.FILTER_TREE).
-    MAX_FIELD_SIZE: 1000
 
   GRAPHQL:
     INTROSPECTION:

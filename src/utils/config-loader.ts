@@ -105,7 +105,6 @@ interface SecurityConfig {
 /** Global security limits (SECURITY_LIMITS section of the YAML). */
 interface SecurityLimitsConfig {
   DEFAULT_DEPTH_LIMIT: number;
-  MAX_INPUT_LENGTH: number;
 }
 
 /** Security thresholds exposed in the API section of the YAML. */
@@ -135,7 +134,6 @@ interface CorsConfig {
 interface RequestLimitsConfig {
   MAX_REQUEST_SIZE: string;
   MAX_QUERY_SIZE: number;
-  MAX_FIELD_SIZE: number;
 }
 
 /** HTTP response compression configuration. */

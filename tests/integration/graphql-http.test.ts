@@ -215,14 +215,28 @@ describe('/graphql (câblage de src/server.ts)', () => {
       expect(firstCode(response.body)).toBe('QUERY_TOO_LARGE');
     });
 
-    test('rejects an oversized variable string with 400', async () => {
+    test('accepts a 5 000-character searchTerm', async () => {
       const response = await post({
         query:
           'query T($s: String) { getSelectOptions(fieldName: "country", searchTerm: $s) { value } }',
-        variables: { s: 'x'.repeat(config.API.REQUEST_LIMITS.MAX_FIELD_SIZE + 1) },
+        variables: { s: 'x'.repeat(5000) },
       });
-      expect(response.status).toBe(400);
-      expect(firstCode(response.body)).toBe('VARIABLE_TOO_LARGE');
+      expect(response.status).toBe(200);
+      expect(response.body.errors).toBeUndefined();
+    });
+
+    test('truncates a 50 000-character invalid value echoed in a BAD_USER_INPUT message', async () => {
+      const response = await post({
+        query: `query T($f: FilterNode) {
+          getFactTable(structuredFilters: $f, limit: 1) { total }
+        }`,
+        variables: { f: { children: [leaf('value', 'EQ', 'x'.repeat(50_000))] } },
+      });
+      expect(response.status).toBe(200);
+      expect(firstCode(response.body)).toBe('BAD_USER_INPUT');
+      const message = response.body.errors[0].message as string;
+      expect(message).toContain('Invalid numeric value');
+      expect(message.length).toBeLessThan(300);
     });
 
     test('rejects a body above MAX_REQUEST_SIZE with 400 and an explicit JSON body', async () => {

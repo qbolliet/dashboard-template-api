@@ -52,20 +52,19 @@ API:
   REQUEST_LIMITS:
     MAX_REQUEST_SIZE: '100kb'
     MAX_QUERY_SIZE: 20000
-    MAX_FIELD_SIZE: 1000
 ```
 
-| Key                | Default | Description                                                               |
-| ------------------ | ------- | ------------------------------------------------------------------------- |
-| `MAX_REQUEST_SIZE` | `100kb` | Maximum raw HTTP request body size                                        |
-| `MAX_QUERY_SIZE`   | `20000` | Maximum length of the GraphQL document (`query`), in characters           |
-| `MAX_FIELD_SIZE`   | `1000`  | Maximum length of a single string value inside `variables`, in characters |
+| Key                | Default | Description                                                     |
+| ------------------ | ------- | --------------------------------------------------------------- |
+| `MAX_REQUEST_SIZE` | `100kb` | Maximum raw HTTP request body size                              |
+| `MAX_QUERY_SIZE`   | `20000` | Maximum length of the GraphQL document (`query`), in characters |
 
 A request exceeding one of these limits is rejected with **HTTP 400** and a JSON body
 `{ "errors": [{ "message": …, "extensions": { "code": … } }] }`, where `code` is
-`REQUEST_BODY_TOO_LARGE`, `QUERY_TOO_LARGE` or `VARIABLE_TOO_LARGE`. The number of JSON
-fields is not limited: the size of a filter tree is bounded by
-`SECURITY.FILTER_TREE` (`MAX_CRITERIA`, `MAX_DEPTH`, `MAX_IN_VALUES`).
+`REQUEST_BODY_TOO_LARGE` or `QUERY_TOO_LARGE`. Values inside `variables` are not bounded
+one by one: filter values are bound parameters, the size of a filter tree is bounded by
+`SECURITY.FILTER_TREE` (`MAX_CRITERIA`, `MAX_DEPTH`, `MAX_IN_VALUES`) and the whole body by
+`MAX_REQUEST_SIZE`. Error messages that echo a client value truncate it to 80 characters.
 
 ## GraphQL introspection & playground
 
