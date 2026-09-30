@@ -32,8 +32,8 @@ const resolvers = {
   ...fieldResolvers,
   DatasetWithMetadata: factResolvers.DatasetWithMetadata,
   CatalogSchemaInfo: catalogResolvers.CatalogSchemaInfo,
-  // Champ lazy `stats` du type Metadata
-  Metadata: fieldStatsResolvers.Metadata,
+  // Type Metadata : champ lazy `stats`, typeFamily et filterOperations dérivés de sqlType
+  Metadata: { ...fieldStatsResolvers.Metadata, ...metadataResolvers.Metadata },
 };
 
 // Ré-exportation de la combinaison

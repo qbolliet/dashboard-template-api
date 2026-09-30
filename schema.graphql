@@ -319,10 +319,10 @@ enum FilterConnector {
 }
 
 """
-Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL); a column of any other type (TIME, INTERVAL, BLOB, nested types…) cannot be filtered
+Filter operation. The allowed set depends on the column's SQL type, read server-side from metadata.sqlType, and is exposed per column as Metadata.filterOperations (route on Metadata.typeFamily, offer Metadata.filterOperations — never copy the table client-side). Numeric: comparisons, BETWEEN, IN, IS_NULL; DATE/TIMESTAMP: EQ, NEQ, BEFORE/AFTER family, BETWEEN, IN, IS_NULL; VARCHAR: EQ, NEQ, LIKE and ILIKE families, MATCHES, IN, IS_NULL; BOOLEAN: EQ, NEQ, IS_TRUE family, IS_NULL; any other type (TIME, INTERVAL, BLOB, nested types…): IS_NULL and IS_NOT_NULL only
 """
 enum FilterOperation {
-  """Equality / inequality (all families)"""
+  """Equality / inequality (numeric, date, text and boolean columns)"""
   EQ
   NEQ
 
@@ -367,7 +367,7 @@ enum FilterOperation {
   """
   MATCHES
 
-  """Value-less operations"""
+  """Value-less operations, allowed on every column whatever its type"""
   IS_NULL
   IS_NOT_NULL
 
@@ -604,6 +604,45 @@ enum DataFormat {
 }
 
 """
+Famille de type d'une colonne, dérivée de sqlType par la règle du serveur (celle qui valide
+les filtres) : un client route ses widgets sur cette valeur au lieu de recopier une table des
+types SQL. Correspondance complète (type normalisé : casse et espaces ignorés) :
+INTEGER = TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT,
+UHUGEINT ; NUMBER = FLOAT, DOUBLE, DECIMAL, DECIMAL(p), DECIMAL(p,s) (p ≤ 38, s ≤ p) ;
+DATE = DATE ; TIMESTAMP = TIMESTAMP, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS,
+TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ ; TEXT = VARCHAR ; BOOLEAN = BOOLEAN ;
+OTHER = tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…).
+"""
+enum TypeFamily {
+  """
+  Entier signé ou non signé (TINYINT … UHUGEINT) : slider au pas entier, format sans décimale
+  """
+  INTEGER
+
+  """Flottant ou décimal (FLOAT, DOUBLE, DECIMAL) : mesure continue"""
+  NUMBER
+
+  """Date sans heure (DATE) : sélecteur de date"""
+  DATE
+
+  """
+  Date-heure, avec ou sans fuseau (TIMESTAMP et variantes) : sélecteur de date-heure
+  """
+  TIMESTAMP
+
+  """Texte (VARCHAR)"""
+  TEXT
+
+  """Booléen (BOOLEAN)"""
+  BOOLEAN
+
+  """
+  Tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…) : seuls IS_NULL et IS_NOT_NULL s'y appliquent
+  """
+  OTHER
+}
+
+"""
 Métadonnées d'une colonne de la table des faits — contrat entre la base et l'interface
 """
 type Metadata {
@@ -614,9 +653,19 @@ type Metadata {
   label: String!
 
   """
-  Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) — pilote les opérateurs de filtre et le choix de graphique
+  Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) tel qu'écrit dans la base ; pour router l'interface, préférer typeFamily et filterOperations
   """
   sqlType: String!
+
+  """
+  Famille de type dérivée de sqlType par la règle du serveur : pilote le choix du widget (slider entier ou continu, sélecteur de date ou de date-heure…) et du graphique
+  """
+  typeFamily: TypeFamily!
+
+  """
+  Opérations de filtre acceptées sur cette colonne : exactement l'ensemble que structuredFilters valide, dans un ordre stable. Une colonne catégorielle garde les opérations de son type (le widget se choisit par isCategorical)
+  """
+  filterOperations: [FilterOperation!]!
 
   """La colonne se filtre par un menu et peut servir de groupBy"""
   isCategorical: Boolean!

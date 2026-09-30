@@ -48,9 +48,9 @@ const commonTypeDefs: DocumentNode = gql`
     NOR
   }
 
-  "Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL); a column of any other type (TIME, INTERVAL, BLOB, nested types…) cannot be filtered"
+  "Filter operation. The allowed set depends on the column's SQL type, read server-side from metadata.sqlType, and is exposed per column as Metadata.filterOperations (route on Metadata.typeFamily, offer Metadata.filterOperations — never copy the table client-side). Numeric: comparisons, BETWEEN, IN, IS_NULL; DATE/TIMESTAMP: EQ, NEQ, BEFORE/AFTER family, BETWEEN, IN, IS_NULL; VARCHAR: EQ, NEQ, LIKE and ILIKE families, MATCHES, IN, IS_NULL; BOOLEAN: EQ, NEQ, IS_TRUE family, IS_NULL; any other type (TIME, INTERVAL, BLOB, nested types…): IS_NULL and IS_NOT_NULL only"
   enum FilterOperation {
-    "Equality / inequality (all families)"
+    "Equality / inequality (numeric, date, text and boolean columns)"
     EQ
     NEQ
     "Numeric comparisons"
@@ -83,7 +83,7 @@ const commonTypeDefs: DocumentNode = gql`
     IENDS
     "Regular expression (DuckDB regexp_matches, RE2 syntax; no backreferences or lookaround)"
     MATCHES
-    "Value-less operations"
+    "Value-less operations, allowed on every column whatever its type"
     IS_NULL
     IS_NOT_NULL
     "Boolean shortcuts; the IS_NOT_* forms also match NULL"

@@ -252,7 +252,7 @@ export type FilterNode = {
   negate?: InputMaybe<Scalars['Boolean']['input']>;
 };
 
-/** Filter operation. The allowed set depends on the column's SQL type family, read server-side from metadata.sqlType: numeric (EQ NEQ GT GTE LT LTE BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL), date (EQ NEQ BEFORE AFTER BETWEEN IS_NULL IS_NOT_NULL), text (EQ NEQ CONTAINS STARTS IN NOT_IN IS_NULL IS_NOT_NULL), boolean (EQ NEQ IS_NULL IS_NOT_NULL); a column of any other type (TIME, INTERVAL, BLOB, nested types…) cannot be filtered */
+/** Filter operation. The allowed set depends on the column's SQL type, read server-side from metadata.sqlType, and is exposed per column as Metadata.filterOperations (route on Metadata.typeFamily, offer Metadata.filterOperations — never copy the table client-side). Numeric: comparisons, BETWEEN, IN, IS_NULL; DATE/TIMESTAMP: EQ, NEQ, BEFORE/AFTER family, BETWEEN, IN, IS_NULL; VARCHAR: EQ, NEQ, LIKE and ILIKE families, MATCHES, IN, IS_NULL; BOOLEAN: EQ, NEQ, IS_TRUE family, IS_NULL; any other type (TIME, INTERVAL, BLOB, nested types…): IS_NULL and IS_NOT_NULL only */
 export type FilterOperation =
   | 'AFTER'
   /** Date comparisons (strict, then inclusive) */
@@ -262,7 +262,7 @@ export type FilterOperation =
   /** Text matching (LIKE); wildcards % and _ in the value are escaped */
   | 'CONTAINS'
   | 'ENDS'
-  /** Equality / inequality (all families) */
+  /** Equality / inequality (numeric, date, text and boolean columns) */
   | 'EQ'
   /** Numeric comparisons */
   | 'GT'
@@ -278,7 +278,7 @@ export type FilterOperation =
   | 'IS_NOT_FALSE'
   | 'IS_NOT_NULL'
   | 'IS_NOT_TRUE'
-  /** Value-less operations */
+  /** Value-less operations, allowed on every column whatever its type */
   | 'IS_NULL'
   /** Boolean shortcuts; the IS_NOT_* forms also match NULL */
   | 'IS_TRUE'
@@ -306,6 +306,8 @@ export type Metadata = {
   displayFormat?: Maybe<Scalars['String']['output']>;
   /** Famille thématique — regroupement des variables dans les menus */
   family?: Maybe<Scalars['String']['output']>;
+  /** Opérations de filtre acceptées sur cette colonne : exactement l'ensemble que structuredFilters valide, dans un ordre stable. Une colonne catégorielle garde les opérations de son type (le widget se choisit par isCategorical) */
+  filterOperations: Array<FilterOperation>;
   /** La colonne se filtre par un menu et peut servir de groupBy */
   isCategorical: Scalars['Boolean']['output'];
   /** La colonne fait partie de la clé logique — coordonnée plutôt que mesure */
@@ -320,10 +322,12 @@ export type Metadata = {
   name: Scalars['String']['output'];
   /** Colonne parente dans une hiérarchie de colonnes (chaîne region → departement → commune) */
   parentName?: Maybe<Scalars['String']['output']>;
-  /** Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) — pilote les opérateurs de filtre et le choix de graphique */
+  /** Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) tel qu'écrit dans la base ; pour router l'interface, préférer typeFamily et filterOperations */
   sqlType: Scalars['String']['output'];
   /** Statistiques de la colonne sur toute la table des faits (bornes de sliders, datepickers, axes). Calculées à la demande, seulement quand ce champ est sélectionné : une requête SQL par colonne. Pour des bornes après filtrage : getFieldStats */
   stats?: Maybe<FieldStats>;
+  /** Famille de type dérivée de sqlType par la règle du serveur : pilote le choix du widget (slider entier ou continu, sélecteur de date ou de date-heure…) et du graphique */
+  typeFamily: TypeFamily;
   /** Suffixe d'axe / tooltip (« € », « % », « MW ») */
   unit?: Maybe<Scalars['String']['output']>;
 };
@@ -590,6 +594,32 @@ export type SortOrder =
   | 'ASC'
   | 'DESC';
 
+/**
+ * Famille de type d'une colonne, dérivée de sqlType par la règle du serveur (celle qui valide
+ * les filtres) : un client route ses widgets sur cette valeur au lieu de recopier une table des
+ * types SQL. Correspondance complète (type normalisé : casse et espaces ignorés) :
+ * INTEGER = TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT,
+ * UHUGEINT ; NUMBER = FLOAT, DOUBLE, DECIMAL, DECIMAL(p), DECIMAL(p,s) (p ≤ 38, s ≤ p) ;
+ * DATE = DATE ; TIMESTAMP = TIMESTAMP, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS,
+ * TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ ; TEXT = VARCHAR ; BOOLEAN = BOOLEAN ;
+ * OTHER = tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…).
+ */
+export type TypeFamily =
+  /** Booléen (BOOLEAN) */
+  | 'BOOLEAN'
+  /** Date sans heure (DATE) : sélecteur de date */
+  | 'DATE'
+  /** Entier signé ou non signé (TINYINT … UHUGEINT) : slider au pas entier, format sans décimale */
+  | 'INTEGER'
+  /** Flottant ou décimal (FLOAT, DOUBLE, DECIMAL) : mesure continue */
+  | 'NUMBER'
+  /** Tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…) : seuls IS_NULL et IS_NOT_NULL s'y appliquent */
+  | 'OTHER'
+  /** Texte (VARCHAR) */
+  | 'TEXT'
+  /** Date-heure, avec ou sans fuseau (TIMESTAMP et variantes) : sélecteur de date-heure */
+  | 'TIMESTAMP';
+
 
 
 export type ResolverTypeWrapper<T> = Promise<T> | T;
@@ -695,6 +725,7 @@ export type ResolversTypes = {
   SortInput: SortInput;
   SortOrder: SortOrder;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
+  TypeFamily: TypeFamily;
 };
 
 /** Mapping between all available schema types and the resolvers parents */
@@ -830,6 +861,7 @@ export type MetadataResolvers<ContextType = GraphQLContext, ParentType extends R
   description?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   displayFormat?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   family?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  filterOperations?: Resolver<Array<ResolversTypes['FilterOperation']>, ParentType, ContextType>;
   isCategorical?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   isPrimaryKey?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
   label?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
@@ -839,6 +871,7 @@ export type MetadataResolvers<ContextType = GraphQLContext, ParentType extends R
   parentName?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   sqlType?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   stats?: Resolver<Maybe<ResolversTypes['FieldStats']>, ParentType, ContextType>;
+  typeFamily?: Resolver<ResolversTypes['TypeFamily'], ParentType, ContextType>;
   unit?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 

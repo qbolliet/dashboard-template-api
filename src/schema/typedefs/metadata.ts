@@ -16,14 +16,45 @@ import type { DocumentNode } from 'graphql';
  * the getMetaData query entry point.
  */
 const metadataTypeDefs: DocumentNode = gql`
+  """
+  Famille de type d'une colonne, dérivée de sqlType par la règle du serveur (celle qui valide
+  les filtres) : un client route ses widgets sur cette valeur au lieu de recopier une table des
+  types SQL. Correspondance complète (type normalisé : casse et espaces ignorés) :
+  INTEGER = TINYINT, SMALLINT, INTEGER, BIGINT, HUGEINT, UTINYINT, USMALLINT, UINTEGER, UBIGINT,
+  UHUGEINT ; NUMBER = FLOAT, DOUBLE, DECIMAL, DECIMAL(p), DECIMAL(p,s) (p ≤ 38, s ≤ p) ;
+  DATE = DATE ; TIMESTAMP = TIMESTAMP, TIMESTAMP_S, TIMESTAMP_MS, TIMESTAMP_NS,
+  TIMESTAMP WITH TIME ZONE, TIMESTAMPTZ ; TEXT = VARCHAR ; BOOLEAN = BOOLEAN ;
+  OTHER = tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…).
+  """
+  enum TypeFamily {
+    "Entier signé ou non signé (TINYINT … UHUGEINT) : slider au pas entier, format sans décimale"
+    INTEGER
+    "Flottant ou décimal (FLOAT, DOUBLE, DECIMAL) : mesure continue"
+    NUMBER
+    "Date sans heure (DATE) : sélecteur de date"
+    DATE
+    "Date-heure, avec ou sans fuseau (TIMESTAMP et variantes) : sélecteur de date-heure"
+    TIMESTAMP
+    "Texte (VARCHAR)"
+    TEXT
+    "Booléen (BOOLEAN)"
+    BOOLEAN
+    "Tout autre type (TIME, INTERVAL, BLOB, UUID, types imbriqués…) : seuls IS_NULL et IS_NOT_NULL s'y appliquent"
+    OTHER
+  }
+
   "Métadonnées d'une colonne de la table des faits — contrat entre la base et l'interface"
   type Metadata {
     "Nom technique de la colonne"
     name: String!
     "Libellé d'affichage (défaut : name)"
     label: String!
-    "Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) — pilote les opérateurs de filtre et le choix de graphique"
+    "Type SQL DuckDB (BIGINT, DOUBLE, VARCHAR, …) tel qu'écrit dans la base ; pour router l'interface, préférer typeFamily et filterOperations"
     sqlType: String!
+    "Famille de type dérivée de sqlType par la règle du serveur : pilote le choix du widget (slider entier ou continu, sélecteur de date ou de date-heure…) et du graphique"
+    typeFamily: TypeFamily!
+    "Opérations de filtre acceptées sur cette colonne : exactement l'ensemble que structuredFilters valide, dans un ordre stable. Une colonne catégorielle garde les opérations de son type (le widget se choisit par isCategorical)"
+    filterOperations: [FilterOperation!]!
     "La colonne se filtre par un menu et peut servir de groupBy"
     isCategorical: Boolean!
     "La colonne fait partie de la clé logique — coordonnée plutôt que mesure"

@@ -130,14 +130,32 @@ describe('DECIMAL declared without precision', () => {
 // ─── Types sans famille de filtre (TIME) ──────────────────────────────────────
 
 describe('a column of the `other` family (TIME)', () => {
-  test('a filter on it is a BAD_USER_INPUT naming the type', async () => {
+  test('a filter with a value on it is a BAD_USER_INPUT naming the type', async () => {
     const result = await select(filterOn('slot', 'EQ', '"08:00:00"'));
 
     expect(result.errors).toBeDefined();
     const [error] = result.errors!;
     expect(error.extensions?.code).toBe('BAD_USER_INPUT');
     expect(error.message).toContain('unsupported SQL type "TIME"');
-    expect(error.message).toContain('cannot be filtered');
+    expect(error.message).toContain('only IS_NULL and IS_NOT_NULL are allowed');
+  });
+
+  test('IS_NULL and IS_NOT_NULL are accepted and partition the rows', async () => {
+    const byPresence = async (operation: string): Promise<number> => {
+      const result = await execute(server, {
+        query: `query {
+          getFactTable(schema: "no_primary_key",
+            structuredFilters: { children: [{ criterion: { variable: "slot", operation: ${operation} } }] },
+            limit: 1) { total }
+        }`,
+      });
+      expect(result.errors).toBeUndefined();
+      return (result.data!.getFactTable as { total: number }).total;
+    };
+
+    const [nulls, present] = await Promise.all([byPresence('IS_NULL'), byPresence('IS_NOT_NULL')]);
+    expect(present).toBeGreaterThan(0);
+    expect(nulls + present).toBe(240);
   });
 
   test('a filter on another column of the same schema is unaffected', async () => {

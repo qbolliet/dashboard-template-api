@@ -533,12 +533,23 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
   });
 
   test.each(['blob_col', 'slot', 'duration'])(
-    'a column of the `other` family (%s) cannot be filtered, whatever the operation',
+    'a column of the `other` family (%s) only accepts IS_NULL and IS_NOT_NULL',
     (column) => {
-      expectBadInput(() => one(leaf(column, 'EQ', 'x')), 'cannot be filtered');
-      expectBadInput(() => one(leaf(column, 'IS_NULL')), 'cannot be filtered');
+      expectBadInput(
+        () => one(leaf(column, 'EQ', 'x')),
+        'only IS_NULL and IS_NOT_NULL are allowed',
+      );
+      expect(one(leaf(column, 'IS_NULL'))).toEqual({ sql: `"${column}" IS NULL`, params: [] });
+      expect(one(leaf(column, 'IS_NOT_NULL'))).toEqual({
+        sql: `"${column}" IS NOT NULL`,
+        params: [],
+      });
     },
   );
+
+  test('IS_NULL on an `other` column still refuses a value', () => {
+    expectBadInput(() => one(leaf('slot', 'IS_NULL', '08:00:00')), 'does not take a value');
+  });
 
   test('the error on an `other` column names the type and the filterable ones', () => {
     expectBadInput(
@@ -547,7 +558,7 @@ describe('treeToSQL — rejections (BAD_USER_INPUT)', () => {
     );
     expectBadInput(
       () => one(leaf('slot', 'EQ', '08:00:00')),
-      'filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN',
+      'fully filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN',
     );
   });
 

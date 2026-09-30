@@ -1,6 +1,13 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
 import { previewValue } from './preview-value.js';
+import {
+  ALLOWED_OPERATIONS,
+  isIntegerSqlType,
+  normalizeSqlType,
+  sqlTypeFamily,
+} from './filter-tree.js';
+import type { FilterOperation } from './filter-tree.js';
 
 // ─── Contrat de la table `metadata` ──────────────────────────────────────────
 
@@ -113,6 +120,65 @@ function toFieldMetadata(row: Record<string, unknown>): FieldMetadata {
     description: nullableText(row.description),
     defaultAggregation: nullableText(row.default_aggregation),
   };
+}
+
+// ─── Famille de type et opérations de filtre ─────────────────────────────────
+
+/** Values of the GraphQL `TypeFamily` enum, in SDL order. */
+const TYPE_FAMILIES = [
+  'INTEGER',
+  'NUMBER',
+  'DATE',
+  'TIMESTAMP',
+  'TEXT',
+  'BOOLEAN',
+  'OTHER',
+] as const;
+
+/** Type family of a column (GraphQL `TypeFamily` enum value). */
+type TypeFamily = (typeof TYPE_FAMILIES)[number];
+
+/**
+ * Derives the `TypeFamily` a client routes its widgets on from a SQL type.
+ *
+ * Refines the filtering family of {@link sqlTypeFamily} — the server's own
+ * rule, never copied — so a client can tell an integer from a floating-point
+ * or decimal measure (slider step, format) and a date from a date-time
+ * (picker). Total: an unknown or malformed type is `OTHER`.
+ *
+ * @param sqlType - SQL type name as stored in metadata.sqlType.
+ * @returns The type family exposed as `Metadata.typeFamily`.
+ */
+// Famille de type exposée au client, affinée depuis la famille de filtrage
+function typeFamilyOf(sqlType: string): TypeFamily {
+  switch (sqlTypeFamily(sqlType)) {
+    case 'numeric':
+      return isIntegerSqlType(sqlType) ? 'INTEGER' : 'NUMBER';
+    case 'date':
+      return normalizeSqlType(sqlType) === 'DATE' ? 'DATE' : 'TIMESTAMP';
+    case 'text':
+      return 'TEXT';
+    case 'boolean':
+      return 'BOOLEAN';
+    case 'other':
+      return 'OTHER';
+  }
+}
+
+/**
+ * Lists the filter operations the filter compiler accepts on a column.
+ *
+ * Read from {@link ALLOWED_OPERATIONS}, the table `treeToSQL` checks every
+ * criterion against: the list is exactly the accepted set, in the table's
+ * order. A categorical column keeps the operations of its type; the client
+ * picks the widget through `isCategorical`.
+ *
+ * @param sqlType - SQL type name as stored in metadata.sqlType.
+ * @returns A fresh array of the allowed operations.
+ */
+// Opérations de filtre acceptées sur une colonne, lues dans la table du compilateur
+function filterOperationsOf(sqlType: string): FilterOperation[] {
+  return [...ALLOWED_OPERATIONS[sqlTypeFamily(sqlType)]];
 }
 
 // ─── Colonnes de libellés ────────────────────────────────────────
@@ -252,6 +318,9 @@ export {
   METADATA_COLUMNS,
   METADATA_SELECT,
   METADATA_FIELD_WITH_LABELS_WHERE,
+  TYPE_FAMILIES,
+  typeFamilyOf,
+  filterOperationsOf,
   toFieldMetadata,
   toFieldMetadataWithLabels,
   withLabelFields,
@@ -259,4 +328,4 @@ export {
   indexMetadataByName,
   resolveLabelField,
 };
-export type { FieldMetadata, PhysicallyOrderedFields };
+export type { FieldMetadata, PhysicallyOrderedFields, TypeFamily };

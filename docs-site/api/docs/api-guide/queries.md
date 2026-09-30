@@ -119,13 +119,55 @@ Allowed operations per column type family:
 | date    | `DATE` `TIMESTAMP` (`_S` `_MS` `_NS`, `WITH TIME ZONE`)                                                                                                     | `EQ NEQ BEFORE AFTER ON_OR_BEFORE ON_OR_AFTER BETWEEN NOT_BETWEEN IN NOT_IN IS_NULL IS_NOT_NULL`                                 |
 | text    | `VARCHAR`                                                                                                                                                   | `EQ NEQ IEQ CONTAINS NOT_CONTAINS ICONTAINS STARTS NOT_STARTS ISTARTS ENDS NOT_ENDS IENDS MATCHES IN NOT_IN IS_NULL IS_NOT_NULL` |
 | boolean | `BOOLEAN`                                                                                                                                                   | `EQ NEQ IS_TRUE IS_FALSE IS_NOT_TRUE IS_NOT_FALSE IS_NULL IS_NOT_NULL`                                                           |
-| other   | `TIME` `INTERVAL` `BLOB` and every other type (nested, `UUID`…)                                                                                             | none: a filter on such a column is a `BAD_USER_INPUT`                                                                            |
+| other   | `TIME` `INTERVAL` `BLOB` and every other type (nested, `UUID`…)                                                                                             | `IS_NULL IS_NOT_NULL`                                                                                                            |
 
 The database declares a decimal column as a bare `DECIMAL` in `metadata.sql_type`
 as readily as `DECIMAL(p,s)`; both are numeric. A column of the `other` family is
-listed, projected, sorted and described (`stats`, `getFields`) like any other —
-only filtering it is refused, with an error naming its type. `SUM`, `AVG` and
-`MEDIAN` are refused on it; `COUNT` and `MODE` are allowed.
+listed, projected, sorted and described (`stats`, `getFields`) like any other;
+only `IS_NULL` / `IS_NOT_NULL` filter it, and any other operation is refused with an
+error naming its type. `SUM`, `AVG` and `MEDIAN` are refused on it; `COUNT` and
+`MODE` are allowed.
+
+#### Building a filter UI: `typeFamily` and `filterOperations`
+
+Do not copy the table above into a client: every `Metadata` exposes it per column,
+computed by the same server rule that validates the filters.
+
+- `typeFamily` (`TypeFamily` enum) picks the widget and the chart: `INTEGER`
+  (integer slider step, no decimals), `NUMBER` (continuous measure), `DATE` (date
+  picker), `TIMESTAMP` (date-time picker), `TEXT`, `BOOLEAN`, `OTHER`.
+- `filterOperations` lists the operations `structuredFilters` accepts on the
+  column, exactly: every listed operation is accepted, any other one is a
+  `BAD_USER_INPUT`. Offer these, in this order, in the operator menu.
+- A categorical column (`isCategorical`) keeps the operations of its type; route it
+  to a menu fed by `getSelectOptions` first, then fall back on `typeFamily`.
+
+| `typeFamily` | SQL types                                                                                                | `filterOperations`      |
+| ------------ | -------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `INTEGER`    | `TINYINT` `SMALLINT` `INTEGER` `BIGINT` `HUGEINT` `UTINYINT` `USMALLINT` `UINTEGER` `UBIGINT` `UHUGEINT` | numeric row above       |
+| `NUMBER`     | `FLOAT` `DOUBLE` `DECIMAL` `DECIMAL(p)` `DECIMAL(p,s)`                                                   | numeric row above       |
+| `DATE`       | `DATE`                                                                                                   | date row above          |
+| `TIMESTAMP`  | `TIMESTAMP` `TIMESTAMP_S` `TIMESTAMP_MS` `TIMESTAMP_NS` `TIMESTAMP WITH TIME ZONE` `TIMESTAMPTZ`         | date row above          |
+| `TEXT`       | `VARCHAR`                                                                                                | text row above          |
+| `BOOLEAN`    | `BOOLEAN`                                                                                                | boolean row above       |
+| `OTHER`      | everything else                                                                                          | `IS_NULL` `IS_NOT_NULL` |
+
+```graphql
+query FilterableColumns($schema: String) {
+  getCatalogSchema(schema: $schema) {
+    name
+    label
+    isCategorical
+    typeFamily
+    filterOperations
+  }
+}
+```
+
+Both fields cost no query: they are derived from `sqlType` on every path returning a
+`Metadata` (`getCatalogSchema`, `getCatalogs { schemas { fields } }`,
+`getFactTableWithMetadata { fields }`, `groupByFieldInfo`, `measureFieldInfo`,
+`getMetaData`).
 
 The `I*` operations (`IEQ`, `ICONTAINS`, `ISTARTS`, `IENDS`) are the case-insensitive
 twins of their `LIKE` counterparts (SQL `ILIKE`); `IEQ` adds no wildcard, so it is a
@@ -289,8 +331,9 @@ with no second request and no sampling of the data:
 
 - `columns` — the returned column names, in order.
 - `fields` — the `Metadata` of each returned column, **aligned on `columns`** (same
-  names, same order, also with `fields:` projection and `format: ARRAYS`): `sqlType`
-  (axis type), `label` (header), `unit` (axis suffix), `displayFormat` (d3-format),
+  names, same order, also with `fields:` projection and `format: ARRAYS`): `typeFamily`
+  (axis type, numeric alignment), `filterOperations` (column filter menu), `sqlType`,
+  `label` (header), `unit` (axis suffix), `displayFormat` (d3-format),
   `family`, `labelFields`… They come from the already-loaded metadata, without any
   extra query. A column with no row in the `metadata` table fails the request with an
   explicit error instead of leaving a hole.
@@ -308,7 +351,7 @@ query {
     fields {
       name
       label
-      sqlType
+      typeFamily
       unit
       displayFormat
     }
@@ -383,13 +426,27 @@ getMetaData(
 ): Metadata
 
 type Metadata {
-  name: String
-  label: String
-  sql_type: String
-  is_categorical: Boolean
-  is_primary_key: Boolean
+  name: String!
+  label: String!
+  sqlType: String!                        # DuckDB type, as written by the database
+  typeFamily: TypeFamily!                 # INTEGER NUMBER DATE TIMESTAMP TEXT BOOLEAN OTHER
+  filterOperations: [FilterOperation!]!   # exactly what structuredFilters accepts
+  isCategorical: Boolean!
+  isPrimaryKey: Boolean!
+  parentName: String
+  labelFor: String
+  labelFields: [String!]!
+  unit: String
+  displayFormat: String
+  family: String
+  description: String
+  defaultAggregation: Aggregation
+  stats: FieldStats                       # computed on demand
 }
 ```
+
+See [Building a filter UI](#building-a-filter-ui-typefamily-and-filteroperations)
+for `typeFamily` and `filterOperations`.
 
 ---
 

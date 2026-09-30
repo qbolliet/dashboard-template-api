@@ -2,16 +2,41 @@
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
 import { attachScope, contextScope } from './scope.js';
-import type { QueryResolvers } from '../../generated/graphql.js';
+import { filterOperationsOf, typeFamilyOf } from '../../utils/metadata-mapping.js';
+import type { MetadataResolvers, QueryResolvers } from '../../generated/graphql.js';
 
 // Construction d'un resolver pour les méta-données
 /**
  * Resolvers for metadata queries.
  *
  * Handles the retrieval of metadata information from the database
- * using the per-request DataLoader for batching and caching.
+ * using the per-request DataLoader for batching and caching, and derives
+ * `typeFamily` / `filterOperations` on every Metadata object from its SQL type.
  */
-const metadataResolvers: { Query: Pick<QueryResolvers, 'getMetaData'> } = {
+const metadataResolvers: {
+  Metadata: Pick<MetadataResolvers, 'typeFamily' | 'filterOperations'>;
+  Query: Pick<QueryResolvers, 'getMetaData'>;
+} = {
+  // Champs dérivés de sqlType, résolus sur tout Metadata quel que soit le chemin qui
+  // l'a produit : aucune requête, et indépendants des lignes déjà en cache Redis
+  Metadata: {
+    /**
+     * Resolves the type family of the column, from its SQL type.
+     *
+     * @param parent - Metadata row of the column.
+     * @returns The TypeFamily enum value.
+     */
+    typeFamily: (parent) => typeFamilyOf(parent.sqlType),
+
+    /**
+     * Resolves the filter operations the filter compiler accepts on the column.
+     *
+     * @param parent - Metadata row of the column.
+     * @returns The allowed FilterOperation values.
+     */
+    filterOperations: (parent) => filterOperationsOf(parent.sqlType),
+  },
+
   Query: {
     /**
      * Fetches metadata for a given field name.

@@ -8,7 +8,8 @@
  */
 
 import { schema } from '../../../../src/schema/index.js';
-import { assertObjectType, isNonNullType, GraphQLFieldMap } from 'graphql';
+import { TYPE_FAMILIES } from '../../../../src/utils/metadata-mapping.js';
+import { assertEnumType, assertObjectType, isNonNullType, GraphQLFieldMap } from 'graphql';
 
 // ─── Types objet — metadata ───────────────────────────────────────────────────
 
@@ -38,7 +39,9 @@ describe('Object types — metadata', () => {
       'family',
       'description',
       'defaultAggregation',
-      // Champ dérivé, résolu à la demande — pas une colonne de la table metadata
+      // Champs dérivés, résolus à la demande — pas des colonnes de la table metadata
+      'typeFamily',
+      'filterOperations',
       'stats',
     ];
     expect(Object.keys(fields).sort()).toEqual([...expected].sort());
@@ -87,6 +90,24 @@ describe('Object types — metadata', () => {
    */
   test('defaultAggregation est typé par l’enum Aggregation', () => {
     expect(String(fields.defaultAggregation.type)).toBe('Aggregation');
+  });
+
+  /**
+   * Verification that the derived type fields are non-null and typed by their enums.
+   */
+  test('typeFamily et filterOperations sont non nullables et typés par leurs enums', () => {
+    expect(String(fields.typeFamily.type)).toBe('TypeFamily!');
+    expect(String(fields.filterOperations.type)).toBe('[FilterOperation!]!');
+  });
+
+  /**
+   * Verification that the TypeFamily enum matches the values the mapping returns.
+   */
+  test('l’enum TypeFamily porte exactement les valeurs de TYPE_FAMILIES', () => {
+    const values = assertEnumType(schema.getType('TypeFamily'))
+      .getValues()
+      .map((value) => value.name);
+    expect(values).toEqual([...TYPE_FAMILIES]);
   });
 
   /**

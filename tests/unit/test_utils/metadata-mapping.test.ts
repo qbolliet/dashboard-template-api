@@ -6,7 +6,8 @@
  * explicit column projection, the boolean coercion DuckDB requires, and the
  * normalisation of every nullable UI field. It also derives `labelFields`
  * (inverse of `labelFor`) and holds the single rule choosing the label column
- * of a code column (resolveLabelField, revue §5.8).
+ * of a code column (resolveLabelField, revue §5.8), and exposes the type
+ * family and filter operations of a column, cross-checked against treeToSQL.
  */
 
 import { GraphQLError } from 'graphql';
@@ -15,14 +16,19 @@ import {
   METADATA_COLUMNS,
   METADATA_SELECT,
   METADATA_FIELD_WITH_LABELS_WHERE,
+  TYPE_FAMILIES,
+  filterOperationsOf,
   indexMetadataByName,
   resolveLabelField,
   sortByColumnPosition,
   toFieldMetadata,
   toFieldMetadataWithLabels,
+  typeFamilyOf,
   withLabelFields,
 } from '../../../src/utils/metadata-mapping.js';
-import type { FieldMetadata } from '../../../src/utils/metadata-mapping.js';
+import { FILTER_OPERATIONS, treeToSQL } from '../../../src/utils/filter-tree.js';
+import type { FilterOperation } from '../../../src/utils/filter-tree.js';
+import type { FieldMetadata, TypeFamily } from '../../../src/utils/metadata-mapping.js';
 
 // ─── Projection ───────────────────────────────────────────────────────────────
 
@@ -343,5 +349,243 @@ describe('sortByColumnPosition', () => {
 
   test('une liste vide reste vide', () => {
     expect(sortByColumnPosition([], new Map([['a', 1]]))).toEqual({ fields: [], unplaced: [] });
+  });
+});
+
+// ─── Famille de type et opérations de filtre ──────────────────────────────────
+
+describe('typeFamilyOf', () => {
+  test.each<[string, TypeFamily]>([
+    // Entiers signés et non signés
+    ['TINYINT', 'INTEGER'],
+    ['SMALLINT', 'INTEGER'],
+    ['INTEGER', 'INTEGER'],
+    ['BIGINT', 'INTEGER'],
+    ['HUGEINT', 'INTEGER'],
+    ['UTINYINT', 'INTEGER'],
+    ['USMALLINT', 'INTEGER'],
+    ['UINTEGER', 'INTEGER'],
+    ['UBIGINT', 'INTEGER'],
+    ['UHUGEINT', 'INTEGER'],
+    // Flottants et décimaux
+    ['FLOAT', 'NUMBER'],
+    ['DOUBLE', 'NUMBER'],
+    ['DECIMAL', 'NUMBER'],
+    ['DECIMAL(18)', 'NUMBER'],
+    ['DECIMAL(10,2)', 'NUMBER'],
+    ['DECIMAL(38,9)', 'NUMBER'],
+    // Date et dates-heures
+    ['DATE', 'DATE'],
+    ['TIMESTAMP', 'TIMESTAMP'],
+    ['TIMESTAMP_S', 'TIMESTAMP'],
+    ['TIMESTAMP_MS', 'TIMESTAMP'],
+    ['TIMESTAMP_NS', 'TIMESTAMP'],
+    ['TIMESTAMP WITH TIME ZONE', 'TIMESTAMP'],
+    ['TIMESTAMPTZ', 'TIMESTAMP'],
+    ['VARCHAR', 'TEXT'],
+    ['BOOLEAN', 'BOOLEAN'],
+    // Normalisation : casse et espaces ignorés, comme pour la validation des filtres
+    [' double ', 'NUMBER'],
+    ['ubigint', 'INTEGER'],
+    ['decimal( 10 , 2 )', 'NUMBER'],
+    ['date', 'DATE'],
+    ['timestamp  with   time zone', 'TIMESTAMP'],
+    // Tout le reste
+    ['TIME', 'OTHER'],
+    ['INTERVAL', 'OTHER'],
+    ['BLOB', 'OTHER'],
+    ['UUID', 'OTHER'],
+    ['INTEGER[]', 'OTHER'],
+    ['DECIMAL(40,2)', 'OTHER'],
+    ['', 'OTHER'],
+  ])('%j → %s', (sqlType, family) => {
+    expect(typeFamilyOf(sqlType)).toBe(family);
+  });
+
+  test('une valeur non textuelle est OTHER, sans exception', () => {
+    expect(typeFamilyOf(undefined as unknown as string)).toBe('OTHER');
+    expect(typeFamilyOf(null as unknown as string)).toBe('OTHER');
+  });
+
+  test('ne renvoie que des valeurs de TYPE_FAMILIES', () => {
+    for (const sqlType of [
+      'UBIGINT',
+      'DOUBLE',
+      'DATE',
+      'TIMESTAMP',
+      'VARCHAR',
+      'BOOLEAN',
+      'TIME',
+    ]) {
+      expect(TYPE_FAMILIES).toContain(typeFamilyOf(sqlType));
+    }
+  });
+});
+
+describe('filterOperationsOf', () => {
+  test('numérique (entier ou non) : comparaisons, intervalle, appartenance, présence', () => {
+    const numeric = [
+      'EQ',
+      'NEQ',
+      'GT',
+      'GTE',
+      'LT',
+      'LTE',
+      'BETWEEN',
+      'NOT_BETWEEN',
+      'IN',
+      'NOT_IN',
+      'IS_NULL',
+      'IS_NOT_NULL',
+    ];
+    expect(filterOperationsOf('UBIGINT')).toEqual(numeric);
+    expect(filterOperationsOf('DOUBLE')).toEqual(numeric);
+    expect(filterOperationsOf('DECIMAL(10,2)')).toEqual(numeric);
+  });
+
+  test('date et date-heure partagent les opérations temporelles', () => {
+    expect(filterOperationsOf('DATE')).toEqual(filterOperationsOf('TIMESTAMPTZ'));
+    expect(filterOperationsOf('DATE')).toEqual(
+      expect.arrayContaining(['BEFORE', 'AFTER', 'ON_OR_BEFORE', 'ON_OR_AFTER', 'BETWEEN']),
+    );
+    expect(filterOperationsOf('DATE')).not.toContain('GT');
+  });
+
+  test('texte : familles LIKE / ILIKE et MATCHES, pas de comparaison d’ordre', () => {
+    const ops = filterOperationsOf('VARCHAR');
+    expect(ops).toEqual(expect.arrayContaining(['CONTAINS', 'ICONTAINS', 'IEQ', 'MATCHES', 'IN']));
+    expect(ops).not.toContain('GT');
+    expect(ops).not.toContain('BETWEEN');
+  });
+
+  test('booléen : égalité, raccourcis IS_TRUE…, présence', () => {
+    expect(filterOperationsOf('BOOLEAN')).toEqual([
+      'EQ',
+      'NEQ',
+      'IS_TRUE',
+      'IS_FALSE',
+      'IS_NOT_TRUE',
+      'IS_NOT_FALSE',
+      'IS_NULL',
+      'IS_NOT_NULL',
+    ]);
+  });
+
+  test.each(['TIME', 'INTERVAL', 'BLOB', '', 'DECIMAL(40,2)'])(
+    'OTHER (%j) : IS_NULL et IS_NOT_NULL seulement',
+    (sqlType) => {
+      expect(filterOperationsOf(sqlType)).toEqual(['IS_NULL', 'IS_NOT_NULL']);
+    },
+  );
+
+  test('renvoie une copie : la modifier ne touche pas la règle du serveur', () => {
+    const ops = filterOperationsOf('BOOLEAN');
+    ops.push('GT');
+    expect(filterOperationsOf('BOOLEAN')).not.toContain('GT');
+  });
+});
+
+// ─── Test croisé : filterOperations = ce que treeToSQL accepte ────────────────
+
+describe('filterOperationsOf ↔ treeToSQL', () => {
+  // Opérations sans valeur (IS NULL, IS TRUE…)
+  const VALUELESS = new Set<FilterOperation>([
+    'IS_NULL',
+    'IS_NOT_NULL',
+    'IS_TRUE',
+    'IS_FALSE',
+    'IS_NOT_TRUE',
+    'IS_NOT_FALSE',
+  ]);
+
+  // Valeur scalaire valide pour chaque famille
+  const SCALAR: Record<TypeFamily, unknown> = {
+    INTEGER: 7,
+    NUMBER: 1.5,
+    DATE: '2024-01-01',
+    TIMESTAMP: '2024-01-01T08:00:00',
+    TEXT: 'abc',
+    BOOLEAN: true,
+    OTHER: '08:00:00',
+  };
+
+  /**
+   * Builds a value the operation accepts on a column of the given family.
+   *
+   * @param operation - Filter operation.
+   * @param family - Type family of the column.
+   * @returns The criterion value, undefined for a value-less operation.
+   */
+  // Valeur d'exemple adaptée à l'opération et à la famille
+  const sampleValue = (operation: FilterOperation, family: TypeFamily): unknown => {
+    if (VALUELESS.has(operation)) return undefined;
+    const scalar = SCALAR[family];
+    if (operation === 'BETWEEN' || operation === 'NOT_BETWEEN') return { min: scalar, max: scalar };
+    if (operation === 'IN' || operation === 'NOT_IN') return [scalar];
+    return scalar;
+  };
+
+  /**
+   * Compiles a one-criterion tree on a column `c` of the given SQL type.
+   *
+   * @param sqlType - SQL type of the column.
+   * @param operation - Filter operation.
+   * @returns The compiled filter.
+   */
+  // Compilation d'un critère unique sur une colonne du type donné
+  const compile = (sqlType: string, operation: FilterOperation) =>
+    treeToSQL(
+      {
+        children: [
+          {
+            criterion: {
+              variable: 'c',
+              operation,
+              ...(VALUELESS.has(operation)
+                ? {}
+                : { value: sampleValue(operation, typeFamilyOf(sqlType)) }),
+            },
+          },
+        ],
+      },
+      new Map([['c', { sqlType }]]),
+    );
+
+  const TYPES = [
+    'UBIGINT',
+    'TINYINT',
+    'DOUBLE',
+    'DECIMAL(10,2)',
+    'DECIMAL',
+    'DATE',
+    'TIMESTAMP',
+    'TIMESTAMPTZ',
+    'VARCHAR',
+    'BOOLEAN',
+    'TIME',
+    'BLOB',
+  ];
+  const cases = TYPES.flatMap((sqlType) =>
+    FILTER_OPERATIONS.map((operation) => [sqlType, operation] as [string, FilterOperation]),
+  );
+
+  test.each(cases)('%s × %s', (sqlType, operation) => {
+    if (filterOperationsOf(sqlType).includes(operation)) {
+      // Opération listée : acceptée par le compilateur
+      expect(() => compile(sqlType, operation)).not.toThrow();
+    } else {
+      // Opération absente : refusée pour l'opération, jamais pour la valeur
+      let caught: unknown;
+      try {
+        compile(sqlType, operation);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(GraphQLError);
+      expect((caught as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
+      expect((caught as GraphQLError).message).toMatch(
+        /is not allowed on column|only IS_NULL and IS_NOT_NULL are allowed/,
+      );
+    }
   });
 });

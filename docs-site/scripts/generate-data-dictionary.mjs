@@ -66,6 +66,7 @@ const SCHEMA_QUERY = /* GraphQL */ `
       name
       label
       sqlType
+      typeFamily
       isCategorical
       isPrimaryKey
       parentName
@@ -269,8 +270,8 @@ export function renderSchemaPage({ catalog, schema, info, fields }) {
     lines.push(
       `### ${family}`,
       '',
-      '| Name | Label | SQL type | Unit | Display format | Default aggregation | Categorical | Primary key | Description |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| Name | Label | SQL type | Type family | Unit | Display format | Default aggregation | Categorical | Primary key | Description |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     );
     for (const column of columns) {
       const name = column.isLabel ? `↳ ${code(column.name)}` : code(column.name);
@@ -279,6 +280,7 @@ export function renderSchemaPage({ catalog, schema, info, fields }) {
           name,
           escapeCell(column.label),
           code(column.sqlType),
+          code(column.typeFamily),
           escapeCell(column.unit),
           code(column.displayFormat),
           code(column.defaultAggregation),

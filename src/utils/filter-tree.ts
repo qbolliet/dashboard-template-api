@@ -55,7 +55,8 @@ type FilterConnector = (typeof FILTER_CONNECTORS)[number];
  *
  * `other` groups every type without a filter semantics (TIME, INTERVAL, BLOB,
  * nested types…): such a column is listed, projected and sorted like any other,
- * but a filter on it is a client error.
+ * but only IS_NULL / IS_NOT_NULL apply to it — any other operation is a client
+ * error.
  */
 type SqlTypeFamily = 'numeric' | 'date' | 'text' | 'boolean' | 'other';
 
@@ -196,8 +197,8 @@ const ALLOWED_OPERATIONS: Record<SqlTypeFamily, readonly FilterOperation[]> = {
     'IS_NULL',
     'IS_NOT_NULL',
   ],
-  // Aucune opération : une colonne « other » n'est pas filtrable
-  other: [],
+  // Seulement la présence : IS NULL ne lie aucune valeur et ne CAST rien, sûr sur tout type
+  other: ['IS_NULL', 'IS_NOT_NULL'],
 };
 
 /**
@@ -361,7 +362,7 @@ const isDecimalType = (normalized: string): boolean => {
  * `other` family, so no caller needs a try/catch. The numeric, date, text and
  * boolean families are a strict allow-list, hence safe to interpolate in a CAST
  * expression (see {@link castTypeOf}); `other` is never interpolated anywhere,
- * since a filter on it is refused.
+ * since only the value-less IS_NULL / IS_NOT_NULL apply to it.
  *
  * @param sqlType - SQL type name as stored in metadata.sqlType.
  * @returns The type family.
@@ -376,6 +377,21 @@ function sqlTypeFamily(sqlType: string): SqlTypeFamily {
   if (normalized === 'VARCHAR') return 'text';
   if (normalized === 'BOOLEAN') return 'boolean';
   return 'other';
+}
+
+/**
+ * Tells whether a SQL type is an integer type of the `numeric` family.
+ *
+ * Splits the `numeric` family between integers (TINYINT … UHUGEINT) and
+ * floating-point or decimal types, from the same allow-list as
+ * {@link sqlTypeFamily}. Total, like it.
+ *
+ * @param sqlType - SQL type name as stored in metadata.sqlType.
+ * @returns True for a signed or unsigned integer type.
+ */
+// Reconnaissance d'un type entier (jamais d'exception)
+function isIntegerSqlType(sqlType: string): boolean {
+  return typeof sqlType === 'string' && INTEGER_TYPES.has(normalizeSqlType(sqlType));
 }
 
 /**
@@ -597,8 +613,8 @@ const coerceValue = (
       return value;
     }
     case 'other':
-      // Inatteignable : compileCriterion refuse la colonne avant tout lien de valeur
-      throw badInput(`Column "${variable}" (${sqlType}) cannot be filtered.`);
+      // Inatteignable : seules IS_NULL / IS_NOT_NULL sont permises, et elles ne lient aucune valeur
+      throw badInput(`Column "${variable}" (${sqlType}) takes no filter value.`);
   }
 };
 
@@ -714,15 +730,16 @@ const compileCriterion = (
   const rawType = typeof meta.sqlType === 'string' ? meta.sqlType : '';
   const sqlType = normalizeSqlType(rawType);
   const family = sqlTypeFamily(sqlType);
-  if (family === 'other') {
-    throw badInput(
-      `Column "${column}" has an unsupported SQL type "${rawType || 'unknown'}" and cannot be filtered ` +
-        '(filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN).',
-    );
-  }
 
   // Opération compatible avec la famille de type
   const allowed = ALLOWED_OPERATIONS[family];
+  if (family === 'other' && !allowed.includes(operation)) {
+    throw badInput(
+      `Column "${column}" has an unsupported SQL type "${rawType || 'unknown'}": ` +
+        `only ${allowed.join(' and ')} are allowed ` +
+        '(fully filterable types are numeric, DATE/TIMESTAMP, VARCHAR and BOOLEAN).',
+    );
+  }
   if (!allowed.includes(operation)) {
     throw badInput(
       `Operation ${operation} is not allowed on column "${column}" of type ${sqlType} (${family}). ` +
@@ -937,7 +954,9 @@ export {
   FILTER_OPERATIONS,
   FILTER_CONNECTORS,
   ALLOWED_OPERATIONS,
+  normalizeSqlType,
   sqlTypeFamily,
+  isIntegerSqlType,
   collectFilterVariables,
   treeToSQL,
   buildWhere,

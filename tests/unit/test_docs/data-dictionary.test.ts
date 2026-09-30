@@ -26,6 +26,7 @@ interface FieldFixture {
   name: string;
   label: string;
   sqlType: string;
+  typeFamily: string;
   isCategorical: boolean;
   isPrimaryKey: boolean;
   parentName: string | null;
@@ -44,6 +45,7 @@ function field(name: string, overrides: Partial<FieldFixture> = {}): FieldFixtur
     name,
     label: name,
     sqlType: 'VARCHAR',
+    typeFamily: 'TEXT',
     isCategorical: false,
     isPrimaryKey: false,
     parentName: null,
@@ -59,7 +61,13 @@ function field(name: string, overrides: Partial<FieldFixture> = {}): FieldFixtur
 }
 
 const TRADE_FIELDS: FieldFixture[] = [
-  field('value', { sqlType: 'DOUBLE', family: 'Commerce', unit: '€', defaultAggregation: 'SUM' }),
+  field('value', {
+    sqlType: 'DOUBLE',
+    typeFamily: 'NUMBER',
+    family: 'Commerce',
+    unit: '€',
+    defaultAggregation: 'SUM',
+  }),
   field('nc6', {
     family: 'Nomenclature',
     isCategorical: true,
@@ -186,6 +194,12 @@ describe('renderSchemaPage', () => {
     expect(page.indexOf('### Commerce')).toBeLessThan(page.indexOf('### Nomenclature'));
     expect(page).toContain('| ↳ `nc8_libelle_fr` |');
     expect(page.indexOf('| `nc8` |')).toBeLessThan(page.indexOf('| ↳ `nc8_libelle_en` |'));
+  });
+
+  /** The type family the API derives from the SQL type sits next to it. */
+  test('shows the type family next to the SQL type', () => {
+    expect(page).toContain('| Name | Label | SQL type | Type family | Unit |');
+    expect(page).toContain('| `value` | value | `DOUBLE` | `NUMBER` | € |');
   });
 
   /** A description cannot break its table row. */
