@@ -49,7 +49,9 @@ const buildApp = (
       maxConcurrentPerIp: 2,
       maxConcurrentTotal: 2,
       timeoutMs: 30_000,
+      transferTimeoutMs: 30_000,
       tmpDir,
+      tmpMinFreeMb: 0,
       ...overrides,
     },
   });
@@ -113,6 +115,40 @@ const sourceRows = async (sql: string): Promise<Record<string, unknown>[]> => {
     return await conn.all(sql);
   } finally {
     pool.release(conn);
+  }
+};
+
+/**
+ * Reads the embedded key/value metadata and the codec of a Parquet file.
+ *
+ * @param buffer - Parquet file content.
+ * @returns The key/value pairs (UTF-8 decoded) and the distinct compression codecs.
+ */
+const readParquetMetadata = async (
+  buffer: Buffer,
+): Promise<{ kv: Record<string, string>; codecs: string[] }> => {
+  const file = path.join(tmpDir, `kv-${Date.now()}.parquet`);
+  fs.writeFileSync(file, buffer);
+  const instance = await DuckDBInstance.create(':memory:');
+  const conn = await instance.connect();
+  try {
+    const target = file.split(path.sep).join('/');
+    const pairs = await (
+      await conn.run(
+        `SELECT decode(key) AS k, decode(value) AS v FROM parquet_kv_metadata('${target}')`,
+      )
+    ).getRowObjectsJson();
+    const codecs = await (
+      await conn.run(`SELECT DISTINCT compression AS c FROM parquet_metadata('${target}')`)
+    ).getRowObjectsJson();
+    return {
+      kv: Object.fromEntries(pairs.map((row) => [String(row['k']), String(row['v'])])),
+      codecs: codecs.map((row) => String(row['c'])),
+    };
+  } finally {
+    conn.closeSync();
+    instance.closeSync();
+    fs.rmSync(file, { force: true });
   }
 };
 
@@ -684,7 +720,9 @@ describe('GET /api/export — errors', () => {
         maxConcurrentPerIp: 2,
         maxConcurrentTotal: 2,
         timeoutMs: 30_000,
+        transferTimeoutMs: 30_000,
         tmpDir,
+        tmpMinFreeMb: 0,
       },
     });
     const query = { catalog: 'default', schema: 'geography', format: 'csv', limit: '10' };
@@ -945,5 +983,223 @@ describe('POST /api/export', () => {
 
     expect(res.status).toBe(415);
     expect(res.body.error).toBe('Unsupported media type');
+  });
+});
+
+// ─── Métadonnées embarquées, options de format et garde-fous de transfert ────
+
+describe('/api/export — embedded metadata', () => {
+  /**
+   * Reads the metadata and dataset_metadata tables of the geography schema.
+   *
+   * @returns The metadata rows (snake_case) and the single dataset row.
+   */
+  const sourceDescription = async (): Promise<{
+    columns: Record<string, unknown>[];
+    dataset: Record<string, unknown>;
+  }> => {
+    const columns = await sourceRows('SELECT * FROM "default".geography.metadata');
+    const [dataset] = await sourceRows('SELECT * FROM "default".geography.dataset_metadata');
+    return { columns, dataset };
+  };
+
+  test('parquet carries database.metadata and database.dataset, read back by DuckDB', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'parquet',
+    });
+    expect(res.status).toBe(200);
+
+    const { kv } = await readParquetMetadata(res.body as Buffer);
+    expect(
+      Object.keys(kv)
+        .filter((k) => k.startsWith('database.'))
+        .sort(),
+    ).toEqual(['database.dataset', 'database.metadata']);
+
+    const source = await sourceDescription();
+    const rows = JSON.parse(kv['database.metadata']) as Record<string, unknown>[];
+    expect(rows.map((r) => r['name']).sort()).toEqual(source.columns.map((c) => c['name']).sort());
+    for (const row of rows) {
+      const origin = source.columns.find((c) => c['name'] === row['name'])!;
+      expect(row['label']).toBe(origin['label']);
+      expect(row['sqlType']).toBe(origin['sql_type']);
+      expect(row['unit']).toBe(origin['unit'] ?? null);
+      expect(row['isPrimaryKey']).toBe(Boolean(origin['is_primary_key']));
+      expect(row['typeFamily']).toEqual(expect.any(String));
+    }
+    expect(rows.find((r) => r['name'] === 'population')!['typeFamily']).toBe('INTEGER');
+
+    const dataset = JSON.parse(kv['database.dataset']) as Record<string, unknown>;
+    expect(dataset['label']).toBe(source.dataset['label'] ?? null);
+    expect(dataset['schemaVersion']).toBe(Number(source.dataset['schema_version']));
+    expect(dataset['clusterBy']).toEqual(expect.any(Array));
+  });
+
+  test('a projected parquet describes the exported columns only, in the requested order', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'parquet',
+      fields: 'population,region',
+    });
+
+    const { kv } = await readParquetMetadata(res.body as Buffer);
+    const rows = JSON.parse(kv['database.metadata']) as Record<string, unknown>[];
+    expect(rows.map((r) => r['name'])).toEqual(['population', 'region']);
+  });
+
+  test('arrow carries per-field metadata and the same two schema pairs', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'arrow',
+    });
+    expect(res.status).toBe(200);
+
+    const table = tableFromIPC(new Uint8Array(res.body as Buffer));
+    const source = await sourceDescription();
+    for (const field of table.schema.fields) {
+      const origin = source.columns.find((c) => c['name'] === field.name)!;
+      expect(field.metadata.get('label')).toBe(origin['label']);
+      expect(field.metadata.get('isPrimaryKey')).toBe(String(Boolean(origin['is_primary_key'])));
+      expect(field.metadata.get('unit') ?? null).toBe(origin['unit'] ?? null);
+      expect(field.metadata.get('labelFor') ?? null).toBe(origin['label_for'] ?? null);
+    }
+
+    const rows = JSON.parse(table.schema.metadata.get('database.metadata')!) as unknown[];
+    expect(rows).toHaveLength(source.columns.length);
+    expect(JSON.parse(table.schema.metadata.get('database.dataset')!)).toMatchObject({
+      schemaVersion: Number(source.dataset['schema_version']),
+    });
+  });
+
+  test('csv stays free of embedded metadata', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'csv',
+    });
+
+    expect((res.body as Buffer).toString('utf8')).not.toContain('database.');
+  });
+});
+
+describe('/api/export — format options', () => {
+  test('bom=1 prefixes the csv with the UTF-8 mark and Content-Length counts it', async () => {
+    const { app } = buildApp();
+    const query = { catalog: 'default', schema: 'geography', format: 'csv' };
+    const plain = await exportRequest(app, query);
+    const withBom = await exportRequest(app, { ...query, bom: '1' });
+
+    expect(withBom.status).toBe(200);
+    const body = withBom.body as Buffer;
+    expect([...body.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+    expect(body.subarray(3).equals(plain.body as Buffer)).toBe(true);
+    expect(withBom.headers['content-length']).toBe(String(body.length));
+    expect((plain.body as Buffer)[0]).not.toBe(0xef);
+  });
+
+  test('compression=zstd is honoured and the file is read back by DuckDB', async () => {
+    const { app } = buildApp();
+    const query = { catalog: 'default', schema: 'geography', format: 'parquet' };
+    const zstd = await exportRequest(app, { ...query, compression: 'zstd' });
+    const gzip = await exportRequest(app, { ...query, compression: 'gzip' });
+    const dflt = await exportRequest(app, query);
+
+    expect((await readParquetMetadata(zstd.body as Buffer)).codecs).toEqual(['ZSTD']);
+    expect((await readParquetMetadata(gzip.body as Buffer)).codecs).toEqual(['GZIP']);
+    expect((await readParquetMetadata(dflt.body as Buffer)).codecs).toEqual(['SNAPPY']);
+    const { rows } = await describeParquet(zstd.body as Buffer);
+    const [{ n }] = await sourceRows(`SELECT COUNT(*)::INTEGER AS n FROM ${GEOGRAPHY_TABLE}`);
+    expect(rows).toBe(n);
+  });
+
+  test.each([
+    [{ format: 'parquet', bom: '1' }, 'only applies to format=csv'],
+    [{ format: 'csv', compression: 'zstd' }, 'only applies to format=parquet'],
+    [{ format: 'parquet', compression: 'lz4' }, 'Unknown compression'],
+    [{ format: 'csv', bom: 'maybe' }, 'must be 1, 0, true or false'],
+  ])('400 for %j', async (query, message) => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .get('/api/export')
+      .query({ catalog: 'default', schema: 'geography', ...query });
+
+    expect(res.status).toBe(400);
+    expect(res.body.detail).toContain(message);
+  });
+
+  test('the POST body takes the options too', async () => {
+    const { app } = buildApp();
+    const res = await exportPost(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'csv',
+      bom: true,
+    });
+
+    expect((res.body as Buffer)[0]).toBe(0xef);
+  });
+});
+
+describe('/api/export — transfer guards', () => {
+  test.each([
+    ['csv', {}],
+    ['parquet', {}],
+    ['parquet', { compression: 'zstd' }],
+  ])('Content-Length is the exact size of the %s body %j', async (format, extra) => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format,
+      ...extra,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-length']).toBe(String((res.body as Buffer).length));
+    expect(res.headers['transfer-encoding']).toBeUndefined();
+  });
+
+  test('arrow is streamed without a Content-Length', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, { catalog: 'default', schema: 'geography' });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-length']).toBeUndefined();
+  });
+
+  test('the pool connection is back once a csv/parquet response is complete', async () => {
+    const pool = databaseManager.getPool('default');
+    const before = pool.getStats().using;
+    const { app } = buildApp();
+    await exportRequest(app, { catalog: 'default', schema: 'geography', format: 'parquet' });
+
+    expect(pool.getStats().using).toBe(before);
+  });
+
+  test('507 when the temporary volume has less free space than EXPORT.TMP_MIN_FREE_MB', async () => {
+    const { app } = buildApp({ tmpMinFreeMb: Number.MAX_SAFE_INTEGER });
+    const query = { catalog: 'default', schema: 'geography' };
+
+    for (const format of ['csv', 'parquet']) {
+      const res = await request(app)
+        .get('/api/export')
+        .query({ ...query, format });
+      expect(res.status).toBe(507);
+      expect(res.body.error).toBe('Insufficient storage');
+      expect(res.body.detail).toContain('EXPORT.TMP_MIN_FREE_MB');
+      expect(res.headers['content-disposition']).toBeUndefined();
+    }
+    // Arrow n'utilise aucun fichier temporaire : pas concerné
+    const arrow = await exportRequest(app, query);
+    expect(arrow.status).toBe(200);
+    expect(fs.readdirSync(tmpDir).filter((entry) => entry.startsWith('exp-'))).toEqual([]);
   });
 });

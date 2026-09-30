@@ -186,10 +186,14 @@ interface ExportConfig {
   MAX_CONCURRENT_PER_IP: number | string;
   /** Concurrent exports allowed across all clients (each holds a pool connection). */
   MAX_CONCURRENT_TOTAL: number | string;
-  /** Maximum duration of one export, in milliseconds. */
+  /** Budget of one export until its first byte (query and COPY), in milliseconds. */
   TIMEOUT_MS: number | string;
+  /** Budget of the transfer, from the first byte to the end, in milliseconds. */
+  TRANSFER_TIMEOUT_MS?: number | string;
   /** Directory of the csv/parquet temporary files; empty uses the system tmp dir. */
   TMP_DIR?: string;
+  /** Free space, in MB, the tmp volume must keep for a csv/parquet export (0 disables). */
+  TMP_MIN_FREE_MB?: number | string;
 }
 
 /** Redis configuration — reconnection back-off strategy. */

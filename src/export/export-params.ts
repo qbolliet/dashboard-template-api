@@ -22,6 +22,12 @@ const FORMAT_SPECS: Record<ExportFormat, { contentType: string; extension: strin
   parquet: { contentType: 'application/vnd.apache.parquet', extension: 'parquet' },
 };
 
+/** Parquet compression codecs accepted by the `compression` parameter. */
+const PARQUET_COMPRESSIONS = ['snappy', 'zstd', 'gzip'] as const;
+
+/** Parquet compression codec (value of the `compression` parameter). */
+type ParquetCompression = (typeof PARQUET_COMPRESSIONS)[number];
+
 // ─── Réglages ────────────────────────────────────────────────────────────────
 
 /** Resolved guards of the export endpoint. */
@@ -29,8 +35,13 @@ interface ExportSettings {
   maxRows: number;
   maxConcurrentPerIp: number;
   maxConcurrentTotal: number;
+  /** Budget until the first byte: probe and COPY (csv/parquet), stream opening (arrow). */
   timeoutMs: number;
+  /** Budget from the first byte to the end: the transfer, which a slow client stretches. */
+  transferTimeoutMs: number;
   tmpDir: string;
+  /** Free space, in MB, the tmpDir volume must keep for a csv/parquet export; 0 disables the check. */
+  tmpMinFreeMb: number;
 }
 
 // Valeurs par défaut, identiques à config/api.yaml
@@ -39,6 +50,8 @@ const DEFAULT_SETTINGS: Omit<ExportSettings, 'tmpDir'> = {
   maxConcurrentPerIp: 2,
   maxConcurrentTotal: 2,
   timeoutMs: 120_000,
+  transferTimeoutMs: 600_000,
+  tmpMinFreeMb: 1024,
 };
 
 /**
@@ -52,6 +65,18 @@ const DEFAULT_SETTINGS: Omit<ExportSettings, 'tmpDir'> = {
 function positiveInt(raw: unknown, fallback: number): number {
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * Coerces a configuration value into a non-negative integer.
+ *
+ * @param raw - Value read from the configuration (number or env string).
+ * @param fallback - Value used when raw is missing or invalid.
+ * @returns A non-negative integer (0 is a valid value).
+ */
+function nonNegativeInt(raw: unknown, fallback: number): number {
+  const value = Number(raw);
+  return raw !== '' && raw !== null && Number.isInteger(value) && value >= 0 ? value : fallback;
 }
 
 /**
@@ -70,6 +95,8 @@ function loadExportSettings(raw: ExportConfig | undefined = config.API.EXPORT): 
     ),
     maxConcurrentTotal: positiveInt(raw?.MAX_CONCURRENT_TOTAL, DEFAULT_SETTINGS.maxConcurrentTotal),
     timeoutMs: positiveInt(raw?.TIMEOUT_MS, DEFAULT_SETTINGS.timeoutMs),
+    transferTimeoutMs: positiveInt(raw?.TRANSFER_TIMEOUT_MS, DEFAULT_SETTINGS.transferTimeoutMs),
+    tmpMinFreeMb: nonNegativeInt(raw?.TMP_MIN_FREE_MB, DEFAULT_SETTINGS.tmpMinFreeMb),
     tmpDir: tmpDir || path.join(os.tmpdir(), 'dashboard-api-export'),
   };
 }
@@ -126,6 +153,10 @@ interface ExportParams {
   explicitLimit: boolean;
   /** Resume cursor (X-Next-After of the previous page), decoded once the order is known. */
   after: string | null;
+  /** csv only: prefix the file with a UTF-8 byte order mark (Excel on Windows). */
+  bom: boolean;
+  /** parquet only: compression codec of the file. */
+  compression: ParquetCompression;
 }
 
 // Paramètres reconnus : tout autre nom est refusé (une faute de frappe sur
@@ -139,6 +170,8 @@ const KNOWN_PARAMETERS = new Set([
   'format',
   'limit',
   'after',
+  'bom',
+  'compression',
 ]);
 
 /**
@@ -283,6 +316,21 @@ function readLimit(input: Record<string, unknown>, source: ExportParamSource): n
 }
 
 /**
+ * Reads the `bom` flag: `1` / `true` / `0` / `false` or, in a JSON body, a boolean.
+ *
+ * @param input - Parsed query string or JSON body.
+ * @returns Whether the flag is set; false when absent.
+ * @throws {ExportHttpError} 400 on any other value.
+ */
+function readBom(input: Record<string, unknown>): boolean {
+  if (typeof input.bom === 'boolean') return input.bom;
+  const raw = readString(input, 'bom')?.toLowerCase() ?? null;
+  if (raw === null || raw === '0' || raw === 'false') return false;
+  if (raw === '1' || raw === 'true') return true;
+  throw badParameter(`Parameter "bom" must be 1, 0, true or false, got "${raw}".`);
+}
+
+/**
  * Validates the parameters of an export request, whatever its transport.
  *
  * GET passes its query string, POST its JSON body: same names, rules and
@@ -333,6 +381,23 @@ function parseExportParams(
   // Plafond de lignes : jamais au-delà de MAX_ROWS ; au-delà, la route signale
   // la troncature (413 sans `limit`, X-Truncated avec)
   const requestedLimit = readLimit(input, source);
+
+  // Options propres à un format : refusées ailleurs plutôt qu'ignorées
+  const bom = readBom(input);
+  if (bom && formatRaw !== 'csv') {
+    throw badParameter('Parameter "bom" only applies to format=csv.');
+  }
+  const compressionRaw = readString(input, 'compression')?.toLowerCase() ?? null;
+  if (compressionRaw !== null) {
+    if (formatRaw !== 'parquet') {
+      throw badParameter('Parameter "compression" only applies to format=parquet.');
+    }
+    if (!(PARQUET_COMPRESSIONS as readonly string[]).includes(compressionRaw)) {
+      throw badParameter(
+        `Unknown compression "${compressionRaw}". Accepted: ${PARQUET_COMPRESSIONS.join(', ')}.`,
+      );
+    }
+  }
   const sortRaw = readList(input, 'sort', source);
 
   return {
@@ -346,8 +411,17 @@ function parseExportParams(
     limit: Math.min(requestedLimit ?? settings.maxRows, settings.maxRows),
     explicitLimit: requestedLimit !== null,
     after: readString(input, 'after'),
+    bom,
+    compression: (compressionRaw ?? 'snappy') as ParquetCompression,
   };
 }
 
-export { EXPORT_FORMATS, FORMAT_SPECS, ExportHttpError, loadExportSettings, parseExportParams };
-export type { ExportFormat, ExportParamSource, ExportParams, ExportSettings };
+export {
+  EXPORT_FORMATS,
+  FORMAT_SPECS,
+  PARQUET_COMPRESSIONS,
+  ExportHttpError,
+  loadExportSettings,
+  parseExportParams,
+};
+export type { ExportFormat, ExportParamSource, ExportParams, ExportSettings, ParquetCompression };

@@ -17,6 +17,7 @@ import {
 } from './after-cursor.js';
 import type { KeyColumn, SqlFragment } from './after-cursor.js';
 import { ExportHttpError } from './export-params.js';
+import type { ExportDescription } from './embedded-metadata.js';
 import type { ExportParams } from './export-params.js';
 
 // ─── Cible et requête d'un export ────────────────────────────────────────────
@@ -43,6 +44,8 @@ interface ExportQuery {
    * @returns The statement, one row of order.length VARCHAR columns.
    */
   boundary: (offset: number) => SqlFragment;
+  /** Metadata of the exported columns and of the dataset, embedded in parquet and arrow files. */
+  description: ExportDescription;
 }
 
 /**
@@ -130,7 +133,12 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
 
     // Colonnes projetées contrôlées contre la table metadata
     const columns = await loaders.catalogMetadata.load({ catalog, schema });
-    assertColumns(params.fields ?? [], indexMetadataByName(columns), 'field');
+    const byName = indexMetadataByName(columns);
+    assertColumns(params.fields ?? [], byName, 'field');
+
+    // Description embarquée dans le fichier : colonnes exportées, dans l'ordre demandé
+    const dataset = await loaders.datasetInfo.load({ catalog, schema });
+    const exported = params.fields ? params.fields.map((f) => byName.get(f)!) : columns;
 
     // Arbre de filtres compilé contre les métadonnées du schéma cible
     const where = await compileFilterTree(params.filters, (names) =>
@@ -166,6 +174,7 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
       sql: `SELECT ${builder.buildSelectClause(params.fields)} ${from} ${orderBy} LIMIT ${params.limit}`,
       params: whereParams,
       order,
+      description: { columns: exported, dataset },
       count: { sql: `SELECT count(*) AS total ${from}`, params: whereParams },
       // Sous-requête : un alias « CAST(c AS VARCHAR) AS c » masquerait la
       // colonne dans l'ORDER BY, qui trierait alors le texte

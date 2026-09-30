@@ -25,6 +25,9 @@ import {
 } from 'apache-arrow';
 import type { Data } from 'apache-arrow';
 import { DuckDBTypeId } from '@duckdb/node-api';
+import { embeddedMetadata } from './embedded-metadata.js';
+import type { ExportDescription } from './embedded-metadata.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 import type {
   DuckDBDataChunk,
   DuckDBDateValue,
@@ -46,12 +49,23 @@ import type {
  *
  * Every type of the database specification keeps its exact type (UBIGINT
  * stays Uint64, FLOAT stays Float32, TIMESTAMP stays a microsecond timestamp).
- * Types outside the specification (HUGEINT, LIST, STRUCT, INTERVAL…) are
- * written as Utf8 through their string form.
+ * HUGEINT and UHUGEINT are written as Decimal128(38, 0): the 128-bit words are
+ * exact, and pyarrow / apache-arrow read them back as integers of that width.
+ * Other types outside the specification (LIST, STRUCT, INTERVAL…) are written
+ * as Utf8 through their string form.
  */
 
 /** How the values of one column are packed into an Arrow buffer. */
-type ColumnKind = 'int' | 'bigint' | 'float' | 'bool' | 'date' | 'timestamp' | 'decimal' | 'utf8';
+type ColumnKind =
+  | 'int'
+  | 'bigint'
+  | 'float'
+  | 'bool'
+  | 'date'
+  | 'timestamp'
+  | 'decimal'
+  | 'hugeint'
+  | 'utf8';
 
 /** Arrow type of one column plus the way its values are packed. */
 interface ColumnPlan {
@@ -66,6 +80,10 @@ interface ArrowExportLayout {
   schema: Schema;
   plans: ColumnPlan[];
 }
+
+// Précision maximale d'un Decimal128 : 38 chiffres, soit |v| < 10^38
+const HUGEINT_PRECISION = 38;
+const HUGEINT_BOUND = 10n ** BigInt(HUGEINT_PRECISION);
 
 /**
  * Chooses the Arrow type and the packing of one DuckDB column type.
@@ -102,6 +120,9 @@ function planColumn(duckType: DuckDBType): ColumnPlan {
       const { width, scale } = duckType as DuckDBDecimalType;
       return { type: new Decimal(scale, width, 128), kind: 'decimal' };
     }
+    case DuckDBTypeId.HUGEINT:
+    case DuckDBTypeId.UHUGEINT:
+      return { type: new Decimal(0, HUGEINT_PRECISION, 128), kind: 'hugeint' };
     case DuckDBTypeId.DATE:
       return { type: new DateDay(), kind: 'date' };
     case DuckDBTypeId.TIMESTAMP:
@@ -141,22 +162,54 @@ function planColumn(duckType: DuckDBType): ColumnPlan {
 }
 
 /**
+ * Arrow metadata of one field: the display contract of the column.
+ *
+ * Absent values are left out rather than written empty, so that a reader
+ * tests for the key. `isPrimaryKey` is always present.
+ *
+ * @param column - Metadata row of the column.
+ * @returns The key/value pairs of the field.
+ */
+function fieldMetadata(column: FieldMetadata): Map<string, string> {
+  const entries: [string, string | null][] = [
+    ['label', column.label],
+    ['unit', column.unit],
+    ['displayFormat', column.displayFormat],
+    ['description', column.description],
+    ['isPrimaryKey', String(column.isPrimaryKey)],
+    ['labelFor', column.labelFor],
+  ];
+  return new Map(entries.filter((e): e is [string, string] => e[1] !== null));
+}
+
+/**
  * Builds the Arrow schema of an export from the DuckDB result columns.
  *
  * Every field is nullable: the fact table declares no NOT NULL constraint
- * the API could rely on.
+ * the API could rely on. With a description, each field carries its metadata
+ * (see {@link fieldMetadata}) and the schema carries the embedded
+ * `database.metadata` / `database.dataset` pairs shared with parquet.
  *
  * @param names - Column names of the DuckDB result.
  * @param types - Column types of the DuckDB result, aligned with names.
+ * @param description - Metadata of the exported columns and of the dataset.
  * @returns The Arrow schema and the packing plan of each column.
  */
 function buildArrowLayout(
   names: readonly string[],
   types: readonly DuckDBType[],
+  description?: ExportDescription,
 ): ArrowExportLayout {
   const plans = types.map(planColumn);
-  const fields = names.map((name, i) => new Field(name, plans[i].type, true));
-  return { schema: new Schema(fields), plans };
+  const byName = new Map(description?.columns.map((c) => [c.name, c]));
+  const fields = names.map((name, i) => {
+    const column = byName.get(name);
+    return new Field(name, plans[i].type, true, column ? fieldMetadata(column) : null);
+  });
+  const schemaMetadata = description
+    ? new Map(Object.entries(embeddedMetadata(description)))
+    : null;
+  return { schema: new Schema(fields, schemaMetadata), plans };
 }
 
 // ─── Remplissage des buffers ─────────────────────────────────────────────────
@@ -210,6 +263,28 @@ function writeDecimal128(words: Uint32Array, index: number, scaled: bigint): voi
     words[index * 4 + w] = Number(unsigned & 0xffffffffn);
     unsigned >>= 32n;
   }
+}
+
+/**
+ * Checks that a HUGEINT / UHUGEINT value fits a Decimal128(38, 0).
+ *
+ * A HUGEINT reaches ±1.7e38 and a UHUGEINT 3.4e38, beyond the 38 digits of the
+ * Arrow type (and a UHUGEINT above 2^127 would wrap negative in two's
+ * complement). Silently writing them would corrupt the column, so the export
+ * fails: the stream ends without its end marker, the signal of an error.
+ *
+ * @param value - Value read from the DuckDB vector.
+ * @returns The same value.
+ * @throws {RangeError} When the value needs more than 38 digits.
+ */
+function checkedHugeint(value: bigint): bigint {
+  if (value >= HUGEINT_BOUND || value <= -HUGEINT_BOUND) {
+    throw new RangeError(
+      `Value ${value} does not fit Decimal128(${HUGEINT_PRECISION}, 0) (more than ` +
+        `${HUGEINT_PRECISION} digits); leave this column out with "fields", or export as csv`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -303,6 +378,12 @@ function packColumn(vector: DuckDBVector, length: number, plan: ColumnPlan): Dat
       const words = new Uint32Array(length * 4);
       data = words;
       onValue = (value, i) => writeDecimal128(words, i, (value as DuckDBDecimalValue).value);
+      break;
+    }
+    case 'hugeint': {
+      const words = new Uint32Array(length * 4);
+      data = words;
+      onValue = (value, i) => writeDecimal128(words, i, checkedHugeint(value as bigint));
       break;
     }
   }

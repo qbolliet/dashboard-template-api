@@ -103,16 +103,20 @@ API:
     MAX_CONCURRENT_PER_IP: ${EXPORT_MAX_CONCURRENT_PER_IP:-2}
     MAX_CONCURRENT_TOTAL: ${EXPORT_MAX_CONCURRENT_TOTAL:-2}
     TIMEOUT_MS: ${EXPORT_TIMEOUT_MS:-120000}
+    TRANSFER_TIMEOUT_MS: ${EXPORT_TRANSFER_TIMEOUT_MS:-600000}
     TMP_DIR: ${EXPORT_TMP_DIR:-}
+    TMP_MIN_FREE_MB: ${EXPORT_TMP_MIN_FREE_MB:-1024}
 ```
 
-| Key                     | Description                                                                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `MAX_ROWS`              | Row ceiling of one response; a larger `limit` is capped. Beyond it: `413` without `limit`, `X-Truncated` + `X-Next-After` with it. |
-| `MAX_CONCURRENT_PER_IP` | In-flight exports per client IP (`429` beyond).                                                                                    |
-| `MAX_CONCURRENT_TOTAL`  | In-flight exports overall. Keep it below `DATABASE.POOL.MAX_CONNECTIONS` so that GraphQL keeps connections of its own.             |
-| `TIMEOUT_MS`            | Maximum export duration: the query is interrupted and the stream ended.                                                            |
-| `TMP_DIR`               | Directory of the csv/parquet temporary files; empty = `<system tmp>/dashboard-api-export`.                                         |
+| Key                     | Description                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MAX_ROWS`              | Row ceiling of one response; a larger `limit` is capped. Beyond it: `413` without `limit`, `X-Truncated` + `X-Next-After` with it.         |
+| `MAX_CONCURRENT_PER_IP` | In-flight exports per client IP (`429` beyond).                                                                                            |
+| `MAX_CONCURRENT_TOTAL`  | In-flight exports overall. Keep it below `DATABASE.POOL.MAX_CONNECTIONS` so that GraphQL keeps connections of its own.                     |
+| `TIMEOUT_MS`            | Budget until the first byte (count, query and COPY; stream opening for Arrow): the query is interrupted, `504`.                            |
+| `TRANSFER_TIMEOUT_MS`   | Budget from the first byte to the end. A client too slow to read the file has its connection closed. For Arrow it covers the whole stream. |
+| `TMP_DIR`               | Directory of the csv/parquet temporary files; empty = `<system tmp>/dashboard-api-export`.                                                 |
+| `TMP_MIN_FREE_MB`       | Free space the `TMP_DIR` volume must keep; below it a csv/parquet export is refused with `507`. `0` disables the check.                    |
 
 ## Timeouts (ms)
 

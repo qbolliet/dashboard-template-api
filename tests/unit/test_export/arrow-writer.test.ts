@@ -17,6 +17,8 @@ import {
   chunkToRecordBatch,
   emptyRecordBatch,
 } from '../../../src/export/arrow-writer.js';
+import type { ExportDescription } from '../../../src/export/embedded-metadata.js';
+import type { FieldMetadata } from '../../../src/utils/metadata-mapping.js';
 
 let instance: DuckDBInstance;
 let connection: DuckDBConnection;
@@ -38,9 +40,12 @@ afterAll(() => {
  * @returns The Arrow table read back, and the number of batches written.
  */
 // Aller-retour complet : chunks DuckDB → RecordBatch → flux IPC → Table
-const roundTrip = async (sql: string): Promise<{ table: Table; batches: number }> => {
+const roundTrip = async (
+  sql: string,
+  description?: ExportDescription,
+): Promise<{ table: Table; batches: number }> => {
   const result = await connection.stream(sql);
-  const layout = buildArrowLayout(result.columnNames(), result.columnTypes());
+  const layout = buildArrowLayout(result.columnNames(), result.columnTypes(), description);
   const batches: RecordBatch[] = [];
   for await (const chunk of result) {
     if (chunk.rowCount > 0) batches.push(chunkToRecordBatch(chunk, layout));
@@ -59,11 +64,12 @@ const ALL_TYPES = `
      DATE '2024-03-05', TIMESTAMP '2024-03-05 10:11:12.345678',
      TIMESTAMP_S '2024-03-05 10:11:12', TIMESTAMP_MS '2024-03-05 10:11:12.345',
      TIMESTAMP_NS '2024-03-05 10:11:12.123456789', TIMESTAMPTZ '2024-03-05 10:11:12+00',
-     TRUE, 'Côte-d''Or', 170141183460469231731687303715884105727::HUGEINT),
+     TRUE, 'Côte-d''Or', 99999999999999999999999999999999999999::HUGEINT,
+     -99999999999999999999999999999999999999::HUGEINT, 12345678901234567890123456789::UHUGEINT),
     (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
   ) t(ti, si, i, bi, uti, usi, ui, ubi, f, d, dec, wide_dec, dt, ts, ts_s, ts_ms, ts_ns, tstz,
-      b, s, huge)
+      b, s, huge, neg_huge, uhuge)
 `;
 
 describe('buildArrowLayout / chunkToRecordBatch', () => {
@@ -93,8 +99,10 @@ describe('buildArrowLayout / chunkToRecordBatch', () => {
       tstz: 'Timestamp<MICROSECOND, UTC>',
       b: 'Bool',
       s: 'Utf8',
-      // Hors spécification : repli texte
-      huge: 'Utf8',
+      // Entiers 128 bits : Decimal128(38, 0)
+      huge: 'Decimal[38e0]',
+      neg_huge: 'Decimal[38e0]',
+      uhuge: 'Decimal[38e0]',
     });
 
     // Précision et échelle vérifiées sur le type lui-même
@@ -102,6 +110,9 @@ describe('buildArrowLayout / chunkToRecordBatch', () => {
       table.schema.fields.find((f) => f.name === name)!.type as never;
     expect(decimal('dec')).toMatchObject({ precision: 10, scale: 3, bitWidth: 128 });
     expect(decimal('wide_dec')).toMatchObject({ precision: 38, scale: 2, bitWidth: 128 });
+    for (const name of ['huge', 'neg_huge', 'uhuge']) {
+      expect(decimal(name)).toMatchObject({ precision: 38, scale: 0, bitWidth: 128 });
+    }
   });
 
   test('preserves the values, including 64-bit extremes', async () => {
@@ -117,7 +128,6 @@ describe('buildArrowLayout / chunkToRecordBatch', () => {
     expect(row['d']).toBe(3.25);
     expect(row['b']).toBe(true);
     expect(row['s']).toBe("Côte-d'Or");
-    expect(row['huge']).toBe('170141183460469231731687303715884105727');
 
     // Dates et horodatages : lecture brute des entiers stockés (jours, µs, s, ms, ns)
     const raw = (name: string): unknown => table.getChild(name)!.data[0].values[0];
@@ -140,6 +150,31 @@ describe('buildArrowLayout / chunkToRecordBatch', () => {
 
     expect(words('dec')).toBe(-12345n);
     expect(words('wide_dec')).toBe(1234567890123456789012n);
+  });
+
+  test('writes HUGEINT and UHUGEINT as exact 128-bit integers, negatives included', async () => {
+    const { table } = await roundTrip(ALL_TYPES);
+    const words = (name: string): bigint => {
+      const values = table.getChild(name)!.data[0].values as Uint32Array;
+      let v = 0n;
+      for (let w = 3; w >= 0; w--) v = (v << 32n) | BigInt(values[w]);
+      return BigInt.asIntN(128, v);
+    };
+
+    expect(words('huge')).toBe(10n ** 38n - 1n);
+    expect(words('neg_huge')).toBe(-(10n ** 38n - 1n));
+    expect(words('uhuge')).toBe(12345678901234567890123456789n);
+  });
+
+  test.each([
+    ['HUGEINT above 10^38', '170141183460469231731687303715884105727::HUGEINT'],
+    ['HUGEINT below -10^38', '(-170141183460469231731687303715884105727)::HUGEINT'],
+    [
+      'UHUGEINT above 2^127 (would wrap negative)',
+      '340282366920938463463374607431768211455::UHUGEINT',
+    ],
+  ])('refuses a %s rather than writing a corrupt Decimal128', async (_label, literal) => {
+    await expect(roundTrip(`SELECT ${literal} AS v`)).rejects.toThrow(RangeError);
   });
 
   test('writes NULL through the validity bitmap for every type', async () => {
@@ -170,5 +205,112 @@ describe('buildArrowLayout / chunkToRecordBatch', () => {
       'a:Int32',
       'b:Utf8',
     ]);
+  });
+});
+
+// ─── Métadonnées embarquées ──────────────────────────────────────────────────
+
+/**
+ * Builds a metadata row, the unset fields being null.
+ *
+ * @param fields - Fields to override.
+ * @returns A complete FieldMetadata.
+ */
+const column = (fields: Partial<FieldMetadata> & { name: string }): FieldMetadata => ({
+  label: fields.name,
+  sqlType: 'VARCHAR',
+  isPrimaryKey: false,
+  isCategorical: false,
+  parentName: null,
+  labelFor: null,
+  labelFields: [],
+  unit: null,
+  displayFormat: null,
+  family: null,
+  description: null,
+  defaultAggregation: null,
+  ...fields,
+});
+
+const DESCRIPTION: ExportDescription = {
+  columns: [
+    column({
+      name: 'region',
+      label: 'Région',
+      isPrimaryKey: true,
+      labelFields: ['region_libelle'],
+    }),
+    column({ name: 'region_libelle', labelFor: 'region' }),
+    column({
+      name: 'population',
+      label: 'Population',
+      sqlType: 'BIGINT',
+      unit: 'hab.',
+      displayFormat: ',.0f',
+      description: "Population légale (recensement de l'année)",
+    }),
+  ],
+  dataset: {
+    label: 'Géographie',
+    description: null,
+    source: 'INSEE',
+    updatedAt: '2024-05-01T08:00:00Z',
+    schemaVersion: 2,
+    clusterBy: ['region'],
+  },
+};
+
+describe('embedded metadata', () => {
+  const SQL =
+    "SELECT 'A' AS region, 'Alpha' AS region_libelle, 12::BIGINT AS population, 1 AS untouched";
+
+  test('each field carries label, unit, displayFormat, description, isPrimaryKey and labelFor', async () => {
+    const { table } = await roundTrip(SQL, DESCRIPTION);
+    const meta = (name: string): Record<string, string> =>
+      Object.fromEntries(table.schema.fields.find((f) => f.name === name)!.metadata);
+
+    expect(meta('region')).toEqual({ label: 'Région', isPrimaryKey: 'true' });
+    expect(meta('region_libelle')).toEqual({
+      label: 'region_libelle',
+      isPrimaryKey: 'false',
+      labelFor: 'region',
+    });
+    expect(meta('population')).toEqual({
+      label: 'Population',
+      unit: 'hab.',
+      displayFormat: ',.0f',
+      description: "Population légale (recensement de l'année)",
+      isPrimaryKey: 'false',
+    });
+    // Colonne absente de la description : aucune métadonnée
+    expect(meta('untouched')).toEqual({});
+  });
+
+  test('the schema carries the dataset and the column rows as JSON, typeFamily included', async () => {
+    const { table } = await roundTrip(SQL, DESCRIPTION);
+
+    expect(JSON.parse(table.schema.metadata.get('database.dataset')!)).toEqual(DESCRIPTION.dataset);
+    const rows = JSON.parse(table.schema.metadata.get('database.metadata')!) as Record<
+      string,
+      unknown
+    >[];
+    expect(rows.map((r) => r['name'])).toEqual(['region', 'region_libelle', 'population']);
+    expect(rows[2]).toMatchObject({ sqlType: 'BIGINT', typeFamily: 'INTEGER', unit: 'hab.' });
+    expect(rows[0]).toMatchObject({ typeFamily: 'TEXT', labelFields: ['region_libelle'] });
+  });
+
+  test('without a description the schema stays bare', async () => {
+    const { table } = await roundTrip(SQL);
+
+    expect(table.schema.metadata.size).toBe(0);
+    expect(table.schema.fields.every((f) => f.metadata.size === 0)).toBe(true);
+  });
+
+  test('an empty result still carries its metadata', async () => {
+    const { table } = await roundTrip(`${SQL} WHERE false`, DESCRIPTION);
+
+    expect(table.numRows).toBe(0);
+    expect(table.schema.metadata.has('database.dataset')).toBe(true);
+    expect(table.schema.fields[0].metadata.get('label')).toBe('Région');
   });
 });

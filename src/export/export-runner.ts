@@ -12,7 +12,9 @@ import { runInterruptible } from '../db/interrupt.js';
 import type { ConnectionWrapper } from '../db/pool.js';
 import { buildArrowLayout, chunkToRecordBatch, emptyRecordBatch } from './arrow-writer.js';
 import { encodeCursor } from './after-cursor.js';
-import { FORMAT_SPECS } from './export-params.js';
+import { embeddedMetadata } from './embedded-metadata.js';
+import { ExportHttpError, FORMAT_SPECS } from './export-params.js';
+import type { ParquetCompression } from './export-params.js';
 import type { ExportQuery } from './build-export-query.js';
 
 // ─── Contexte d'exécution ────────────────────────────────────────────────────
@@ -20,12 +22,15 @@ import type { ExportQuery } from './build-export-query.js';
 /**
  * Execution of an export on a pool connection.
  *
- * Choices, verified on @duckdb/node-api 1.5.2-r.2 against a READ_ONLY DuckLake
- * catalog:
+ * Choices:
  * - csv / parquet: `COPY (SELECT …) TO '<tmp file>'` — DuckDB writes natively
  *   (parallel, types preserved), `rowsChanged` gives the exact row count for
  *   free, and the file is then streamed to the response. Writing a local file
  *   is allowed: only the catalog is read-only, not the in-memory instance.
+ *   The pool connection is given back as soon as the COPY is done — the
+ *   transfer of a big file to a slow client no longer holds it — and the
+ *   file size becomes the exact `Content-Length`. Parquet embeds the column
+ *   metadata and the dataset description (`KV_METADATA`).
  * - arrow: streamed result (`prepared.stream()`), each 2048-row chunk turned
  *   into a RecordBatch and written as an IPC stream. No temporary file.
  *
@@ -42,9 +47,29 @@ interface ExportRunContext {
   res: Response;
   /** Aborted on timeout or client disconnection; its reason is the error to report. */
   signal: AbortSignal;
-  /** Sends the response headers; rowCount is null when unknown before streaming. */
-  sendHeaders: (rowCount: number | null) => void;
+  /**
+   * Sends the response headers; rowCount is null when unknown before streaming,
+   * contentLength is given when the body is a file of known size. Marks the
+   * start of the transfer, whose budget differs from the query's.
+   */
+  sendHeaders: (rowCount: number | null, contentLength?: number) => void;
+  /**
+   * Gives the pool connection back; idempotent. The runner calls it as soon as
+   * it no longer needs DuckDB, and never uses `connection` afterwards.
+   */
+  releaseConnection: () => void;
 }
+
+/** Format options of a csv / parquet export. */
+interface CopyOptions {
+  /** csv: prefix the file with a UTF-8 byte order mark. */
+  bom?: boolean;
+  /** parquet: compression codec (snappy by default). */
+  compression?: ParquetCompression;
+}
+
+// Marque d'ordre des octets UTF-8 : Excel sous Windows s'en sert pour décoder les accents
+const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 
 // Options CSV : en-tête de colonnes, dates et horodatages au format ISO 8601
 const CSV_COPY_OPTIONS =
@@ -152,17 +177,20 @@ async function probeExport(
  * Serves a csv or parquet export through a temporary file.
  *
  * The file lives in its own directory under tmpDir, removed in `finally` on
- * every path — success, SQL error, timeout, client abort.
+ * every path — success, SQL error, timeout, client abort. The pool connection
+ * is released right after the COPY, before the first byte is sent.
  *
  * @param ctx - Export context.
  * @param format - csv or parquet.
  * @param tmpDir - Root directory of the temporary files.
+ * @param options - Format options (BOM, parquet compression).
  * @returns The number of exported rows.
  */
 async function runCopyExport(
   ctx: ExportRunContext,
   format: 'csv' | 'parquet',
   tmpDir: string,
+  options: CopyOptions = {},
 ): Promise<number> {
   await fs.mkdir(tmpDir, { recursive: true });
   const dir = await fs.mkdtemp(path.join(tmpDir, TMP_PREFIX));
@@ -170,22 +198,82 @@ async function runCopyExport(
     const file = path.join(dir, `export.${FORMAT_SPECS[format].extension}`);
     // Chemin en « / » (accepté par DuckDB sur tous les OS) et échappé
     const target = escapeSqlString(file.split(path.sep).join('/'));
-    const options = format === 'csv' ? CSV_COPY_OPTIONS : 'FORMAT PARQUET';
-    const copySql = `COPY (${ctx.query.sql}) TO '${target}' (${options})`;
+    const copyOptions =
+      format === 'csv' ? CSV_COPY_OPTIONS : parquetCopyOptions(ctx.query, options.compression);
+    const copySql = `COPY (${ctx.query.sql}) TO '${target}' (${copyOptions})`;
 
     const result: DuckDBMaterializedResult = await interruptible(ctx, async () => {
       const prepared = await prepareBound(ctx.connection, copySql, ctx.query.params);
       return prepared.run();
     });
+    // DuckDB n'est plus sollicité : le transfert, lent ou non, ne retient pas la connexion
+    ctx.releaseConnection();
     throwIfAborted(ctx.signal);
 
     const rowCount = Number(result.rowsChanged);
-    ctx.sendHeaders(rowCount);
+    const bom = format === 'csv' && options.bom === true;
+    const { size } = await fs.stat(file);
+    ctx.sendHeaders(rowCount, size + (bom ? UTF8_BOM.length : 0));
+    if (bom) ctx.res.write(UTF8_BOM);
     await pipeline(createReadStream(file), ctx.res, { signal: ctx.signal });
     return rowCount;
   } finally {
     // Nouvelles tentatives : sous Windows le descripteur peut se fermer avec retard
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+}
+
+/**
+ * Builds the option list of a parquet COPY: codec and embedded metadata.
+ *
+ * The metadata travels as `KV_METADATA` string literals (`database.metadata`,
+ * `database.dataset`): they hold no bound value, so they are escaped and
+ * inlined after the query, whose positional parameters stay in order.
+ *
+ * @param query - Export query, carrying the description to embed.
+ * @param compression - Codec, snappy by default.
+ * @returns The text between the parentheses of the COPY options.
+ */
+function parquetCopyOptions(
+  query: ExportQuery,
+  compression: ParquetCompression = 'snappy',
+): string {
+  const pairs = Object.entries(embeddedMetadata(query.description))
+    .map(([key, value]) => `'${escapeSqlString(key)}': '${escapeSqlString(value)}'`)
+    .join(', ');
+  return `FORMAT PARQUET, COMPRESSION ${compression}, KV_METADATA {${pairs}}`;
+}
+
+/**
+ * Refuses a csv/parquet export when the temporary volume is nearly full.
+ *
+ * The COPY writes the whole file before the first byte, so a full disk would
+ * fail mid-COPY with a DuckDB I/O error. The check is a floor on free space,
+ * not a reservation: the size of the file is unknown before the COPY. A
+ * volume whose free space cannot be read (statfs unsupported) lets the export
+ * through: the guard degrades, the export does not.
+ *
+ * @param tmpDir - Root directory of the temporary files.
+ * @param minFreeMb - Free space to preserve, in MB; 0 disables the check.
+ * @throws {ExportHttpError} 507 when the free space is below the threshold.
+ */
+async function assertTmpSpace(tmpDir: string, minFreeMb: number): Promise<void> {
+  if (minFreeMb <= 0) return;
+  await fs.mkdir(tmpDir, { recursive: true });
+  let stats: Awaited<ReturnType<typeof fs.statfs>>;
+  try {
+    stats = await fs.statfs(tmpDir);
+  } catch {
+    return;
+  }
+  const freeMb = Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+  if (freeMb < minFreeMb) {
+    throw new ExportHttpError(
+      507,
+      'Insufficient storage',
+      `The export directory has ${freeMb} MB free, below the ${minFreeMb} MB required ` +
+        '(EXPORT.TMP_MIN_FREE_MB). Retry later, or use format=arrow, which needs no temporary file.',
+    );
   }
 }
 
@@ -206,7 +294,11 @@ async function runArrowExport(ctx: ExportRunContext): Promise<number> {
     const prepared = await prepareBound(ctx.connection, ctx.query.sql, ctx.query.params);
     return prepared.stream();
   });
-  const layout = buildArrowLayout(result.columnNames(), result.columnTypes());
+  const layout = buildArrowLayout(
+    result.columnNames(),
+    result.columnTypes(),
+    ctx.query.description,
+  );
 
   ctx.sendHeaders(null);
   const writer = new RecordBatchStreamWriter();
@@ -277,5 +369,12 @@ async function purgeStaleExports(tmpDir: string, timeoutMs: number): Promise<num
   return removed;
 }
 
-export { probeExport, runArrowExport, runCopyExport, purgeStaleExports, TMP_PREFIX };
-export type { ExportProbe, ExportRunContext };
+export {
+  assertTmpSpace,
+  probeExport,
+  runArrowExport,
+  runCopyExport,
+  purgeStaleExports,
+  TMP_PREFIX,
+};
+export type { CopyOptions, ExportProbe, ExportRunContext };

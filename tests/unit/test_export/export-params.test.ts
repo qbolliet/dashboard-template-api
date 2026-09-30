@@ -20,7 +20,9 @@ const settings: ExportSettings = {
   maxConcurrentPerIp: 2,
   maxConcurrentTotal: 2,
   timeoutMs: 1000,
+  transferTimeoutMs: 5000,
   tmpDir: '/tmp/x',
+  tmpMinFreeMb: 0,
 };
 
 /**
@@ -51,6 +53,8 @@ describe('parseExportParams', () => {
       limit: 1000,
       explicitLimit: false,
       after: null,
+      bom: false,
+      compression: 'snappy',
     });
   });
 
@@ -82,7 +86,37 @@ describe('parseExportParams', () => {
       limit: 10,
       explicitLimit: true,
       after: 'abc',
+      bom: false,
+      compression: 'snappy',
     });
+  });
+
+  test('bom applies to csv only, in every accepted spelling', () => {
+    expect(parseExportParams({ format: 'csv', bom: '1' }, settings).bom).toBe(true);
+    expect(parseExportParams({ format: 'csv', bom: 'TRUE' }, settings).bom).toBe(true);
+    expect(parseExportParams({ format: 'csv', bom: '0' }, settings).bom).toBe(false);
+    expect(parseExportParams({ format: 'csv', bom: true }, settings, 'body').bom).toBe(true);
+    // Absent ou à zéro, il est sans effet sur les autres formats
+    expect(parseExportParams({ format: 'parquet', bom: '0' }, settings).bom).toBe(false);
+
+    expect(failure({ format: 'csv', bom: 'yes' }).detail).toMatch(/must be 1, 0, true or false/);
+    expect(failure({ format: 'parquet', bom: '1' }).detail).toMatch(/only applies to format=csv/);
+    expect(failure({ bom: '1' }).detail).toMatch(/only applies to format=csv/);
+  });
+
+  test('compression is a whitelist that applies to parquet only', () => {
+    const parquet = (compression: string) =>
+      parseExportParams({ format: 'parquet', compression }, settings).compression;
+    expect(parquet('zstd')).toBe('zstd');
+    expect(parquet('GZIP')).toBe('gzip');
+    expect(parquet('snappy')).toBe('snappy');
+
+    expect(failure({ format: 'parquet', compression: 'lz4' }).detail).toMatch(
+      /Unknown compression "lz4".*snappy, zstd, gzip/,
+    );
+    expect(failure({ format: 'csv', compression: 'zstd' }).detail).toMatch(
+      /only applies to format=parquet/,
+    );
   });
 
   test('limit is capped by MAX_ROWS and stays explicit', () => {
@@ -191,13 +225,17 @@ describe('loadExportSettings', () => {
       MAX_CONCURRENT_PER_IP: 'x',
       MAX_CONCURRENT_TOTAL: -1,
       TIMEOUT_MS: 5000,
+      TRANSFER_TIMEOUT_MS: 'x',
       TMP_DIR: '',
+      TMP_MIN_FREE_MB: '',
     });
 
     expect(loaded.maxRows).toBe(42);
     expect(loaded.maxConcurrentPerIp).toBe(2);
     expect(loaded.maxConcurrentTotal).toBe(2);
     expect(loaded.timeoutMs).toBe(5000);
+    expect(loaded.transferTimeoutMs).toBe(600_000);
+    expect(loaded.tmpMinFreeMb).toBe(1024);
     expect(loaded.tmpDir).toMatch(/dashboard-api-export$/);
   });
 
@@ -205,5 +243,12 @@ describe('loadExportSettings', () => {
     const loaded = loadExportSettings();
     expect(loaded.maxRows).toBe(5_000_000);
     expect(loaded.timeoutMs).toBe(120_000);
+    expect(loaded.transferTimeoutMs).toBe(600_000);
+    expect(loaded.tmpMinFreeMb).toBe(1024);
+  });
+
+  test('a free-space threshold of 0 is valid and disables the check', () => {
+    expect(loadExportSettings({ TMP_MIN_FREE_MB: 0 } as never).tmpMinFreeMb).toBe(0);
+    expect(loadExportSettings({ TMP_MIN_FREE_MB: '0' } as never).tmpMinFreeMb).toBe(0);
   });
 });

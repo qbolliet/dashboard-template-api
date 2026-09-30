@@ -15,7 +15,13 @@ import {
   parseExportParams,
 } from './export-params.js';
 import type { ExportParams, ExportSettings } from './export-params.js';
-import { probeExport, purgeStaleExports, runArrowExport, runCopyExport } from './export-runner.js';
+import {
+  assertTmpSpace,
+  probeExport,
+  purgeStaleExports,
+  runArrowExport,
+  runCopyExport,
+} from './export-runner.js';
 import type { ExportProbe, ExportRunContext } from './export-runner.js';
 
 // Logger spécifique au module d'export
@@ -66,6 +72,9 @@ const FILE_HEADERS = [
   'X-Truncated',
   'X-Next-After',
 ];
+
+// Content-Length est un en-tête de fichier aussi, mais déjà lisible en CORS
+const RESET_HEADERS = [...FILE_HEADERS, 'Content-Length'];
 
 // ─── Paramètres : query string (GET) ou corps JSON (POST) ────────────────────
 
@@ -156,7 +165,7 @@ function sendExportError(res: Response, error: unknown): void {
   }
 
   // En-têtes de fichier posés avant l'échec : la réponse devient un JSON d'erreur
-  FILE_HEADERS.forEach((name) => res.removeHeader(name));
+  RESET_HEADERS.forEach((name) => res.removeHeader(name));
 
   if (error instanceof ExportHttpError) {
     res.status(error.status).json({ error: error.error, detail: error.detail });
@@ -197,10 +206,13 @@ function sendExportError(res: Response, error: unknown): void {
  * and `X-Next-After`, the cursor of the next page.
  *
  * Guards, in order: rate limiter (shared with /graphql), parameter validation
- * (400/404/409/415 before any slot or connection is taken), concurrency gate
- * (429), timeout (interrupt + end of stream). The pool connection and the
- * gate slot are always given back in `finally`, client abort included. No
- * Redis cache: `Cache-Control: no-store`.
+ * (400/404/409/415 before any slot or connection is taken), free space of the
+ * temporary volume for csv/parquet (507), concurrency gate (429), timeouts
+ * (interrupt + end of stream): TIMEOUT_MS until the first byte,
+ * TRANSFER_TIMEOUT_MS from the first byte to the end. The pool connection and
+ * the gate slot are always given back in `finally`, client abort included; a
+ * csv/parquet export gives its connection back as soon as the file is written,
+ * before the transfer. No Redis cache: `Cache-Control: no-store`.
  *
  * @param app - Express application instance to register the route on.
  * @param options - Injectable dependencies.
@@ -215,10 +227,13 @@ const createExportRoutes = (
     options.gate ??
     new ExportConcurrencyGate(settings.maxConcurrentPerIp, settings.maxConcurrentTotal);
 
-  // Purge des fichiers temporaires laissés par un arrêt brutal (non bloquante)
-  void purgeStaleExports(settings.tmpDir, settings.timeoutMs).then((removed) => {
-    if (removed > 0) exportLogger.warn('Removed stale export files', { removed });
-  });
+  // Purge des fichiers temporaires laissés par un arrêt brutal (non bloquante) ;
+  // un export vivant a au plus timeoutMs + transferTimeoutMs
+  void purgeStaleExports(settings.tmpDir, settings.timeoutMs + settings.transferTimeoutMs).then(
+    (removed) => {
+      if (removed > 0) exportLogger.warn('Removed stale export files', { removed });
+    },
+  );
 
   const handler = async (req: Request, res: Response): Promise<void> => {
     // Flux volumineux, jamais mis en cache ; en-têtes lisibles par un front CORS
@@ -231,6 +246,20 @@ const createExportRoutes = (
     let pool: DuckDBPool | null = null;
     let connection: ConnectionWrapper | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    let connectionReleased = false;
+
+    // Rendu unique de la connexion : par le runner dès qu'il n'a plus besoin de DuckDB, sinon en finally
+    const releaseConnection = (): void => {
+      if (connectionReleased || !pool || !connection) return;
+      connectionReleased = true;
+      pool.release(connection);
+    };
+
+    // Un seul minuteur à la fois : requête, puis envoi
+    const armTimer = (ms: number, error: ExportHttpError): void => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => controller.abort(error), ms);
+    };
 
     // Déconnexion du client avant la fin de l'envoi : interruption de l'export
     const onClose = (): void => {
@@ -242,6 +271,10 @@ const createExportRoutes = (
       const params = readExportParams(req, settings);
       const target = resolveExportTarget(params);
       const query = await buildExportQuery(params, target);
+      // Le COPY écrit le fichier entier avant le premier octet : volume plein = refus net
+      if (params.format !== 'arrow') {
+        await assertTmpSpace(settings.tmpDir, settings.tmpMinFreeMb);
+      }
 
       // 2. Garde de concurrence (IP seule, résolue par Express via trust proxy)
       const slot = gate.tryAcquire(clientIp(req));
@@ -257,15 +290,14 @@ const createExportRoutes = (
       releaseSlot = slot.release;
 
       // 3. Minuteur et abandon client, armés dès que des ressources sont engagées
-      timer = setTimeout(() => {
-        controller.abort(
-          new ExportHttpError(
-            504,
-            'Export timed out',
-            `The export exceeded ${settings.timeoutMs} ms; narrow it with filters, fields or limit.`,
-          ),
-        );
-      }, settings.timeoutMs);
+      armTimer(
+        settings.timeoutMs,
+        new ExportHttpError(
+          504,
+          'Export timed out',
+          `The export exceeded ${settings.timeoutMs} ms; narrow it with filters, fields or limit.`,
+        ),
+      );
       res.on('close', onClose);
 
       // 4. Connexion du pool, rendue en finally
@@ -279,7 +311,17 @@ const createExportRoutes = (
         query,
         res,
         signal: controller.signal,
-        sendHeaders: (rowCount) => {
+        releaseConnection,
+        sendHeaders: (rowCount, contentLength) => {
+          // Premier octet : le budget de la requête cède la place à celui de l'envoi
+          armTimer(
+            settings.transferTimeoutMs,
+            new ExportHttpError(
+              504,
+              'Export transfer timed out',
+              `The transfer exceeded ${settings.transferTimeoutMs} ms; the client reads too slowly.`,
+            ),
+          );
           res.status(200);
           res.set('Content-Type', contentType);
           res.set(
@@ -289,6 +331,7 @@ const createExportRoutes = (
           // Arrow : nombre de lignes déduit de la sonde, le flux ne le connaît qu'à la fin
           res.set('X-Row-Count', String(rowCount ?? Math.min(probe.total, params.limit)));
           res.set('X-Total-Count', String(probe.total));
+          if (contentLength !== undefined) res.set('Content-Length', String(contentLength));
           if (probe.nextAfter !== null) {
             res.set('X-Truncated', 'true');
             res.set('X-Next-After', probe.nextAfter);
@@ -312,7 +355,10 @@ const createExportRoutes = (
       const rowCount =
         params.format === 'arrow'
           ? await runArrowExport(ctx)
-          : await runCopyExport(ctx, params.format, settings.tmpDir);
+          : await runCopyExport(ctx, params.format, settings.tmpDir, {
+              bom: params.bom,
+              compression: params.compression,
+            });
 
       exportLogger.operation('Export completed', {
         catalog: target.catalog,
@@ -332,7 +378,7 @@ const createExportRoutes = (
       // Libération systématique : minuteur, écouteur, connexion, créneau
       if (timer) clearTimeout(timer);
       res.off('close', onClose);
-      if (pool && connection) pool.release(connection);
+      releaseConnection();
       releaseSlot?.();
     }
   };
