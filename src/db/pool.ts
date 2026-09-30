@@ -275,6 +275,51 @@ export const createConfiguredInstance = async (
   return instance;
 };
 
+/**
+ * Lists the schemas of attached catalogs from `information_schema.schemata`.
+ *
+ * One query, filtering out the engine's internal schemas. It only reads the
+ * DuckLake catalog metadata loaded by the ATTACH, never a data file. Shared by
+ * the pool (schema discovery on the live instance) and the freshness probe
+ * (the same discovery on its throw-away instance, under the probe aliases).
+ *
+ * @param conn - Connection of an instance where the catalogs are attached.
+ * @param aliases - Catalog aliases to report; other catalogs are ignored.
+ * @returns Map alias → schemas, in engine order, without duplicates; a catalog
+ *   with no schema gets an empty array (the caller decides the fallback).
+ * @throws {Error} If the query fails.
+ */
+export const listCatalogSchemas = async (
+  conn: DuckDBConnection,
+  aliases: string[],
+): Promise<Record<string, string[]>> => {
+  const result = await conn.run(
+    `SELECT catalog_name, schema_name
+     FROM information_schema.schemata
+     WHERE schema_name NOT IN ('information_schema', 'pg_catalog')`,
+  );
+  const rows = await result.getRowObjectsJson();
+
+  // Initialisation à liste vide pour chaque catalogue demandé
+  const discovered: Record<string, string[]> = {};
+  for (const alias of aliases) {
+    discovered[alias] = [];
+  }
+
+  // Agrégation des schémas par catalogue (sans doublons, ordre stable)
+  for (const row of rows) {
+    const catalog = row['catalog_name'] as string | null;
+    const schema = row['schema_name'] as string | null;
+    if (!catalog || !schema) continue;
+    if (!(catalog in discovered)) continue;
+    if (!discovered[catalog].includes(schema)) {
+      discovered[catalog].push(schema);
+    }
+  }
+
+  return discovered;
+};
+
 // ─── Classe DuckDBPool ────────────────────────────────────────────────────────
 
 /** Acquisition waiting in the FIFO queue for a connection to be handed over. */
@@ -522,31 +567,10 @@ class DuckDBPool {
     const instance = await this.initializeInstance();
     const conn = await instance.connect();
     try {
-      const result = await conn.run(
-        `SELECT catalog_name, schema_name
-         FROM information_schema.schemata
-         WHERE schema_name NOT IN ('information_schema', 'pg_catalog')`,
+      return await listCatalogSchemas(
+        conn,
+        this.catalogs.map((c) => c.alias),
       );
-      const rows = await result.getRowObjectsJson();
-
-      // Initialisation à liste vide pour chaque catalogue attaché
-      const discovered: Record<string, string[]> = {};
-      for (const c of this.catalogs) {
-        discovered[c.alias] = [];
-      }
-
-      // Agrégation des schémas par catalogue (sans doublons, ordre stable)
-      for (const row of rows) {
-        const catalog = row['catalog_name'] as string | null;
-        const schema = row['schema_name'] as string | null;
-        if (!catalog || !schema) continue;
-        if (!(catalog in discovered)) continue;
-        if (!discovered[catalog].includes(schema)) {
-          discovered[catalog].push(schema);
-        }
-      }
-
-      return discovered;
     } finally {
       conn.closeSync();
     }

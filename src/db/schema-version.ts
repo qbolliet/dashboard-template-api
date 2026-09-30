@@ -64,14 +64,19 @@ function statusKey(catalog: string, schema: string): string {
 }
 
 /**
- * Records the verdict for one catalog/schema and warns when it is unsupported.
+ * Computes the verdict for one catalog/schema and warns when it is unsupported.
  *
  * @param catalog - Catalog alias.
  * @param schema - Schema name within the catalog.
  * @param version - Version read from dataset_metadata, or null when unreachable.
+ * @returns The verdict, not recorded yet.
  */
-// Enregistrement du verdict, avec avertissement explicite à l'attach/reload
-function recordSchemaVersion(catalog: string, schema: string, version: number | null): void {
+// Calcul du verdict, avec avertissement explicite à l'attach/reload
+function evaluateSchemaVersion(
+  catalog: string,
+  schema: string,
+  version: number | null,
+): SchemaVersionStatus {
   const supported = getSupportedVersions();
 
   let status: SchemaVersionStatus;
@@ -91,8 +96,6 @@ function recordSchemaVersion(catalog: string, schema: string, version: number | 
     status = { supported: true, version, reason: '' };
   }
 
-  statuses.set(statusKey(catalog, schema), status);
-
   if (!status.supported) {
     versionLogger.warn(`Unsupported schema version for ${catalog}.${schema}`, {
       catalog,
@@ -101,6 +104,37 @@ function recordSchemaVersion(catalog: string, schema: string, version: number | 
       supported,
       reason: status.reason,
     });
+  }
+  return status;
+}
+
+/**
+ * Records the verdict for one catalog/schema and warns when it is unsupported.
+ *
+ * @param catalog - Catalog alias.
+ * @param schema - Schema name within the catalog.
+ * @param version - Version read from dataset_metadata, or null when unreachable.
+ */
+function recordSchemaVersion(catalog: string, schema: string, version: number | null): void {
+  statuses.set(statusKey(catalog, schema), evaluateSchemaVersion(catalog, schema, version));
+}
+
+/**
+ * Replaces every recorded verdict at once.
+ *
+ * Used after a (re)attach: the verdicts of the new schema list are computed
+ * first, then swapped in one synchronous step, so a request never sees a
+ * schema of the new list without its verdict (an un-probed pair passes the
+ * guard, which would let a schema without dataset_metadata be queried).
+ *
+ * @param verdicts - Verdicts of every served catalog/schema.
+ */
+function replaceSchemaVersions(
+  verdicts: { catalog: string; schema: string; status: SchemaVersionStatus }[],
+): void {
+  statuses.clear();
+  for (const { catalog, schema, status } of verdicts) {
+    statuses.set(statusKey(catalog, schema), status);
   }
 }
 
@@ -166,10 +200,12 @@ function getSchemaVersionStatus(catalog: string, schema: string): SchemaVersionS
 
 export {
   assertSchemaSupported,
+  evaluateSchemaVersion,
   getSchemaVersionStatus,
   getSupportedVersions,
   isSchemaSupported,
   recordSchemaVersion,
+  replaceSchemaVersions,
   resetSchemaVersions,
 };
 export type { SchemaVersionStatus };

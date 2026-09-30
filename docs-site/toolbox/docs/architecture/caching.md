@@ -72,9 +72,14 @@ the old keys, which is consistent with the old data it still serves; the new ver
 published only once the retired instance is drained, so old data can never be written under
 a new-version key.
 
+Adding or removing a schema is detected by the same probe and needs no invalidation either:
+a new schema gets its own keys from its first query, and the keys of a dropped schema are
+never read again and expire by their TTL.
+
 ## Cache invalidation
 
-A catalog update no longer requires any invalidation. The admin-protected endpoints remain
+A catalog update — new data, a schema added or removed — does not require any
+invalidation. The admin-protected endpoints remain
 for a manual flush (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidate/:catalog`,
 `POST /api/cache/invalidate/:catalog/:schema`, `GET /api/cache/stats`): a non-blocking Redis
 `SCAN` + `DEL` over the per-(catalog, schema) patterns, which match every data version

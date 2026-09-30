@@ -22,6 +22,8 @@ interface DataVersion {
 interface CatalogProbeResult {
   catalog: string;
   schemas: Record<string, { marker: DataVersion | null; error?: string }>;
+  discovered: string[] | null;
+  discoveryError?: string;
   error?: string;
 }
 
@@ -30,6 +32,7 @@ interface FakeTarget {
   served: Record<string, Record<string, string>>;
   getCatalogEntries: jest.Mock;
   getSchemas: jest.Mock;
+  reconcileSchemas: jest.Mock;
   getDataVersion: jest.Mock;
   getDataVersions: jest.Mock;
   reloadCatalogs: jest.Mock;
@@ -59,6 +62,7 @@ interface MonitorInstance {
         lastProbeOk: boolean | null;
         lastError: string | null;
         lastChangeAt: string | null;
+        discoveredSchemas: string[] | null;
         schemas: Record<
           string,
           { servedVersion: string; probedVersion: string | null; lastProbeAt: string | null }
@@ -106,13 +110,16 @@ jest.unstable_mockModule('../../../src/db/database-manager.js', () => ({
 jest.unstable_mockModule('../../../src/db/pool.js', () => ({
   buildCatalogSql: jest.fn(() => []),
   createConfiguredInstance: jest.fn(),
+  listCatalogSchemas: jest.fn(),
 }));
 
 let CatalogFreshnessMonitor: FreshnessModule['CatalogFreshnessMonitor'];
+let reconcileSchemaList: typeof import('../../../src/db/schema-reconciliation.js').reconcileSchemaList;
 
 beforeAll(async () => {
   ({ CatalogFreshnessMonitor } =
     (await import('../../../src/db/catalog-freshness.js')) as unknown as FreshnessModule);
+  ({ reconcileSchemaList } = await import('../../../src/db/schema-reconciliation.js'));
 });
 
 // ─── Fabriques ────────────────────────────────────────────────────────────────
@@ -120,13 +127,18 @@ beforeAll(async () => {
 /**
  * Builds a fake database layer serving the given versions.
  *
+ * The schema lists are reconciled with the real pure function, under the
+ * given policy (discovery by default, as without `SCHEMAS`).
+ *
  * Args:
  *     served: catalog → schema → served version.
  *     onReload: new served versions after a reload (default: unchanged).
+ *     policies: catalog → configured schema policy (default: no explicit list).
  */
 const makeTarget = (
   served: Record<string, Record<string, string>>,
   onReload?: () => Record<string, Record<string, string>>,
+  policies: Record<string, { configured: string[]; explicit: boolean }> = {},
 ): FakeTarget => {
   const target: FakeTarget = {
     served,
@@ -134,6 +146,13 @@ const makeTarget = (
       Object.keys(target.served).map((alias) => ({ alias, type: 'file', readOnly: true })),
     ),
     getSchemas: jest.fn((catalog: string) => Object.keys(target.served[catalog] ?? {})),
+    reconcileSchemas: jest.fn(
+      (catalog: string, discovered: string[]) =>
+        reconcileSchemaList(
+          discovered,
+          policies[catalog] ?? { configured: ['main'], explicit: false },
+        ).schemas,
+    ),
     getDataVersion: jest.fn(
       (catalog: string, schema: string) => target.served[catalog]?.[schema] ?? 'none',
     ),
@@ -157,18 +176,29 @@ const makeTarget = (
 /**
  * Builds a reader returning the given markers (a string is a version, null an error).
  *
+ * The schema list of a catalog is the list of its markers, unless `discovered`
+ * gives it (an Error meaning the list could not be read).
+ *
  * Args:
  *     markers: catalog → schema → version (null = unreadable), or an Error for the catalog.
+ *     discovered: catalog → schema list read, or an Error.
  */
 const makeReader = (
   markers: Record<string, Record<string, string | null> | Error>,
+  discovered: Record<string, string[] | Error> = {},
 ): { readAll: jest.Mock } => ({
   readAll: jest.fn(
     async (): Promise<CatalogProbeResult[]> =>
       Object.entries(markers).map(([catalog, value]) => {
-        if (value instanceof Error) return { catalog, schemas: {}, error: value.message };
+        if (value instanceof Error) {
+          return { catalog, schemas: {}, discovered: null, error: value.message };
+        }
+        const listed = discovered[catalog] ?? Object.keys(value);
         return {
           catalog,
+          ...(listed instanceof Error
+            ? { discovered: null, discoveryError: listed.message }
+            : { discovered: listed }),
           schemas: Object.fromEntries(
             Object.entries(value).map(([schema, version]) => [
               schema,
@@ -417,6 +447,7 @@ describe('CatalogFreshnessMonitor', () => {
             {
               catalog: 'default',
               schemas: { main: { marker: { version: '1', updatedAt: null } } },
+              discovered: ['main'],
             },
           ];
         }),
@@ -427,6 +458,201 @@ describe('CatalogFreshnessMonitor', () => {
 
       expect(reader.readAll).toHaveBeenCalledTimes(3);
       expect(maxActive).toBe(1);
+    });
+  });
+
+  describe('schema list', () => {
+    test('added schema → one reload, then it is served', async () => {
+      const target = makeTarget({ default: { main: '1' } }, () => ({
+        default: { main: '1', trade: '5' },
+      }));
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '1' } }, { default: ['main', 'trade'] }),
+        settings,
+      );
+
+      const outcome = await monitor.probeNow();
+
+      expect(target.reloadCatalogs).toHaveBeenCalledTimes(1);
+      expect(outcome).toEqual(expect.objectContaining({ changed: ['default'], reloaded: true }));
+      expect(mockLogger.info).toHaveBeenCalledWith('Catalog schema list changed', {
+        catalog: 'default',
+        added: ['trade'],
+        removed: [],
+      });
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+      const status = monitor.getStatus().catalogs['default'];
+      expect(status.discoveredSchemas).toEqual(['main', 'trade']);
+      expect(status.lastChangeAt).toEqual(expect.any(String));
+      expect(Object.keys(status.schemas)).toEqual(['main', 'trade']);
+    });
+
+    test('removed schema → one reload, no unreadable-marker warn, then stable', async () => {
+      const target = makeTarget({ default: { main: '1', old: '3' } }, () => ({
+        default: { main: '1' },
+      }));
+      // Le lecteur ne lit pas le marqueur d'un schéma servi absent de la liste
+      const reader = makeReader({ default: { main: '1' } }, { default: ['main'] });
+      const monitor = new CatalogFreshnessMonitor(target, reader, settings);
+
+      const first = await monitor.probeNow();
+      expect(first.reloaded).toBe(true);
+      expect(mockLogger.info).toHaveBeenCalledWith('Catalog schema list changed', {
+        catalog: 'default',
+        added: [],
+        removed: ['old'],
+      });
+
+      const second = await monitor.probeNow();
+      expect(second.reloaded).toBe(false);
+      expect(target.reloadCatalogs).toHaveBeenCalledTimes(1);
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+      expect(monitor.getStatus().catalogs['default'].schemas).not.toHaveProperty('old');
+    });
+
+    test('catalog without discovered schema (fallback main) → ten probes, zero reload', async () => {
+      const target = makeTarget({ default: { main: 'none' } });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: {} }, { default: [] }),
+        settings,
+      );
+
+      for (let i = 0; i < 10; i += 1) {
+        await monitor.probeNow();
+      }
+
+      expect(target.reloadCatalogs).not.toHaveBeenCalled();
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+      expect(monitor.getStatus().catalogs['default'].discoveredSchemas).toEqual([]);
+    });
+
+    test('explicit list narrower than the discovery → ten probes, zero reload', async () => {
+      const target = makeTarget({ default: { main: '1' } }, undefined, {
+        default: { configured: ['main'], explicit: true },
+      });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '1' } }, { default: ['trade', 'main', 'other'] }),
+        settings,
+      );
+
+      for (let i = 0; i < 10; i += 1) {
+        await monitor.probeNow();
+      }
+
+      expect(target.reloadCatalogs).not.toHaveBeenCalled();
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+    });
+
+    test('explicit list entirely missing (config kept) → no reload, no warn', async () => {
+      const target = makeTarget({ default: { gone: '4' } }, undefined, {
+        default: { configured: ['gone'], explicit: true },
+      });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: {} }, { default: ['main'] }),
+        settings,
+      );
+
+      for (let i = 0; i < 10; i += 1) {
+        await monitor.probeNow();
+      }
+
+      expect(target.reloadCatalogs).not.toHaveBeenCalled();
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+    });
+
+    test('schema order differing from the served one is not a change', async () => {
+      const target = makeTarget({ default: { main: '1', b: '2', a: '3' } });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '1', b: '2', a: '3' } }, { default: ['b', 'a', 'main'] }),
+        settings,
+      );
+
+      const outcome = await monitor.probeNow();
+
+      expect(outcome.reloaded).toBe(false);
+    });
+
+    test('unreadable schema list → no switch on the list, warn, markers still read', async () => {
+      const target = makeTarget({ default: { main: '1' } });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '1' } }, { default: new Error('Catalog Error: timeout') }),
+        settings,
+      );
+
+      const outcome = await monitor.probeNow();
+
+      expect(outcome.reloaded).toBe(false);
+      expect(target.reconcileSchemas).not.toHaveBeenCalled();
+      expect(mockContextLogger.warn).toHaveBeenCalledWith(
+        'Schema list unreadable; keeping the served schemas',
+        { catalog: 'default', error: 'Catalog Error: timeout' },
+      );
+      const status = monitor.getStatus().catalogs['default'];
+      expect(status.lastProbeOk).toBe(false);
+      expect(status.lastError).toBe('Catalog Error: timeout');
+      expect(status.discoveredSchemas).toBeNull();
+      expect(status.schemas['main'].probedVersion).toBe('1');
+    });
+
+    test('unreadable schema list does not prevent a marker change from reloading', async () => {
+      const target = makeTarget({ default: { main: '1' } }, () => ({ default: { main: '2' } }));
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '2' } }, { default: new Error('Catalog Error: timeout') }),
+        settings,
+      );
+
+      const outcome = await monitor.probeNow();
+
+      expect(outcome.reloaded).toBe(true);
+      expect(target.served['default']['main']).toBe('2');
+    });
+
+    test('schema listed before its dataset_metadata: guarded, then served once written', async () => {
+      // 1. Schéma découvert sans dataset_metadata : ajouté, servi sans version
+      //    (refusé par la garde, donc absent de getCatalogs)
+      const target = makeTarget({ default: { main: '1' } }, () => ({
+        default: { main: '1', fresh: 'none' },
+      }));
+      // Lecteur délégué, remplacé à chaque étape
+      let current = makeReader({ default: { main: '1' } }, { default: ['main', 'fresh'] });
+      const reader = { readAll: jest.fn(async () => current.readAll()) };
+      const monitor = new CatalogFreshnessMonitor(target, reader, settings);
+      expect((await monitor.probeNow()).reloaded).toBe(true);
+
+      // 2. Toujours sans dataset_metadata : ni rechargement ni warn
+      current = makeReader({ default: { main: '1', fresh: null } });
+      expect((await monitor.probeNow()).reloaded).toBe(false);
+      expect(mockContextLogger.warn).not.toHaveBeenCalled();
+
+      // 3. dataset_metadata écrite : la sonde suivante recharge
+      current = makeReader({ default: { main: '1', fresh: '7' } });
+      const third = await monitor.probeNow();
+      expect(third.reloaded).toBe(true);
+      expect(target.reloadCatalogs).toHaveBeenCalledTimes(2);
+    });
+
+    test('reload serving another schema list than the probed one is warned about', async () => {
+      // L'instance vivante ne voit pas encore le nouveau schéma
+      const target = makeTarget({ default: { main: '1' } });
+      const monitor = new CatalogFreshnessMonitor(
+        target,
+        makeReader({ default: { main: '1' } }, { default: ['main', 'trade'] }),
+        settings,
+      );
+
+      await monitor.probeNow();
+
+      expect(mockContextLogger.warn).toHaveBeenCalledWith(
+        'Reloaded catalog serves another schema list than the one probed',
+        { catalog: 'default', probed: ['main', 'trade'], served: ['main'] },
+      );
     });
   });
 
@@ -480,6 +706,7 @@ describe('CatalogFreshnessMonitor', () => {
                   {
                     catalog: 'default',
                     schemas: { main: { marker: { version: '1', updatedAt: null } } },
+                    discovered: ['main'],
                   },
                 ]);
             }),
@@ -505,5 +732,47 @@ describe('CatalogFreshnessMonitor', () => {
       });
       expect(monitor.getStatus().intervalMs).toBe(60000);
     });
+  });
+});
+
+describe('reconcileSchemaList', () => {
+  test('no explicit list → discovered schemas, main first then alphabetical', () => {
+    expect(
+      reconcileSchemaList(['trade', 'main', 'agri'], { configured: ['main'], explicit: false }),
+    ).toEqual({ schemas: ['main', 'agri', 'trade'], missing: [], keptConfigured: false });
+  });
+
+  test('no explicit list and nothing discovered → fallback main', () => {
+    expect(reconcileSchemaList([], { configured: ['main'], explicit: false })).toEqual({
+      schemas: ['main'],
+      missing: [],
+      keptConfigured: false,
+    });
+  });
+
+  test('explicit list → intersection in config order, missing ones reported', () => {
+    expect(
+      reconcileSchemaList(['main', 'agri', 'trade'], {
+        configured: ['trade', 'gone', 'main'],
+        explicit: true,
+      }),
+    ).toEqual({ schemas: ['trade', 'main'], missing: ['gone'], keptConfigured: false });
+  });
+
+  test('explicit list entirely missing → configuration kept', () => {
+    expect(reconcileSchemaList(['main'], { configured: ['a', 'b'], explicit: true })).toEqual({
+      schemas: ['a', 'b'],
+      missing: ['a', 'b'],
+      keptConfigured: true,
+    });
+  });
+
+  test('is pure: inputs untouched, same result on every call', () => {
+    const discovered = ['b', 'main', 'a'];
+    const policy = { configured: ['main'], explicit: false };
+    const first = reconcileSchemaList(discovered, policy);
+    expect(reconcileSchemaList(discovered, policy)).toEqual(first);
+    expect(discovered).toEqual(['b', 'main', 'a']);
+    expect(policy.configured).toEqual(['main']);
   });
 });

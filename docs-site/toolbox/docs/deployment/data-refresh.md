@@ -17,6 +17,11 @@ nothing to call: it writes the catalog and the Parquet files, and stops there.
    Redis keys to the new data version.
 ```
 
+Adding or dropping a schema follows the same path: the probe also lists the schemas of
+each catalog, so a new schema appears in `getCatalogs` (and a dropped one disappears) on
+every pod within one interval, without any call. See
+[Adding or removing a schema](#adding-or-removing-a-schema).
+
 `POST /api/catalog/reload` still exists as an optional accelerator, and the cache
 invalidation routes remain for a manual flush, but neither is part of the refresh any more.
 
@@ -27,10 +32,14 @@ that state; Redis is shared by all pods. Two mechanisms keep them fresh without 
 
 1. **A periodic probe per pod** ([`src/db/catalog-freshness.ts`](https://github.com/qbolliet/dashboard-template-api/blob/main/src/db/catalog-freshness.ts)).
    Every `CATALOG_FRESHNESS_INTERVAL_MS`, the pod creates a throw-away DuckDB instance,
-   attaches each catalog `READ_ONLY` afresh, reads `dataset_metadata.updated_at` of every
-   active schema, and closes the instance. When a marker differs from the version the pod
-   serves, it rebuilds its shared instance (`reloadCatalogs`: new instance built first,
-   atomic swap, old instance drained), then re-reads the markers **on the new live
+   attaches each catalog `READ_ONLY` afresh, lists its schemas
+   (`information_schema.schemata`), reads `dataset_metadata.updated_at` of every served
+   schema still listed, and closes the instance. The schema list is reconciled with the
+   configuration exactly as a reload does it (`reconcileSchemas`: `main` fallback, `SCHEMAS`
+   allow-list). When a marker differs from the version the pod serves, or when the
+   reconciled list differs from the served one (a schema added or removed, order ignored),
+   it rebuilds its shared instance (`reloadCatalogs`: new instance built first, atomic
+   swap, old instance drained), then re-reads the schemas and markers **on the new live
    instance**. Several catalogs changed at once cost a single rebuild.
 2. **Versioned cache keys.** The marker the live instance serves is part of every Redis key:
    `<type>:<catalog>:<schema>@<version>:<variant><hash>`. As soon as a pod serves a new
@@ -83,7 +92,14 @@ the rebuild always serves the latest state, whatever the backend.
   under a new-version key.
 - **Read error ⇒ no switch**: if the probe cannot read a catalog (S3 or Postgres
   unreachable, file locked by the writer), the pod keeps serving what it has, logs a warn,
-  and retries at the next interval. A failed rebuild is retried the same way.
+  and retries at the next interval. The same holds for a schema list that cannot be read
+  (the markers are still read and compared). A failed rebuild is retried the same way.
+- **Stable fallbacks**: a catalog where nothing is discovered (served as `["main"]`) or
+  whose `SCHEMAS` allow-list is narrower than the catalog never reloads for that reason:
+  the probe compares the reconciled list, not the raw discovery.
+- **Probe cost**: listing the schemas only reads the DuckLake catalog loaded by the
+  `ATTACH`. On the three test catalogs (11 schemas), a probe went from 432 ms to 447 ms
+  (median of 60 runs), most of it being the instance creation and the `ATTACH`.
 - **HTTP caching**: `/graphql` responses carry `Cache-Control: public, max-age=300`. A CDN or
   a browser may serve a response up to that age after the switch.
 
@@ -173,6 +189,31 @@ Inside the cluster, prefer the Service DNS (`http://<release>:80`, `ADMIN_API_KE
 with `envFrom: secretRef: api-secrets`): no Ingress traversal, the key never leaves the
 cluster network.
 
+## Adding or removing a schema
+
+The updater creates or drops the schema in the catalog; no API call and no configuration
+change is needed when `SCHEMAS` is not set (the default).
+
+**Adding a schema.** Create it with its three tables (`fact_table`, `metadata`,
+`dataset_metadata` with its single row), ideally in one transaction. Within one interval,
+every pod lists it, reloads and serves it; `getCatalogs` exposes it once its
+`dataset_metadata.schema_version` is supported. If the schema becomes visible before its
+`dataset_metadata` is written (tables created in several transactions), the pods serve it
+without a data version: it is refused by the version guard (`SCHEMA_VERSION_UNSUPPORTED`,
+a client error, never a 500) and left out of `getCatalogs`. The probe that follows the
+write of `dataset_metadata` sees the new marker, reloads, and the schema is exposed.
+
+**Removing a schema.** Drop its tables and the schema (one transaction). Within one
+interval every pod reloads without it: it disappears from `getCatalogs`, and queries on it
+get a `BAD_USER_INPUT` error listing the available schemas. The probe no longer reads its marker, so no
+warning repeats afterwards. Its Redis entries are never read again and expire by TTL.
+
+**With a `SCHEMAS` allow-list**, only the listed schemas are served: adding a schema outside
+the list changes nothing (no reload); removing a listed one reloads the pods without it.
+
+Check the result on any pod in `/metrics` (`catalogFreshness.catalogs.<name>.discoveredSchemas`
+lists what the last probe saw) or with `getCatalogs`.
+
 ## Monitoring
 
 `GET /metrics` reports, per pod, the freshness state of every schema:
@@ -190,6 +231,7 @@ cluster network.
       "lastProbeOk": true,
       "lastError": null,
       "lastChangeAt": "2026-09-28T02:31:04.201Z",
+      "discoveredSchemas": ["main", "trade"],
       "schemas": {
         "main": {
           "servedVersion": "1790563200000000",
@@ -209,11 +251,16 @@ cluster network.
 
 Key log messages (Winston, JSON):
 
-- `Catalog update detected, reloading catalogs` (info) — a probe saw a new marker
+- `Catalog update detected, reloading catalogs` (info) — a probe saw a new marker or a
+  new schema list
+- `Catalog schema list changed` (info) — with the `added` and `removed` schemas
 - `Catalog freshness probe failed; keeping the served version` (warn) — catalog unreadable
 - `Data marker unreadable; keeping the served version` (warn) — one schema unreadable
+- `Schema list unreadable; keeping the served schemas` (warn) — the list of a catalog
+  could not be read (markers still compared)
 - `Catalog reload after update failed; retrying at next probe` (warn)
 - `Reloaded catalog serves another version than the one probed` (warn) — see below
+- `Reloaded catalog serves another schema list than the one probed` (warn) — same cause
 - `Force-closing in-flight connections after drain timeout` (warn) — a request outlived
   the 30 s drain window during a rebuild
 
@@ -222,6 +269,12 @@ Key log messages (Winston, JSON):
 **A pod never switches** — Check `catalogFreshness` in its `/metrics`: `lastProbeOk: false`
 with `lastError` names the cause (credentials, network, file lock). If `probedVersion`
 never changes, the writer did not stamp `dataset_metadata.updated_at`.
+
+**A new schema never appears in `getCatalogs`** — If `discoveredSchemas` does not list it,
+the probe does not see it (wrong catalog, write not committed). If it is listed, check the
+logs of the last reload: `Unsupported schema version for <catalog>.<schema>` means its
+`dataset_metadata` is missing, empty or in an unsupported version; a
+`SCHEMAS` allow-list that does not name it keeps it out on purpose.
 
 **`Reloaded catalog serves another version than the one probed`** — The rebuilt instance
 reads another state than the probe: a newer write landed in between (harmless, the next

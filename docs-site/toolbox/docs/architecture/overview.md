@@ -44,25 +44,29 @@ Express (HTTP middleware)
 
 ### Database layer (`src/db/`)
 
-| File                   | Role                                                                 |
-| ---------------------- | -------------------------------------------------------------------- |
-| `connection.ts`        | Opens and closes a DuckDB connection to a catalog                    |
-| `pool.ts`              | Connection pool — limits concurrent connections per catalog          |
-| `database-manager.ts`  | High-level API: acquires a pooled connection, runs a query, releases |
-| `catalog-freshness.ts` | Per-pod probe detecting catalog updates, then reloading the pod      |
-| `catalog-routes.ts`    | Admin reload routes (`/api/catalog/reload[/:catalog]`)               |
-| `index.ts`             | Re-exports the shared DatabaseManager singleton                      |
+| File                       | Role                                                                 |
+| -------------------------- | -------------------------------------------------------------------- |
+| `connection.ts`            | Opens and closes a DuckDB connection to a catalog                    |
+| `pool.ts`                  | Connection pool — limits concurrent connections per catalog          |
+| `database-manager.ts`      | High-level API: acquires a pooled connection, runs a query, releases |
+| `catalog-freshness.ts`     | Per-pod probe detecting catalog updates, then reloading the pod      |
+| `schema-reconciliation.ts` | Pure reconciliation of discovered schemas with the configuration     |
+| `catalog-routes.ts`        | Admin reload routes (`/api/catalog/reload[/:catalog]`)               |
+| `index.ts`                 | Re-exports the shared DatabaseManager singleton                      |
 
 #### Catalog freshness
 
 Each pod attaches its DuckLake catalogs once and serves that state. Started by
 `startServer()` after the schemas are reconciled, `catalogFreshnessMonitor` reads
 `dataset_metadata.updated_at` of every schema every `CATALOG_FRESHNESS.INTERVAL_MS` on a
-throw-away DuckDB instance (a fresh `ATTACH` sees the latest commit). When a marker differs
-from the version the pod serves, the pod rebuilds its instance (build, swap, drain), then
-re-reads the markers on the live instance. That served version is part of every Redis key,
-so no stale entry can be read after the switch, on any replica, without any call from the
-updater. See [Data refresh](../deployment/data-refresh).
+throw-away DuckDB instance (a fresh `ATTACH` sees the latest commit), and lists the schemas
+of each catalog. The list goes through the same pure reconciliation as a reload
+(`reconcileSchemaList`: `main` fallback, `SCHEMAS` allow-list). When a marker differs from
+the version the pod serves, or a schema was added or removed, the pod rebuilds its
+instance (build, swap, drain), then re-reads the schemas and markers on the live instance;
+the schema list, the version-guard verdicts and the data versions switch together. That
+served version is part of every Redis key, so no stale entry can be read after the switch,
+on any replica, without any call from the updater. See [Data refresh](../deployment/data-refresh).
 
 ### GraphQL schema (`src/schema/`)
 

@@ -47,7 +47,8 @@ Each catalog entry takes:
 
 A catalog can host **one or several schemas**. By default the API serves all of
 them: nothing has to be declared, and a schema added to the catalog by the
-updater is served after the next reload. `SCHEMAS` is only an allow-list, for a
+updater is served by every pod within one freshness probe interval (a dropped one
+disappears the same way), without any call. `SCHEMAS` is only an allow-list, for a
 catalog that holds schemas you do not want to expose.
 
 ```yaml
@@ -61,7 +62,9 @@ CATALOGS:
 How the API treats `SCHEMAS`:
 
 1. **At startup and at every reload** the API queries `information_schema.schemata`
-   on the live DuckLake instance to discover what each catalog actually exposes.
+   on the live DuckLake instance to discover what each catalog actually exposes. The
+   freshness probe runs the same query on its own instance and applies the same
+   reconciliation: when the result differs from the served list, the pod reloads.
 2. If `SCHEMAS` is **absent or empty** (the default: an unset `<NAME>_SCHEMAS`
    variable is the same as an empty one), the discovered list is adopted: `main`
    first, which makes it the default schema, then the others alphabetically
@@ -136,10 +139,10 @@ CATALOG_FRESHNESS:
   INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
 ```
 
-| Key           | Default     | Description                                                                                |
-| ------------- | ----------- | ------------------------------------------------------------------------------------------ |
-| `ENABLED`     | `true`      | Each pod probes its catalogs and reloads itself when `dataset_metadata.updated_at` changed |
-| `INTERVAL_MS` | `60 000 ms` | Interval between two probes: the maximum delay before a pod sees an update (plus reload)   |
+| Key           | Default     | Description                                                                                                   |
+| ------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `ENABLED`     | `true`      | Each pod probes its catalogs and reloads itself when `dataset_metadata.updated_at` or the schema list changed |
+| `INTERVAL_MS` | `60 000 ms` | Interval between two probes: the maximum delay before a pod sees an update (plus reload)                      |
 
 With the probe enabled, a catalog update reaches every replica without any call from the
 updater, and the Redis keys switch to the new data version. Disable it only for a single

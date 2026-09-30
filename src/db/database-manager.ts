@@ -7,7 +7,13 @@ import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable } from '../utils/identifiers.js';
 import { createContextLogger } from '../utils/logger.js';
-import { isSchemaSupported, recordSchemaVersion, resetSchemaVersions } from './schema-version.js';
+import { reconcileSchemaList, type SchemaPolicy } from './schema-reconciliation.js';
+import {
+  evaluateSchemaVersion,
+  isSchemaSupported,
+  replaceSchemaVersions,
+  type SchemaVersionStatus,
+} from './schema-version.js';
 
 // Résolution de l'emplacement du fichier et du dossier pour les chemins relatifs
 const __filename = fileURLToPath(import.meta.url);
@@ -586,17 +592,51 @@ class DatabaseManager {
   }
 
   /**
+   * Reconciles the schemas discovered in a catalog with its configured policy.
+   *
+   * Pure (no state change, no log): see {@link reconcileSchemaList}. Used by
+   * {@link initSchemas} and by the freshness probe, which compares its result
+   * with {@link getSchemas} to detect an added or removed schema.
+   *
+   * @param catalogId - Catalog alias.
+   * @param discovered - Schemas reported by `information_schema.schemata` for it.
+   * @returns The schemas the catalog would serve, the first one being the default.
+   */
+  reconcileSchemas(catalogId: string, discovered: string[]): string[] {
+    return reconcileSchemaList(discovered, this.schemaPolicy(catalogId)).schemas;
+  }
+
+  /**
+   * Returns the configured schema policy of a catalog.
+   *
+   * @param catalogId - Catalog alias.
+   * @returns Configured list (`['main']` when none) and whether it is explicit.
+   */
+  private schemaPolicy(catalogId: string): SchemaPolicy {
+    return {
+      configured: this.configuredSchemas[catalogId] ?? ['main'],
+      explicit: this.explicitlyConfiguredSchemas.has(catalogId),
+    };
+  }
+
+  /**
    * Reconcile the per-catalog schema allow-list with what DuckLake actually exposes.
    *
-   * Calls {@link DuckDBPool.discoverCatalogSchemas} and applies, per catalog:
+   * Calls {@link DuckDBPool.discoverCatalogSchemas} and applies, per catalog,
+   * {@link reconcileSchemas}:
    *  - If SCHEMAS was explicitly configured: intersect with the discovered list
    *    (any configured-but-missing schema triggers a warning). Treat the config
    *    as an allow-list — never widen beyond it.
    *  - If SCHEMAS was not configured (absent or empty, the default): adopt the
    *    discovered list, `main` first then alphabetical, so the default schema is
    *    stable. Fall back to ['main'] when the discovery is empty so the API never
-   *    starts up with an empty schema list. A schema added to the catalog later
-   *    appears at the next reload.
+   *    starts up with an empty schema list. A schema added to or removed from
+   *    the catalog later is detected by the freshness probe, which reloads.
+   *
+   * The schema lists, their version verdicts and their data versions are
+   * computed first, then switched together in one synchronous step: a request
+   * never sees a new schema before its verdict (a schema created without
+   * `dataset_metadata` is refused by the guard, never queried).
    *
    * Idempotent and safe to call repeatedly (start-up, after reloadCatalogs(),
    * after reloadCatalog()). The result is the source of truth for isValidSchema,
@@ -609,94 +649,74 @@ class DatabaseManager {
       throw new Error('Shared pool is not initialized.');
     }
 
+    // Schémas découverts
     const discovered = await this.sharedPool.discoverCatalogSchemas();
+    const schemas: Record<string, string[]> = {};
 
+    // Intersection avec les schémas de la configuration
     for (const catalogId of Object.keys(this.configuredSchemas)) {
       const discoveredList = discovered[catalogId] ?? [];
+      const policy = this.schemaPolicy(catalogId);
+      const reconciled = reconcileSchemaList(discoveredList, policy);
 
-      if (this.explicitlyConfiguredSchemas.has(catalogId)) {
-        // Allow-list stricte : intersection (config ∩ découverte), ordre de la config
-        const configured = this.configuredSchemas[catalogId];
-        const intersection = configured.filter((s) => discoveredList.includes(s));
-        const missing = configured.filter((s) => !discoveredList.includes(s));
-
-        if (missing.length > 0) {
-          dbLogger.warn(`Configured schemas missing from DuckLake for ${catalogId}`, {
-            missing,
-            discovered: discoveredList,
-          });
-        }
-
-        // Fallback : si l'intersection est vide (toute la config est manquante),
-        // on conserve la config pour ne pas casser les requêtes existantes,
-        // mais on logge un warn explicite.
-        if (intersection.length === 0) {
-          dbLogger.warn(`No configured schema was discovered for ${catalogId}; keeping config`, {
-            configured,
-            discovered: discoveredList,
-          });
-          this.schemas[catalogId] = [...configured];
-        } else {
-          this.schemas[catalogId] = intersection;
-        }
-      } else {
-        // Pas de SCHEMAS dans la config : on adopte la liste découverte, « main »
-        // d'abord (schéma par défaut) puis l'ordre alphabétique.
-        // Fallback à ['main'] si la découverte est vide (catalogue vide / non encore peuplé).
-        this.schemas[catalogId] =
-          discoveredList.length > 0 ? DatabaseManager.orderDiscovered(discoveredList) : ['main'];
+      if (reconciled.missing.length > 0) {
+        dbLogger.warn(`Configured schemas missing from DuckLake for ${catalogId}`, {
+          missing: reconciled.missing,
+          discovered: discoveredList,
+        });
       }
+      // Fallback : si l'intersection est vide (toute la config est manquante),
+      // on conserve la config pour ne pas casser les requêtes existantes,
+      // mais on logge un warn explicite.
+      if (reconciled.keptConfigured) {
+        dbLogger.warn(`No configured schema was discovered for ${catalogId}; keeping config`, {
+          configured: policy.configured,
+          discovered: discoveredList,
+        });
+      }
+      schemas[catalogId] = reconciled.schemas;
 
       dbLogger.database(`Schemas reconciled for ${catalogId}`, {
-        active: this.schemas[catalogId],
+        active: schemas[catalogId],
         discovered: discoveredList,
-        explicit: this.explicitlyConfiguredSchemas.has(catalogId),
+        explicit: policy.explicit,
       });
     }
 
     // Sondage de la version de chaque schéma actif, une fois par attach/reload
-    await this.probeSchemaVersions();
+    const probed = await this.probeSchemaVersions(schemas);
+
+    // Bascule atomique : liste, verdicts et versions changent ensemble, et les
+    // clés de cache suivantes portent la nouvelle version
+    this.schemas = schemas;
+    replaceSchemaVersions(probed.verdicts);
+    this.dataVersions = probed.dataVersions;
   }
 
   /**
-   * Orders discovered schemas: `main` first, the others alphabetically.
+   * Probes `dataset_metadata` for every schema of the given lists.
    *
-   * `information_schema.schemata` gives no ordering guarantee, and the first
-   * schema of the list is the default one.
+   * Runs once per attach/reload and returns the verdicts to cache in
+   * db/schema-version.ts, so no query path ever pays for this check. An
+   * unsupported or unreadable schema is warned about here and rejected later,
+   * when a query targets it — start-up is never blocked, because the other
+   * schemas remain usable.
    *
-   * @param discovered - Schema names as reported by the engine.
-   * @returns A new, deterministically ordered list.
+   * @param schemas - Schema lists about to be served, per catalog.
+   * @returns The version verdicts and the data versions, not applied yet.
    */
-  // Ordre stable des schémas découverts : « main » puis alphabétique
-  private static orderDiscovered(discovered: string[]): string[] {
-    return [...discovered].sort((a, b) => {
-      if (a === b) return 0;
-      if (a === 'main') return -1;
-      if (b === 'main') return 1;
-      return a < b ? -1 : 1;
-    });
-  }
-
-  /**
-   * Probes `dataset_metadata.schema_version` for every active schema.
-   *
-   * Runs once per attach/reload and caches its verdict in db/schema-version.ts,
-   * so no query path ever pays for this check. An unsupported or unreadable
-   * schema is warned about here and rejected later, when a query targets it —
-   * start-up is never blocked, because the other schemas remain usable.
-   */
-  // Sondage des versions : un seul passage, verdict mis en cache
-  private async probeSchemaVersions(): Promise<void> {
-    if (!this.sharedPool) return;
-
-    resetSchemaVersions();
-
-    // Nouvelle table des versions servies, assignée d'un bloc à la fin
+  // Sondage des versions : un seul passage, verdicts appliqués par l'appelant
+  private async probeSchemaVersions(schemas: Record<string, string[]>): Promise<{
+    verdicts: { catalog: string; schema: string; status: SchemaVersionStatus }[];
+    dataVersions: Map<string, DataVersion>;
+  }> {
+    const verdicts: { catalog: string; schema: string; status: SchemaVersionStatus }[] = [];
     const dataVersions = new Map<string, DataVersion>();
+    if (!this.sharedPool) return { verdicts, dataVersions };
 
     const connection = await this.sharedPool.acquire();
     try {
-      for (const [catalogId, schemaList] of Object.entries(this.schemas)) {
+      for (const [catalogId, schemaList] of Object.entries(schemas)) {
         for (const schema of schemaList) {
           let version: number | null = null;
           let dataVersion: DataVersion = { version: NO_DATA_VERSION, updatedAt: null };
@@ -714,7 +734,11 @@ class DatabaseManager {
             // Table dataset_metadata absente : catalogue à l'ancien format
             version = null;
           }
-          recordSchemaVersion(catalogId, schema, version);
+          verdicts.push({
+            catalog: catalogId,
+            schema,
+            status: evaluateSchemaVersion(catalogId, schema, version),
+          });
           dataVersions.set(`${catalogId}.${schema}`, dataVersion);
         }
       }
@@ -722,8 +746,7 @@ class DatabaseManager {
       this.sharedPool.release(connection);
     }
 
-    // Bascule atomique : les clés de cache suivantes portent la nouvelle version
-    this.dataVersions = dataVersions;
+    return { verdicts, dataVersions };
   }
 
   /**
