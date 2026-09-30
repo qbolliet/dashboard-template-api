@@ -1,11 +1,12 @@
 /**
- * HTTP integration tests of the export endpoint (GET /api/export).
+ * HTTP integration tests of the export endpoint (GET | POST /api/export).
  *
  * Drives the real route with supertest against the test DuckLake catalog
  * (npm run test:setup) and reads every file back: CSV compared line by line to
  * the source rows, Parquet re-read by DuckDB (types preserved), Arrow re-read
  * by apache-arrow (types and values). Also covers filters, projection, the
- * cluster_by default order, the row ceiling, the error statuses and the
+ * cluster_by default order, the row ceiling and its truncation signals (413,
+ * X-Truncated), the resume cursor, the POST body, the error statuses and the
  * concurrency gate.
  */
 
@@ -86,6 +87,20 @@ const exportRequest = (app: Express, query: Record<string, string>): Promise<Sup
     .parse(binaryParser as never);
 
 /**
+ * Issues an export request with a JSON body and returns the raw body.
+ *
+ * @param app - Test application.
+ * @param body - JSON body of export parameters.
+ * @returns The supertest response, body as a Buffer.
+ */
+const exportPost = (app: Express, body: Record<string, unknown>): Promise<SupertestResponse> =>
+  request(app)
+    .post('/api/export')
+    .send(body)
+    .buffer(true)
+    .parse(binaryParser as never);
+
+/**
  * Runs a query on the API pool, rows converted by the API JSON converter.
  *
  * @param sql - Query to run.
@@ -143,6 +158,60 @@ const csvLines = (body: Buffer): string[] =>
     .toString('utf8')
     .split(/\r?\n/)
     .filter((line) => line !== '');
+
+/**
+ * Reads the rows of an exported file as comparable strings, in file order.
+ *
+ * @param format - Export format of the file.
+ * @param body - File content.
+ * @returns One string per data row (CSV header excluded).
+ */
+const rowsOf = async (format: string, body: Buffer): Promise<string[]> => {
+  if (format === 'csv') return csvLines(body).slice(1);
+  // Grands entiers (BIGINT, HUGEINT) sérialisés en texte
+  const serialize = (row: unknown): string =>
+    JSON.stringify(row, (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
+  if (format === 'arrow') {
+    return tableFromIPC(body)
+      .toArray()
+      .map((row) => serialize((row as { toJSON: () => unknown }).toJSON()));
+  }
+  const file = path.join(tmpDir, `rows-${Date.now()}-${Math.random()}.parquet`);
+  fs.writeFileSync(file, body);
+  const instance = await DuckDBInstance.create(':memory:');
+  const conn = await instance.connect();
+  try {
+    const target = file.split(path.sep).join('/');
+    const rows = await (await conn.run(`SELECT * FROM read_parquet('${target}')`)).getRowsJson();
+    return rows.map(serialize);
+  } finally {
+    conn.closeSync();
+    instance.closeSync();
+    fs.rmSync(file, { force: true });
+  }
+};
+
+/**
+ * Fetches every page of an export by following X-Next-After.
+ *
+ * @param send - Issues one request, given the cursor of the page (none first).
+ * @returns The responses, in page order.
+ */
+const fetchPages = async (
+  send: (after: string | undefined) => Promise<SupertestResponse>,
+): Promise<SupertestResponse[]> => {
+  const pages: SupertestResponse[] = [];
+  let after: string | undefined;
+  do {
+    const res = await send(after);
+    expect(res.status).toBe(200);
+    pages.push(res);
+    after = res.headers['x-next-after'] as string | undefined;
+  } while (after !== undefined && pages.length < 100);
+  return pages;
+};
 
 /**
  * Lists the export directories left in the suite's temporary directory.
@@ -312,9 +381,10 @@ describe('GET /api/export — arrow', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('application/vnd.apache.arrow.stream');
     expect(res.headers['content-disposition']).toMatch(/\.arrows"$/);
-    expect(res.headers['x-row-count']).toBeUndefined();
 
     const table = tableFromIPC(res.body as Buffer);
+    // Nombre de lignes connu avant le flux grâce à la sonde de comptage
+    expect(res.headers['x-row-count']).toBe(String(table.numRows));
     const typeOf = (name: string): string =>
       String(table.schema.fields.find((f) => f.name === name)?.type);
     expect(typeOf('population')).toBe('Uint64');
@@ -503,11 +573,9 @@ describe('GET /api/export — query shaping', () => {
 
     const capped = await exportRequest(app, { ...base, limit: '1000' });
     const smaller = await exportRequest(app, { ...base, limit: '3' });
-    const implicit = await exportRequest(app, base);
 
     expect(capped.headers['x-row-count']).toBe('5');
     expect(smaller.headers['x-row-count']).toBe('3');
-    expect(implicit.headers['x-row-count']).toBe('5');
   });
 });
 
@@ -619,11 +687,12 @@ describe('GET /api/export — errors', () => {
         tmpDir,
       },
     });
-    const query = { catalog: 'default', schema: 'geography', format: 'csv' };
+    const query = { catalog: 'default', schema: 'geography', format: 'csv', limit: '10' };
 
     try {
       const first = await request(app).get('/api/export').query(query);
-      const second = await request(app).get('/api/export').query(query);
+      // Même budget pour le POST : le limiteur précède le parseur du corps
+      const second = await request(app).post('/api/export').send(query);
 
       expect(first.status).toBe(200);
       expect(second.status).toBe(429);
@@ -632,5 +701,249 @@ describe('GET /api/export — errors', () => {
     } finally {
       await limiter.stop();
     }
+  });
+});
+
+// ─── Troncature et reprise au-delà de MAX_ROWS ───────────────────────────────
+
+// Les trois formats, chacun relu dans son propre lecteur
+const FORMATS = ['csv', 'parquet', 'arrow'] as const;
+
+// Schéma sans clé primaire de 240 lignes : trois pages de 100
+const NO_KEY = { catalog: 'default', schema: 'no_primary_key' };
+
+describe('/api/export — truncation signals', () => {
+  test.each(FORMATS)('413 without limit beyond MAX_ROWS (%s)', async (format) => {
+    const { app } = buildApp({ maxRows: 100 });
+    const res = await exportRequest(app, { ...NO_KEY, format });
+
+    expect(res.status).toBe(413);
+    const body = JSON.parse((res.body as Buffer).toString('utf8'));
+    expect(body.error).toBe('Export too large');
+    expect(body.detail).toContain('240 rows');
+    expect(body.detail).toContain('ceiling of 100');
+    expect(res.headers['content-disposition']).toBeUndefined();
+    expect(res.headers['x-total-count']).toBeUndefined();
+  });
+
+  test.each(FORMATS)(
+    'an explicit limit is truncated with X-Truncated and X-Next-After (%s)',
+    async (format) => {
+      const { app } = buildApp({ maxRows: 100 });
+      const smaller = await exportRequest(app, { ...NO_KEY, format, limit: '50' });
+      // Au-delà du plafond : ramenée à MAX_ROWS, et signalée de même
+      const capped = await exportRequest(app, { ...NO_KEY, format, limit: '5000' });
+
+      for (const [res, rows] of [
+        [smaller, 50],
+        [capped, 100],
+      ] as const) {
+        expect(res.status).toBe(200);
+        expect(res.headers['x-truncated']).toBe('true');
+        expect(res.headers['x-total-count']).toBe('240');
+        expect(res.headers['x-row-count']).toBe(String(rows));
+        expect(res.headers['x-next-after']).toMatch(/^[A-Za-z0-9_-]+$/);
+        expect(await rowsOf(format, res.body as Buffer)).toHaveLength(rows);
+      }
+      expect(smaller.headers['access-control-expose-headers']).toContain('X-Next-After');
+    },
+  );
+
+  test.each(FORMATS)('no truncation signal when every row fits (%s)', async (format) => {
+    const { app } = buildApp({ maxRows: 1000 });
+    const res = await exportRequest(app, { ...NO_KEY, format });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['x-total-count']).toBe('240');
+    expect(res.headers['x-row-count']).toBe('240');
+    expect(res.headers['x-truncated']).toBeUndefined();
+    expect(res.headers['x-next-after']).toBeUndefined();
+  });
+});
+
+describe('/api/export — resume with after', () => {
+  // Chaque cas : paramètres, taille de page ; tous passent par plusieurs pages
+  const CASES: Array<[string, Record<string, unknown>, number]> = [
+    ['primary key schema (main, 1 700+ rows)', { catalog: 'default', schema: 'main' }, 100],
+    // commune NULL dans la clé primaire (arbre irrégulier)
+    ['NULL in the primary key (geography)', { catalog: 'default', schema: 'geography' }, 3],
+    [
+      'nullable sort column (geography, density desc)',
+      { catalog: 'default', schema: 'geography', sort: 'density:desc' },
+      4,
+    ],
+    ['no primary key, ORDER BY ALL', NO_KEY, 100],
+    ['no primary key, sort with ties', { ...NO_KEY, sort: 'label:asc' }, 100],
+    [
+      'no primary key, filter and projection without the key columns',
+      {
+        ...NO_KEY,
+        fields: 'quantity,label',
+        sort: 'quantity:desc',
+        filters: JSON.stringify({
+          children: [
+            { criterion: { variable: 'observed_on', operation: 'AFTER', value: '2024-03-05' } },
+          ],
+        }),
+      },
+      30,
+    ],
+  ];
+
+  test.each(
+    FORMATS.flatMap((format) => CASES.map(([name, query, size]) => [format, name, query, size])),
+  )('pages concatenate to the uncapped export (%s, %s)', async (format, _name, query, size) => {
+    const params = { ...(query as Record<string, string>), format: format as string };
+    const pageSize = size as number;
+    const whole = await exportRequest(buildApp().app, params);
+    expect(whole.status).toBe(200);
+    const expected = await rowsOf(format as string, whole.body as Buffer);
+
+    const { app } = buildApp({ maxRows: 100 });
+    const pages = await fetchPages((after) =>
+      exportRequest(app, { ...params, limit: String(pageSize), ...(after ? { after } : {}) }),
+    );
+
+    expect(pages.length).toBe(Math.max(1, Math.ceil(expected.length / pageSize)));
+    expect(pages.length).toBeGreaterThan(1);
+    const got: string[] = [];
+    for (const page of pages) got.push(...(await rowsOf(format as string, page.body as Buffer)));
+    expect(got).toEqual(expected);
+    // Total restant décroissant d'une page à l'autre
+    expect(pages.map((p) => Number(p.headers['x-total-count']))).toEqual(
+      pages.map((_, i) => expected.length - i * pageSize),
+    );
+  });
+
+  test('the cursor also travels in a POST body', async () => {
+    const params = { ...NO_KEY, format: 'csv', sort: ['label:desc'] };
+    const whole = await exportPost(buildApp().app, params);
+    const { app } = buildApp({ maxRows: 100 });
+    const pages = await fetchPages((after) =>
+      exportPost(app, { ...params, limit: 100, ...(after ? { after } : {}) }),
+    );
+
+    expect(pages).toHaveLength(3);
+    const got: string[] = [];
+    for (const page of pages) got.push(...(await rowsOf('csv', page.body as Buffer)));
+    expect(got).toEqual(await rowsOf('csv', whole.body as Buffer));
+  });
+
+  test('400 for a malformed cursor or one issued for another sort', async () => {
+    const { app } = buildApp({ maxRows: 100 });
+    const first = await exportRequest(app, { ...NO_KEY, format: 'csv', limit: '100' });
+    const after = first.headers['x-next-after'] as string;
+
+    const malformed = await request(app)
+      .get('/api/export')
+      .query({ ...NO_KEY, limit: '100', after: 'not-a-cursor' });
+    const otherSort = await request(app)
+      .get('/api/export')
+      .query({ ...NO_KEY, limit: '100', sort: 'label:desc', after });
+
+    for (const res of [malformed, otherSort]) {
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid export parameter');
+      expect(res.body.detail).toContain('Invalid "after" cursor');
+    }
+    expect(otherSort.body.detail).toContain('another sort');
+  });
+});
+
+// ─── POST : paramètres dans un corps JSON ────────────────────────────────────
+
+describe('POST /api/export', () => {
+  test('an IN of 1 000 values, too long for a URL, is accepted', async () => {
+    const { app } = buildApp();
+    const communes = (
+      await sourceRows(`SELECT DISTINCT commune FROM ${GEOGRAPHY_TABLE} WHERE commune IS NOT NULL`)
+    ).map((row) => String(row.commune));
+    const values = [
+      ...communes,
+      ...Array.from({ length: 1000 - communes.length }, (_, i) => `commune-inexistante-${i}`),
+    ];
+
+    const res = await exportPost(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'csv',
+      fields: ['commune'],
+      filters: {
+        children: [{ criterion: { variable: 'commune', operation: 'IN', value: values } }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    const [{ n }] = await sourceRows(
+      `SELECT COUNT(*)::INTEGER AS n FROM ${GEOGRAPHY_TABLE} WHERE commune IS NOT NULL`,
+    );
+    expect(res.headers['x-row-count']).toBe(String(n));
+  });
+
+  test('native JSON forms give the same file as the equivalent GET', async () => {
+    const { app } = buildApp();
+    const filters = {
+      children: [{ criterion: { variable: 'population', operation: 'GT', value: 50_000 } }],
+    };
+    const viaGet = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'csv',
+      fields: 'commune,population',
+      sort: 'population:desc,commune:asc',
+      filters: JSON.stringify(filters),
+      limit: '8',
+    });
+    const viaPost = await exportPost(app, {
+      catalog: 'default',
+      schema: 'geography',
+      format: 'csv',
+      fields: ['commune', 'population'],
+      sort: ['population:desc', 'commune:asc'],
+      filters,
+      limit: 8,
+    });
+
+    expect(viaPost.status).toBe(200);
+    expect(viaPost.headers['content-type']).toBe('text/csv; charset=utf-8');
+    expect((viaPost.body as Buffer).equals(viaGet.body as Buffer)).toBe(true);
+  });
+
+  test('400 for an unknown key, a non-object body, invalid JSON or a query string', async () => {
+    const { app } = buildApp();
+    const unknownKey = await request(app)
+      .post('/api/export')
+      .send({ catalog: 'default', schema: 'geography', filter: {} });
+    const arrayBody = await request(app)
+      .post('/api/export')
+      .send([{ catalog: 'default' }]);
+    const invalidJson = await request(app)
+      .post('/api/export')
+      .set('Content-Type', 'application/json')
+      .send('{"catalog": ');
+    const withQuery = await request(app)
+      .post('/api/export')
+      .query({ format: 'csv' })
+      .send({ catalog: 'default', schema: 'geography' });
+
+    expect(unknownKey.status).toBe(400);
+    expect(unknownKey.body.detail).toContain('Unknown parameter(s): filter');
+    expect(arrayBody.status).toBe(400);
+    expect(arrayBody.body.detail).toContain('must be a JSON object');
+    expect(invalidJson.status).toBe(400);
+    expect(invalidJson.body.detail).toContain('not valid JSON');
+    expect(withQuery.status).toBe(400);
+    expect(withQuery.body.detail).toContain('JSON body only');
+  });
+
+  test('415 for a body that is not JSON', async () => {
+    const { app } = buildApp();
+    const res = await request(app)
+      .post('/api/export')
+      .type('form')
+      .send({ catalog: 'default', schema: 'geography' });
+
+    expect(res.status).toBe(415);
+    expect(res.body.error).toBe('Unsupported media type');
   });
 });

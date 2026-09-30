@@ -8,7 +8,7 @@ import type { FilterNodeInput } from '../utils/filter-tree.js';
 
 // ─── Formats d'export ────────────────────────────────────────────────────────
 
-/** Export formats accepted by GET /api/export. */
+/** Export formats accepted by /api/export. */
 const EXPORT_FORMATS = ['arrow', 'csv', 'parquet'] as const;
 
 /** Export format (value of the `format` query parameter). */
@@ -106,6 +106,9 @@ const badParameter = (detail: string): ExportHttpError =>
 
 // ─── Paramètres de requête ───────────────────────────────────────────────────
 
+/** Where the parameters of an export come from: query string (GET) or JSON body (POST). */
+type ExportParamSource = 'query' | 'body';
+
 /** Validated parameters of an export request. */
 interface ExportParams {
   catalog: string | null;
@@ -119,6 +122,10 @@ interface ExportParams {
   format: ExportFormat;
   /** Row ceiling actually applied (never above settings.maxRows). */
   limit: number;
+  /** Whether the client gave `limit`: beyond the ceiling, 413 without it, X-Truncated with it. */
+  explicitLimit: boolean;
+  /** Resume cursor (X-Next-After of the previous page), decoded once the order is known. */
+  after: string | null;
 }
 
 // Paramètres reconnus : tout autre nom est refusé (une faute de frappe sur
@@ -131,24 +138,51 @@ const KNOWN_PARAMETERS = new Set([
   'sort',
   'format',
   'limit',
+  'after',
 ]);
 
 /**
- * Reads one query parameter as a single optional string.
+ * Reads one parameter as a single optional string.
  *
- * @param query - Parsed query string.
+ * @param input - Parsed query string or JSON body.
  * @param name - Parameter name.
  * @returns The trimmed value, or null when absent or empty.
  * @throws {ExportHttpError} 400 when the parameter is repeated or structured.
  */
-function readString(query: Record<string, unknown>, name: string): string | null {
-  const value = query[name];
-  if (value === undefined) return null;
+function readString(input: Record<string, unknown>, name: string): string | null {
+  const value = input[name];
+  if (value === undefined || value === null) return null;
   if (typeof value !== 'string') {
     throw badParameter(`Parameter "${name}" must be given once, as a plain string.`);
   }
   const trimmed = value.trim();
   return trimmed === '' ? null : trimmed;
+}
+
+/**
+ * Reads a list parameter: a comma-separated string or, in a JSON body, an
+ * array of strings (which lets a column name contain a comma).
+ *
+ * @param input - Parsed query string or JSON body.
+ * @param name - Parameter name.
+ * @param source - Origin of the parameters.
+ * @returns The trimmed items, or null when absent or empty.
+ * @throws {ExportHttpError} 400 on a value of the wrong shape.
+ */
+function readList(
+  input: Record<string, unknown>,
+  name: string,
+  source: ExportParamSource,
+): string[] | null {
+  const value = input[name];
+  if (source === 'body' && Array.isArray(value)) {
+    if (!value.every((item) => typeof item === 'string')) {
+      throw badParameter(`Parameter "${name}" must be an array of strings.`);
+    }
+    return value.length === 0 ? null : value.map((item: string) => item.trim());
+  }
+  const raw = readString(input, name);
+  return raw === null ? null : raw.split(',').map((item) => item.trim());
 }
 
 /**
@@ -168,15 +202,15 @@ function columnName(name: string, context: string): string {
 }
 
 /**
- * Parses the `sort` parameter (`"col:asc,col2:desc"`, direction optional).
+ * Parses the `sort` items (`"col"` or `"col:asc|desc"`, direction optional).
  *
- * @param raw - Raw parameter value.
+ * @param items - Sort items, already split (`"col:asc,col2:desc"` in a query string).
  * @returns Sort items, in the given order.
  * @throws {ExportHttpError} 400 on an invalid column, direction or duplicate.
  */
-function parseSort(raw: string): SortItem[] {
+function parseSort(items: string[]): SortItem[] {
   const seen = new Set<string>();
-  return raw.split(',').map((item) => {
+  return items.map((item) => {
     const [column, direction, ...rest] = item.split(':').map((s) => s.trim());
     if (rest.length > 0 || !column) {
       throw badParameter(`Invalid sort item "${item}": expected "column" or "column:asc|desc".`);
@@ -194,22 +228,34 @@ function parseSort(raw: string): SortItem[] {
 }
 
 /**
- * Parses the `filters` parameter: the JSON of a FilterNode tree.
+ * Reads the `filters` parameter: the JSON of a FilterNode tree or, in a JSON
+ * body, the tree itself.
  *
  * Only the JSON shape is checked here; structure, bounds (MAX_DEPTH,
  * MAX_CRITERIA), columns and values are validated by compileFilterTree, the
  * same path as the GraphQL `structuredFilters` argument.
  *
- * @param raw - Raw (already URL-decoded) parameter value.
- * @returns The filter tree.
+ * @param input - Parsed query string or JSON body.
+ * @param source - Origin of the parameters.
+ * @returns The filter tree, or null when absent.
  * @throws {ExportHttpError} 400 when the value is not a JSON object.
  */
-function parseFilters(raw: string): FilterNodeInput {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw badParameter(`Parameter "filters" is not valid JSON: ${(error as Error).message}`);
+function readFilters(
+  input: Record<string, unknown>,
+  source: ExportParamSource,
+): FilterNodeInput | null {
+  let parsed: unknown = input.filters;
+  if (parsed === undefined || parsed === null) return null;
+
+  // Chaîne JSON (query string, ou corps qui la transmet telle quelle)
+  if (source === 'query' || typeof parsed === 'string') {
+    const raw = readString(input, 'filters');
+    if (raw === null) return null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw badParameter(`Parameter "filters" is not valid JSON: ${(error as Error).message}`);
+    }
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw badParameter('Parameter "filters" must be the JSON object of a FilterNode.');
@@ -218,30 +264,57 @@ function parseFilters(raw: string): FilterNodeInput {
 }
 
 /**
- * Validates the query string of an export request.
+ * Reads the `limit` parameter: a digit string or, in a JSON body, a number.
  *
+ * @param input - Parsed query string or JSON body.
+ * @param source - Origin of the parameters.
+ * @returns The requested row count, or null when absent.
+ * @throws {ExportHttpError} 400 when it is not a positive integer.
+ */
+function readLimit(input: Record<string, unknown>, source: ExportParamSource): number | null {
+  const value = input.limit;
+  const raw =
+    source === 'body' && typeof value === 'number' ? String(value) : readString(input, 'limit');
+  if (raw === null) return null;
+  if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+    throw badParameter(`Parameter "limit" must be a positive integer, got "${raw}".`);
+  }
+  return Number(raw);
+}
+
+/**
+ * Validates the parameters of an export request, whatever its transport.
+ *
+ * GET passes its query string, POST its JSON body: same names, rules and
+ * errors, the body only accepting native JSON forms on top (arrays for
+ * `fields` / `sort`, an object for `filters`, a number for `limit`).
  * Pure function: no database access. Column names only need to be non-empty
  * here; their existence in the schema is checked once the metadata is loaded,
  * and catalog/schema against their allow-lists (resolveExportTarget).
  *
- * @param query - Parsed query string (`req.query`).
+ * @param input - Parsed query string (`req.query`) or JSON body (`req.body`).
  * @param settings - Export guards (row ceiling).
+ * @param source - Origin of the parameters; the query string by default.
  * @returns The validated parameters.
  * @throws {ExportHttpError} 400 on any invalid parameter.
  */
-function parseExportQuery(query: Record<string, unknown>, settings: ExportSettings): ExportParams {
-  const unknown = Object.keys(query).filter((name) => !KNOWN_PARAMETERS.has(name));
+function parseExportParams(
+  input: Record<string, unknown>,
+  settings: ExportSettings,
+  source: ExportParamSource = 'query',
+): ExportParams {
+  const unknown = Object.keys(input).filter((name) => !KNOWN_PARAMETERS.has(name));
   if (unknown.length > 0) {
     throw badParameter(
       `Unknown parameter(s): ${unknown.join(', ')}. Accepted: ${[...KNOWN_PARAMETERS].join(', ')}.`,
     );
   }
 
-  const catalogRaw = readString(query, 'catalog');
-  const schemaRaw = readString(query, 'schema');
+  const catalogRaw = readString(input, 'catalog');
+  const schemaRaw = readString(input, 'schema');
 
   // Format : liste blanche, arrow par défaut
-  const formatRaw = (readString(query, 'format') ?? 'arrow').toLowerCase();
+  const formatRaw = (readString(input, 'format') ?? 'arrow').toLowerCase();
   if (!(EXPORT_FORMATS as readonly string[]).includes(formatRaw)) {
     throw badParameter(
       `Unknown format "${formatRaw}". Accepted formats: ${EXPORT_FORMATS.join(', ')}.`,
@@ -249,38 +322,32 @@ function parseExportQuery(query: Record<string, unknown>, settings: ExportSettin
   }
 
   // Colonnes projetées : noms non vides et sans doublon
-  const fieldsRaw = readString(query, 'fields');
+  const fieldsRaw = readList(input, 'fields', source);
   let fields: string[] | null = null;
   if (fieldsRaw) {
-    fields = fieldsRaw.split(',').map((f) => columnName(f.trim(), 'field'));
+    fields = fieldsRaw.map((f) => columnName(f, 'field'));
     const duplicate = fields.find((f, i) => fields!.indexOf(f) !== i);
     if (duplicate) throw badParameter(`Field "${duplicate}" is given twice.`);
   }
 
-  // Plafond de lignes : jamais au-delà de MAX_ROWS
-  const limitRaw = readString(query, 'limit');
-  let limit = settings.maxRows;
-  if (limitRaw !== null) {
-    if (!/^\d+$/.test(limitRaw) || Number(limitRaw) < 1) {
-      throw badParameter(`Parameter "limit" must be a positive integer, got "${limitRaw}".`);
-    }
-    limit = Math.min(Number(limitRaw), settings.maxRows);
-  }
-
-  const sortRaw = readString(query, 'sort');
-  const filtersRaw = readString(query, 'filters');
+  // Plafond de lignes : jamais au-delà de MAX_ROWS ; au-delà, la route signale
+  // la troncature (413 sans `limit`, X-Truncated avec)
+  const requestedLimit = readLimit(input, source);
+  const sortRaw = readList(input, 'sort', source);
 
   return {
     // Catalogue et schéma contrôlés contre leurs allow-lists par resolveExportTarget
     catalog: catalogRaw,
     schema: schemaRaw,
     fields,
-    filters: filtersRaw ? parseFilters(filtersRaw) : null,
+    filters: readFilters(input, source),
     sort: sortRaw ? parseSort(sortRaw) : null,
     format: formatRaw as ExportFormat,
-    limit,
+    limit: Math.min(requestedLimit ?? settings.maxRows, settings.maxRows),
+    explicitLimit: requestedLimit !== null,
+    after: readString(input, 'after'),
   };
 }
 
-export { EXPORT_FORMATS, FORMAT_SPECS, ExportHttpError, loadExportSettings, parseExportQuery };
-export type { ExportFormat, ExportParams, ExportSettings };
+export { EXPORT_FORMATS, FORMAT_SPECS, ExportHttpError, loadExportSettings, parseExportParams };
+export type { ExportFormat, ExportParamSource, ExportParams, ExportSettings };

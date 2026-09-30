@@ -1,5 +1,6 @@
 // Route REST d'export volumineux (Arrow / CSV / Parquet), hors sérialisation GraphQL
-import type { Express, Request, RequestHandler, Response } from 'express';
+import express from 'express';
+import type { ErrorRequestHandler, Express, Request, RequestHandler, Response } from 'express';
 import { databaseManager } from '../db/index.js';
 import type { ConnectionWrapper, DuckDBPool } from '../db/pool.js';
 import { clientIp } from '../security/rate-limiter.js';
@@ -11,11 +12,11 @@ import {
   ExportHttpError,
   FORMAT_SPECS,
   loadExportSettings,
-  parseExportQuery,
+  parseExportParams,
 } from './export-params.js';
-import type { ExportSettings } from './export-params.js';
-import { purgeStaleExports, runArrowExport, runCopyExport } from './export-runner.js';
-import type { ExportRunContext } from './export-runner.js';
+import type { ExportParams, ExportSettings } from './export-params.js';
+import { probeExport, purgeStaleExports, runArrowExport, runCopyExport } from './export-runner.js';
+import type { ExportProbe, ExportRunContext } from './export-runner.js';
 
 // Logger spécifique au module d'export
 const exportLogger = createContextLogger({ component: 'export', module: 'export-routes' });
@@ -57,6 +58,82 @@ class ClientAbortError extends Error {
 const exportFileName = (catalog: string, schema: string, extension: string): string =>
   `${catalog}_${schema}_${new Date().toISOString().slice(0, 10)}.${extension}`;
 
+// En-têtes propres à un fichier servi, retirés quand la réponse devient une erreur
+const FILE_HEADERS = [
+  'Content-Disposition',
+  'X-Row-Count',
+  'X-Total-Count',
+  'X-Truncated',
+  'X-Next-After',
+];
+
+// ─── Paramètres : query string (GET) ou corps JSON (POST) ────────────────────
+
+/**
+ * Reads the parameters of an export from its transport.
+ *
+ * GET: the query string. POST: the JSON body, for filters too large for a URL
+ * (the header limit of Node, lower still behind an ingress); its query string
+ * must then be empty, so that no parameter is silently ignored.
+ *
+ * @param req - Express request.
+ * @param settings - Export guards (row ceiling).
+ * @returns The validated parameters.
+ * @throws {ExportHttpError} 415 for a POST body that is not JSON, 400 for an
+ *   invalid body or parameter.
+ */
+function readExportParams(req: Request, settings: ExportSettings): ExportParams {
+  if (req.method !== 'POST') {
+    return parseExportParams(req.query as Record<string, unknown>, settings, 'query');
+  }
+  if (!req.is('application/json')) {
+    throw new ExportHttpError(
+      415,
+      'Unsupported media type',
+      'POST /api/export expects a JSON body (Content-Type: application/json).',
+    );
+  }
+  if (Object.keys(req.query).length > 0) {
+    throw new ExportHttpError(
+      400,
+      'Invalid export parameter',
+      'POST /api/export takes its parameters in the JSON body only, not in the query string.',
+    );
+  }
+  const body: unknown = req.body;
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ExportHttpError(
+      400,
+      'Invalid export parameter',
+      'The body of POST /api/export must be a JSON object of export parameters.',
+    );
+  }
+  return parseExportParams(body as Record<string, unknown>, settings, 'body');
+}
+
+/**
+ * Maps a failure of the JSON body parser to the export error format.
+ *
+ * Only reached when the route mounts its own parser (no global one ran
+ * before, as in a test application); the global parser of /graphql answers
+ * in its own format otherwise.
+ *
+ * @param maxSize - Body size limit, quoted in the message.
+ * @returns The Express error middleware.
+ */
+const createBodyErrorHandler =
+  (maxSize: string): ErrorRequestHandler =>
+  (err: { type?: string }, _req, res, _next) => {
+    res.set('Cache-Control', 'no-store');
+    res.status(400).json({
+      error: 'Invalid export parameter',
+      detail:
+        err.type === 'entity.too.large'
+          ? `Request body exceeds the maximum size of ${maxSize}.`
+          : 'The request body is not valid JSON.',
+    });
+  };
+
 // ─── Réponse d'erreur ────────────────────────────────────────────────────────
 
 /**
@@ -79,8 +156,7 @@ function sendExportError(res: Response, error: unknown): void {
   }
 
   // En-têtes de fichier posés avant l'échec : la réponse devient un JSON d'erreur
-  res.removeHeader('Content-Disposition');
-  res.removeHeader('X-Row-Count');
+  FILE_HEADERS.forEach((name) => res.removeHeader(name));
 
   if (error instanceof ExportHttpError) {
     res.status(error.status).json({ error: error.error, detail: error.detail });
@@ -111,10 +187,17 @@ function sendExportError(res: Response, error: unknown): void {
  * serialization. Parameters: `catalog`, `schema`, `fields` (comma-separated),
  * `filters` (URL-encoded JSON of a FilterNode), `sort` (`col:asc,col2:desc`,
  * default: the schema's cluster_by), `format` (arrow | csv | parquet, default
- * arrow) and `limit` (capped by EXPORT.MAX_ROWS).
+ * arrow), `limit` (capped by EXPORT.MAX_ROWS) and `after` (resume cursor).
+ * `POST /api/export` takes the same parameters as a JSON body, for filters
+ * too large for a URL; same handler, same guards.
+ *
+ * Before the first byte, a count gives `X-Total-Count`. Beyond the limit, the
+ * export is refused with a 413 when the client gave no `limit` (MAX_ROWS
+ * would cut it silently), and sent truncated otherwise, with `X-Truncated`
+ * and `X-Next-After`, the cursor of the next page.
  *
  * Guards, in order: rate limiter (shared with /graphql), parameter validation
- * (400/404/409 before any slot or connection is taken), concurrency gate
+ * (400/404/409/415 before any slot or connection is taken), concurrency gate
  * (429), timeout (interrupt + end of stream). The pool connection and the
  * gate slot are always given back in `finally`, client abort included. No
  * Redis cache: `Cache-Control: no-store`.
@@ -140,7 +223,7 @@ const createExportRoutes = (
   const handler = async (req: Request, res: Response): Promise<void> => {
     // Flux volumineux, jamais mis en cache ; en-têtes lisibles par un front CORS
     res.set('Cache-Control', 'no-store');
-    res.set('Access-Control-Expose-Headers', 'Content-Disposition, X-Row-Count');
+    res.set('Access-Control-Expose-Headers', FILE_HEADERS.join(', '));
 
     const startedAt = Date.now();
     const controller = new AbortController();
@@ -156,7 +239,7 @@ const createExportRoutes = (
 
     try {
       // 1. Validation complète avant de consommer un créneau ou une connexion
-      const params = parseExportQuery(req.query as Record<string, unknown>, settings);
+      const params = readExportParams(req, settings);
       const target = resolveExportTarget(params);
       const query = await buildExportQuery(params, target);
 
@@ -190,6 +273,7 @@ const createExportRoutes = (
       connection = await pool.acquire();
 
       const { contentType, extension } = FORMAT_SPECS[params.format];
+      let probe: ExportProbe = { total: 0, nextAfter: null };
       const ctx: ExportRunContext = {
         connection,
         query,
@@ -202,9 +286,27 @@ const createExportRoutes = (
             'Content-Disposition',
             `attachment; filename="${exportFileName(target.catalog, target.schema, extension)}"`,
           );
-          if (rowCount !== null) res.set('X-Row-Count', String(rowCount));
+          // Arrow : nombre de lignes déduit de la sonde, le flux ne le connaît qu'à la fin
+          res.set('X-Row-Count', String(rowCount ?? Math.min(probe.total, params.limit)));
+          res.set('X-Total-Count', String(probe.total));
+          if (probe.nextAfter !== null) {
+            res.set('X-Truncated', 'true');
+            res.set('X-Next-After', probe.nextAfter);
+          }
         },
       };
+
+      // 5. Sonde avant le premier octet : total, troncature et curseur de reprise
+      probe = await probeExport(ctx, params.limit, params.explicitLimit);
+      if (probe.total > params.limit && !params.explicitLimit) {
+        throw new ExportHttpError(
+          413,
+          'Export too large',
+          `The export matches ${probe.total} rows, above the ceiling of ${settings.maxRows} ` +
+            '(EXPORT.MAX_ROWS). Narrow it with filters, or pass "limit" to receive the first rows ' +
+            'with an X-Next-After header, then pass its value as "after" to fetch the next page.',
+        );
+      }
 
       // Comptage des lignes retournées
       const rowCount =
@@ -235,11 +337,18 @@ const createExportRoutes = (
     }
   };
 
-  if (options.rateLimit) {
-    app.get('/api/export', options.rateLimit, handler);
-  } else {
-    app.get('/api/export', handler);
-  }
+  // Corps JSON du POST : même plafond que /graphql ; sans effet quand le
+  // parseur global de applyRequestLimits a déjà lu le corps
+  const maxBodySize = config.API.REQUEST_LIMITS.MAX_REQUEST_SIZE;
+  const guards = options.rateLimit ? [options.rateLimit] : [];
+  app.get('/api/export', ...guards, handler);
+  app.post(
+    '/api/export',
+    ...guards,
+    express.json({ limit: maxBodySize }),
+    createBodyErrorHandler(maxBodySize),
+    handler,
+  );
 
   return { settings, gate };
 };

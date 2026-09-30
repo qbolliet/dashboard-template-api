@@ -11,6 +11,7 @@ import { bindParam, escapeSqlString } from '../db/pool.js';
 import { runInterruptible } from '../db/interrupt.js';
 import type { ConnectionWrapper } from '../db/pool.js';
 import { buildArrowLayout, chunkToRecordBatch, emptyRecordBatch } from './arrow-writer.js';
+import { encodeCursor } from './after-cursor.js';
 import { FORMAT_SPECS } from './export-params.js';
 import type { ExportQuery } from './build-export-query.js';
 
@@ -88,6 +89,61 @@ async function prepareBound(connection: ConnectionWrapper, sql: string, params: 
   const prepared = await connection.conn.prepare(sql);
   params.forEach((param, i) => bindParam(prepared, param, i + 1));
   return prepared;
+}
+
+// ─── Sonde : total et curseur, avant le premier octet ────────────────────────
+
+/** What the export must announce before its body. */
+interface ExportProbe {
+  /** Rows matching the request, `limit` aside (after the cursor if any). */
+  total: number;
+  /** Cursor of the last row sent when the export is truncated, else null. */
+  nextAfter: string | null;
+}
+
+/**
+ * Counts the rows of an export and, when they exceed the limit, reads the key
+ * of the last row that will be sent.
+ *
+ * One mechanism for every format, run before any header: a COPY cannot stop
+ * one row short of what it wrote, and an Arrow stream has sent its headers
+ * long before knowing it hit its LIMIT. The count reads the filter and key
+ * columns only, without sorting; the boundary query, run only on a truncated
+ * page that will be sent, top-n sorts the key columns.
+ *
+ * @param ctx - Export context.
+ * @param limit - Effective row ceiling of the request.
+ * @param withCursor - Whether a truncated export will be sent (explicit
+ *   `limit`); without it, the export is refused and needs no cursor.
+ * @returns The total and, on a truncated page to send, the resume cursor.
+ */
+async function probeExport(
+  ctx: ExportRunContext,
+  limit: number,
+  withCursor: boolean,
+): Promise<ExportProbe> {
+  // Comptage et borne
+  const { count, boundary, order } = ctx.query;
+  const total = await interruptible(ctx, async () => {
+    const prepared = await prepareBound(ctx.connection, count.sql, count.params);
+    const rows = (await prepared.runAndReadAll()).getRows();
+    return Number(rows[0][0]);
+  });
+  throwIfAborted(ctx.signal);
+  if (total <= limit || !withCursor) return { total, nextAfter: null };
+
+  // Requête SQL et paramètres
+  const { sql, params } = boundary(limit - 1);
+  const key = await interruptible(ctx, async () => {
+    const prepared = await prepareBound(ctx.connection, sql, params);
+    return (await prepared.runAndReadAll()).getRows()[0];
+  });
+  throwIfAborted(ctx.signal);
+  // Ligne comptée mais introuvable : le catalogue a changé entre les deux requêtes
+  if (!key) throw new Error('The export boundary row vanished between the count and the key query');
+
+  const values = key.map((value) => (value === null ? null : String(value)));
+  return { total, nextAfter: encodeCursor(order, values) };
 }
 
 // ─── csv / parquet : COPY vers fichier temporaire ────────────────────────────
@@ -221,5 +277,5 @@ async function purgeStaleExports(tmpDir: string, timeoutMs: number): Promise<num
   return removed;
 }
 
-export { runArrowExport, runCopyExport, purgeStaleExports, TMP_PREFIX };
-export type { ExportRunContext };
+export { probeExport, runArrowExport, runCopyExport, purgeStaleExports, TMP_PREFIX };
+export type { ExportProbe, ExportRunContext };
