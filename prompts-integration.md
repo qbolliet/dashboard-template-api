@@ -848,8 +848,8 @@ AggregateColumn, AggregateResult, getAggregates) ; le relire.
 
 À faire :
 1) Implémenter getAggregates selon audit-api.md §4.2, avec un constructeur SQL unique
-   buildAggregateQuery(params, metadata) ; getAggregatedFacts* réimplémentées dessus (un
-   agrégat, un groupBy), marquées @deprecated (motif « use getAggregates »).
+   buildAggregateQuery(params, metadata) ; Plutot que de marquer getAggregatedFacts* réimplémentées dessus (un
+   agrégat, un groupBy), en @deprecated (motif « use getAggregates »), je souhaite purement les supprimer. Je suis en effet encore en phase de développement et n'ai aucun consommateur de cette API, je ne souhaite donc pas m'embarrasser avec des dépréciations.
 2) Deux ajouts issus de audit-integration.md (AF10) :
    - groupBy accepte un grain temporel : input GroupByInput { field: String!, grain:
      TimeGrain } avec enum TimeGrain { DAY WEEK MONTH QUARTER YEAR }, compilé en
