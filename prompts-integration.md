@@ -910,7 +910,7 @@ Contexte :
 2) compareAggregatedFacts : arguments aggregates: [AggregateInput!] et groupBy: [String!]
    (réutilise buildAggregateQuery de A14) ; résultat data: [JSON!]! avec les colonnes
    <alias>_a, <alias>_b, <alias>_delta, <alias>_delta_pct, et aggregates: [AggregateColumn!]! ;
-   l'ancienne forme (ComparedFact) reste pour compatibilité, @deprecated.
+   l'ancienne forme (ComparedFact) peu être supprimée (étant toujours en phase de développement et n'ayant pas de consommateur de l'API, je ne souhaite pas maintenir de rétro-compatibilité).
 3) Export : paramètres groupBy et aggregates (ex. aggregates=value:sum,value:avg:moyenne)
    réutilisant buildAggregateQuery ; HUGEINT en Decimal128 (A13).
 
