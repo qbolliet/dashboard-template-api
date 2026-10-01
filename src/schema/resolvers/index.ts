@@ -1,7 +1,7 @@
 // Importation des modules d'intérêt
 import { metadataResolvers } from './metadata.js';
 import { factResolvers } from './fact.js';
-import { aggregatedFactsResolvers } from './aggregated-facts.js';
+import { aggregatesResolvers } from './aggregates.js';
 import { selectOptionsResolvers } from './select-options.js';
 import { fieldResolvers } from './field-resolvers.js';
 import { catalogResolvers } from './catalog.js';
@@ -20,7 +20,7 @@ const resolvers = {
   Query: {
     ...metadataResolvers.Query,
     ...factResolvers.Query,
-    ...aggregatedFactsResolvers.Query,
+    ...aggregatesResolvers.Query,
     ...selectOptionsResolvers.Query,
     ...catalogResolvers.Query,
     ...fieldStatsResolvers.Query,

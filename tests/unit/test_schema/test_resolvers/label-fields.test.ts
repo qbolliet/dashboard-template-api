@@ -10,8 +10,8 @@
  *
  * Covers Metadata.labelFor / labelFields, getFields(includeLabelFields),
  * getSharedFields, getSelectOptions(labelField), getSelectOptionsTree, the
- * keyLabel of aggregated and compared facts, and a text filter on a label
- * column.
+ * label column of getAggregates, the keyLabel of compared facts, and a text
+ * filter on a label column.
  */
 
 import { ApolloServer } from '@apollo/server';
@@ -379,88 +379,105 @@ describe('getSelectOptionsTree sur la chaîne de codes nc6 → nc8', () => {
   });
 });
 
-// ─── keyLabel des agrégats ────────────────────────────────────────────────────
+// ─── Libellés des agrégats ────────────────────────────────────────────────────
 
-describe('AggregatedFact.keyLabel', () => {
+describe('getAggregates — colonne <field>__label', () => {
   test('groupé par nc8 : libellé par défaut lu par ANY_VALUE, null pour un code sans libellé', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "trade", groupBy: "nc8", measure: "value") {
-          key keyLabel aggregatedValue count
+        getAggregates(schema: "trade", groupBy: [{ field: "nc8" }], aggregates: [{ measure: "value" }]) {
+          columns data
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    expect(result.data!.getAggregatedFacts).toEqual([
-      { key: '01012100', keyLabel: 'Pure-bred breeding horses', aggregatedValue: 6630, count: 6 },
-      { key: '01012910', keyLabel: 'Horses for slaughter', aggregatedValue: 12630, count: 6 },
+    const { columns, data } = result.data!.getAggregates as {
+      columns: string[];
+      data: Record<string, unknown>[];
+    };
+    expect(columns).toEqual(['nc8', 'nc8__label', 'value_sum', 'row_count']);
+    expect(data).toEqual([
+      { nc8: '01012100', nc8__label: 'Pure-bred breeding horses', value_sum: 6630, row_count: 6 },
+      { nc8: '01012910', nc8__label: 'Horses for slaughter', value_sum: 12630, row_count: 6 },
       {
-        key: '01012990',
-        keyLabel: 'Horses other than for slaughter',
-        aggregatedValue: 18630,
-        count: 6,
+        nc8: '01012990',
+        nc8__label: 'Horses other than for slaughter',
+        value_sum: 18630,
+        row_count: 6,
       },
       {
-        key: '02013000',
-        keyLabel: 'Boneless bovine meat, fresh or chilled',
-        aggregatedValue: 24630,
-        count: 6,
+        nc8: '02013000',
+        nc8__label: 'Boneless bovine meat, fresh or chilled',
+        value_sum: 24630,
+        row_count: 6,
       },
-      { key: '02013090', keyLabel: null, aggregatedValue: 30630, count: 6 },
+      { nc8: '02013090', nc8__label: null, value_sum: 30630, row_count: 6 },
     ]);
   });
 
   test('groupé par un code INTEGER', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "trade", groupBy: "partner_code", measure: "value") { key keyLabel }
+        getAggregates(schema: "trade", groupBy: [{ field: "partner_code" }], aggregates: [{ measure: "value" }], includeRowCount: false) {
+          data
+        }
       }`,
     });
 
-    expect(result.data!.getAggregatedFacts).toEqual([
-      { key: '250', keyLabel: 'France' },
-      { key: '276', keyLabel: 'Allemagne' },
-      { key: '384', keyLabel: "Côte d'Ivoire" },
+    const { data } = result.data!.getAggregates as { data: Record<string, unknown>[] };
+    expect(
+      data.map(({ partner_code, partner_code__label }) => ({ partner_code, partner_code__label })),
+    ).toEqual([
+      { partner_code: 250, partner_code__label: 'France' },
+      { partner_code: 276, partner_code__label: 'Allemagne' },
+      { partner_code: 384, partner_code__label: "Côte d'Ivoire" },
     ]);
   });
 
-  test('groupé par une colonne sans libellés : keyLabel null', async () => {
+  test('groupé par une colonne sans libellés : pas de colonne de libellés', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "trade", groupBy: "year", measure: "value") { key keyLabel }
+        getAggregates(schema: "trade", groupBy: [{ field: "year" }], aggregates: [{ measure: "value" }]) {
+          columns groupBy { name labelColumn }
+        }
       }`,
     });
 
-    expect(result.data!.getAggregatedFacts).toEqual([
-      { key: '2023', keyLabel: null },
-      { key: '2024', keyLabel: null },
-    ]);
+    const payload = result.data!.getAggregates as {
+      columns: string[];
+      groupBy: { name: string; labelColumn: string | null }[];
+    };
+    expect(payload.columns).toEqual(['year', 'value_sum', 'row_count']);
+    expect(payload.groupBy).toEqual([{ name: 'year', labelColumn: null }]);
   });
 
-  test('getAggregatedFactsWithMetadata suit le même chemin', async () => {
+  test('la colonne de groupe décrit sa colonne de libellés et ses labelFields', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFactsWithMetadata(schema: "trade", groupBy: "nc8", measure: "value", limit: 2) {
-          data { key keyLabel }
-          metadata { groupByFieldInfo { name labelFields } }
+        getAggregates(schema: "trade", groupBy: [{ field: "nc8" }], aggregates: [{ measure: "value" }], limit: 2) {
+          data
+          groupBy { name labelColumn field { name labelFields } }
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    const payload = result.data!.getAggregatedFactsWithMetadata as {
-      data: Array<{ key: string; keyLabel: string | null }>;
-      metadata: { groupByFieldInfo: { name: string; labelFields: string[] } };
+    const payload = result.data!.getAggregates as {
+      data: Record<string, unknown>[];
+      groupBy: unknown[];
     };
-    expect(payload.data).toEqual([
-      { key: '01012100', keyLabel: 'Pure-bred breeding horses' },
-      { key: '01012910', keyLabel: 'Horses for slaughter' },
+    expect(payload.data.map((row) => [row.nc8, row.nc8__label])).toEqual([
+      ['01012100', 'Pure-bred breeding horses'],
+      ['01012910', 'Horses for slaughter'],
     ]);
-    expect(payload.metadata.groupByFieldInfo).toEqual({
-      name: 'nc8',
-      labelFields: ['nc8_libelle_en', 'nc8_libelle_fr'],
-    });
+    expect(payload.groupBy).toEqual([
+      {
+        name: 'nc8',
+        labelColumn: 'nc8__label',
+        field: { name: 'nc8', labelFields: ['nc8_libelle_en', 'nc8_libelle_fr'] },
+      },
+    ]);
   });
 });
 
@@ -525,7 +542,7 @@ describe('ComparedFact.keyLabel', () => {
     data.forEach((row) => expect(row.keyLabel).toBeNull());
   });
 
-  test('compareAggregatedFacts suit le chemin de getAggregatedFacts (ANY_VALUE)', async () => {
+  test('compareAggregatedFacts suit le chemin de getAggregates (ANY_VALUE)', async () => {
     const result = await execute(server, {
       query: `query {
         compareAggregatedFacts(

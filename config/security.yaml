@@ -38,7 +38,8 @@ SECURITY:
   COMPLEXITY:
     # Complexité maximale autorisée pour une opération
     # Calibré sur les requêtes réelles du dashboard : la page la plus lourde
-    # (tableau + graphique + menus + métadonnées) score ~60, soit une marge de 3x.
+    # (tableau + graphique getAggregates + menus + métadonnées) score ~69, soit une
+    # marge de 2,9x.
     # Marge verrouillée par tests/integration/complexity-guard.test.ts.
     MAX_ALLOWED: 200
     # Nombre maximal de champs racine par opération, alias compris (__typename
@@ -59,6 +60,13 @@ SECURITY:
     # facturée pour chaque colonne de la liste englobante (nombre de colonnes du
     # schéma lu dans le cache catalogMetadata) — soit un getFieldStats par colonne
     STATS_COST_PER_COLUMN: 5
+    # getAggregates, en plus de son score de base : chaque agrégat est une
+    # expression du SELECT, MEDIAN et MODE (holistiques) trient ou comptent les
+    # valeurs de chaque groupe, chaque colonne de groupe multiplie les groupes.
+    # Longueur des listes lue dans les arguments (variables et défauts compris)
+    AGGREGATE_COST: 2
+    HOLISTIC_AGGREGATE_COST: 5
+    GROUP_COLUMN_COST: 3
     # Score d'un champ racine absent de ROOT_FIELD_SCORES (jamais nul)
     DEFAULT_ROOT_FIELD_SCORE: 5
     # Score de base de CHAQUE champ racine du type Query (appliqué à la racine
@@ -82,9 +90,10 @@ SECURITY:
       # API.SELECT_OPTIONS.TREE_MAX_NODES
       getSelectOptionsTree: 5
       getFactTableWithMetadata: 8
-      getAggregatedFacts: 10
+      # Plusieurs agrégats sur zéro, une ou plusieurs colonnes de groupe ; plus
+      # AGGREGATE_COST, HOLISTIC_AGGREGATE_COST et GROUP_COLUMN_COST
+      getAggregates: 10
       crossDatabaseSelectOptions: 10
-      getAggregatedFactsWithMetadata: 12
       # Jointure de deux datasets
       compareFacts: 15
       compareAggregatedFacts: 15

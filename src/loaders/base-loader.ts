@@ -29,6 +29,8 @@ interface D3Metadata {
 /** Enriched query result for D3 visualization. */
 interface D3QueryResult {
   columns: string[];
+  /** DuckDB types of the columns, same order as columns. */
+  columnTypes?: string[];
   data: Record<string, unknown>[];
   metadata: D3Metadata;
 }

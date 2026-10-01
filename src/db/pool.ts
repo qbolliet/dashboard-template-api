@@ -45,6 +45,8 @@ export interface PoolConfig {
 /** Query result with column metadata, intended for D3 visualization. */
 export interface WithMetadataResult {
   columns: string[];
+  /** DuckDB types of the columns, same order (e.g. HUGEINT for a SUM of BIGINT). */
+  columnTypes: string[];
   data: Record<string, Json>[];
   metadata: {
     count: number;
@@ -768,6 +770,7 @@ class DuckDBPool {
 
         return {
           columns: columnNames,
+          columnTypes: columnTypes.map((type) => type.toString()),
           data: rows,
           metadata: {
             count: rows.length,

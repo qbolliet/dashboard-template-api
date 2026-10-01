@@ -72,6 +72,12 @@ interface ComplexityConfig {
   ROW_COST: number;
   /** Cost of `Metadata.stats` per column of the enclosing list. */
   STATS_COST_PER_COLUMN: number;
+  /** getAggregates: cost of each aggregate. */
+  AGGREGATE_COST?: number;
+  /** getAggregates: extra cost of each explicit MEDIAN or MODE. */
+  HOLISTIC_AGGREGATE_COST?: number;
+  /** getAggregates: cost of each group column. */
+  GROUP_COLUMN_COST?: number;
   /** Score of a root field missing from ROOT_FIELD_SCORES. */
   DEFAULT_ROOT_FIELD_SCORE: number;
   /** Base score of each root field of the Query type. */
@@ -171,6 +177,14 @@ interface PaginationConfig {
 interface SelectOptionsConfig {
   /** Hard bound on the node count of a tree; exceeding it is a BAD_USER_INPUT. */
   TREE_MAX_NODES: number;
+}
+
+/** Bounds of the aggregate query (getAggregates). */
+interface AggregatesConfig {
+  /** Maximum number of aggregates of one query; exceeding it is a BAD_USER_INPUT. */
+  MAX_AGGREGATES: number;
+  /** Maximum number of group columns of one query; exceeding it is a BAD_USER_INPUT. */
+  MAX_GROUP_BY: number;
 }
 
 /**
@@ -339,6 +353,7 @@ interface AppConfig {
     LOADERS: LoadersConfig;
     PAGINATION: PaginationConfig;
     SELECT_OPTIONS?: SelectOptionsConfig;
+    AGGREGATES?: AggregatesConfig;
     EXPORT?: ExportConfig;
   };
   DATABASE: {

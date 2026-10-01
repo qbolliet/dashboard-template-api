@@ -26,9 +26,8 @@ interface LoadersObject {
   fact: MockLoader;
   factWithCount: MockLoader;
   factWithMetadata: MockLoader;
-  aggregatedFacts: MockLoader;
-  aggregatedFactsWithMetadata: MockLoader;
-  aggregatedFactsWithCount: MockLoader;
+  aggregates: MockLoader;
+  aggregateGroupCount: MockLoader;
   selectOptions: MockLoader;
   selectOptionsTree: MockLoader;
   catalogMetadata: MockLoader;
@@ -100,10 +99,9 @@ jest.unstable_mockModule('../../../src/loaders/fact.js', () => ({
   createFactWithMetadataLoader: jest.fn(() => makeMockLoader()),
 }));
 
-jest.unstable_mockModule('../../../src/loaders/aggregated-facts.js', () => ({
-  createAggregatedFactsLoader: jest.fn(() => makeMockLoader()),
-  createAggregatedFactsWithMetadataLoader: jest.fn(() => makeMockLoader()),
-  createAggregatedFactsWithCountLoader: jest.fn(() => makeMockLoader()),
+jest.unstable_mockModule('../../../src/loaders/aggregates.js', () => ({
+  createAggregatesLoader: jest.fn(() => makeMockLoader()),
+  createAggregateGroupCountLoader: jest.fn(() => makeMockLoader()),
 }));
 
 jest.unstable_mockModule('../../../src/loaders/select-options.js', () => ({
@@ -130,9 +128,8 @@ let createMetadataLoader: jest.Mock;
 let createFactLoader: jest.Mock;
 let createFactWithCountLoader: jest.Mock;
 let createFactWithMetadataLoader: jest.Mock;
-let createAggregatedFactsLoader: jest.Mock;
-let createAggregatedFactsWithMetadataLoader: jest.Mock;
-let createAggregatedFactsWithCountLoader: jest.Mock;
+let createAggregatesLoader: jest.Mock;
+let createAggregateGroupCountLoader: jest.Mock;
 let createSelectOptionsLoader: jest.Mock;
 let createSelectOptionsTreeLoader: jest.Mock;
 let createCatalogMetadataLoader: jest.Mock;
@@ -155,15 +152,11 @@ beforeAll(async () => {
       createFactWithMetadataLoader: jest.Mock;
     });
 
-  ({
-    createAggregatedFactsLoader,
-    createAggregatedFactsWithMetadataLoader,
-    createAggregatedFactsWithCountLoader,
-  } = (await import('../../../src/loaders/aggregated-facts.js')) as {
-    createAggregatedFactsLoader: jest.Mock;
-    createAggregatedFactsWithMetadataLoader: jest.Mock;
-    createAggregatedFactsWithCountLoader: jest.Mock;
-  });
+  ({ createAggregatesLoader, createAggregateGroupCountLoader } =
+    (await import('../../../src/loaders/aggregates.js')) as {
+      createAggregatesLoader: jest.Mock;
+      createAggregateGroupCountLoader: jest.Mock;
+    });
 
   ({ createSelectOptionsLoader, createSelectOptionsTreeLoader } =
     (await import('../../../src/loaders/select-options.js')) as {
@@ -189,9 +182,8 @@ const ALL_LOADER_KEYS: Array<keyof Omit<LoadersObject, 'clearAll' | 'prime'>> = 
   'fact',
   'factWithCount',
   'factWithMetadata',
-  'aggregatedFacts',
-  'aggregatedFactsWithMetadata',
-  'aggregatedFactsWithCount',
+  'aggregates',
+  'aggregateGroupCount',
   'selectOptions',
   'selectOptionsTree',
   'catalogMetadata',
@@ -212,9 +204,8 @@ describe('createLoaders', () => {
       expect(loaders).toHaveProperty('fact');
       expect(loaders).toHaveProperty('factWithCount');
       expect(loaders).toHaveProperty('factWithMetadata');
-      expect(loaders).toHaveProperty('aggregatedFacts');
-      expect(loaders).toHaveProperty('aggregatedFactsWithMetadata');
-      expect(loaders).toHaveProperty('aggregatedFactsWithCount');
+      expect(loaders).toHaveProperty('aggregates');
+      expect(loaders).toHaveProperty('aggregateGroupCount');
       expect(loaders).toHaveProperty('selectOptions');
     });
 
@@ -248,9 +239,8 @@ describe('createLoaders', () => {
       expect(createFactLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createFactWithCountLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createFactWithMetadataLoader).toHaveBeenCalledWith(databaseId, null);
-      expect(createAggregatedFactsLoader).toHaveBeenCalledWith(databaseId, null);
-      expect(createAggregatedFactsWithMetadataLoader).toHaveBeenCalledWith(databaseId, null);
-      expect(createAggregatedFactsWithCountLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createAggregatesLoader).toHaveBeenCalledWith(databaseId, null);
+      expect(createAggregateGroupCountLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createSelectOptionsLoader).toHaveBeenCalledWith(databaseId, null);
       expect(createSelectOptionsTreeLoader).toHaveBeenCalledWith(databaseId, null);
     });

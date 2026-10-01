@@ -7,11 +7,7 @@ import {
 } from './fact.js';
 import { createSelectOptionsLoader, createSelectOptionsTreeLoader } from './select-options.js';
 import { createFieldStatsLoader } from './field-stats.js';
-import {
-  createAggregatedFactsLoader,
-  createAggregatedFactsWithMetadataLoader,
-  createAggregatedFactsWithCountLoader,
-} from './aggregated-facts.js';
+import { createAggregatesLoader, createAggregateGroupCountLoader } from './aggregates.js';
 import { createCatalogMetadataLoader } from './catalog.js';
 import { createDatasetInfoLoader } from './dataset-info.js';
 import {
@@ -30,7 +26,8 @@ import type {
   SelectOptionNode,
 } from './select-options.js';
 import type { FieldStatsParams, FieldStats } from './field-stats.js';
-import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
+import type { AggregatePage } from './aggregates.js';
+import type { AggregatePageParams, AggregateCountParams } from '../utils/aggregate-query.js';
 import type { CatalogSchemaKey } from './catalog.js';
 import type { DatasetInfo } from './dataset-info.js';
 import type {
@@ -58,9 +55,7 @@ interface PrimeData {
   facts?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithCount?: KeyValuePair<FactQueryParams, FactQueryResult>[];
   factsWithMetadata?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  aggregatedFacts?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
-  aggregatedFactsWithMetadata?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
-  aggregatedFactsWithCount?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
+  aggregates?: KeyValuePair<AggregatePageParams, AggregatePage>[];
   selectOptions?: KeyValuePair<SelectOptionsParams, SelectOption[]>[];
 }
 
@@ -72,9 +67,8 @@ interface LoadersCollection {
   fact: Loader<FactQueryParams, FactQueryResult>;
   factWithCount: Loader<FactQueryParams, FactQueryResult>;
   factWithMetadata: Loader<FactQueryParams, FactQueryResult>;
-  aggregatedFacts: Loader<AggregatedQueryParams, AggregatedResult>;
-  aggregatedFactsWithMetadata: Loader<AggregatedQueryParams, AggregatedResult>;
-  aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
+  aggregates: Loader<AggregatePageParams, AggregatePage>;
+  aggregateGroupCount: Loader<AggregateCountParams, number>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
   selectOptionsTree: Loader<SelectOptionsTreeParams, SelectOptionNode[]>;
   fieldStats: Loader<FieldStatsParams, FieldStats>;
@@ -125,13 +119,9 @@ const createLoaders = (
   const factWithCountLoader = createFactWithCountLoader(catalogId, schema);
   const factWithMetadataLoader = createFactWithMetadataLoader(catalogId, schema);
 
-  // Loaders pour les faits agrégés
-  const aggregatedFactsLoader = createAggregatedFactsLoader(catalogId, schema);
-  const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader(
-    catalogId,
-    schema,
-  );
-  const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(catalogId, schema);
+  // Loaders des agrégats : pages, et comptage des groupes en cache séparé
+  const aggregatesLoader = createAggregatesLoader(catalogId, schema);
+  const aggregateGroupCountLoader = createAggregateGroupCountLoader(catalogId, schema);
 
   const selectOptionsLoader = createSelectOptionsLoader(catalogId, schema);
   const selectOptionsTreeLoader = createSelectOptionsTreeLoader(catalogId, schema);
@@ -150,9 +140,8 @@ const createLoaders = (
     fact: factLoader,
     factWithCount: factWithCountLoader,
     factWithMetadata: factWithMetadataLoader,
-    aggregatedFacts: aggregatedFactsLoader,
-    aggregatedFactsWithMetadata: aggregatedFactsWithMetadataLoader,
-    aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
+    aggregates: aggregatesLoader,
+    aggregateGroupCount: aggregateGroupCountLoader,
     selectOptions: selectOptionsLoader,
     selectOptionsTree: selectOptionsTreeLoader,
     fieldStats: fieldStatsLoader,
@@ -168,9 +157,8 @@ const createLoaders = (
       factLoader.clearAll();
       factWithCountLoader.clearAll();
       factWithMetadataLoader.clearAll();
-      aggregatedFactsLoader.clearAll();
-      aggregatedFactsWithMetadataLoader.clearAll();
-      aggregatedFactsWithCountLoader.clearAll();
+      aggregatesLoader.clearAll();
+      aggregateGroupCountLoader.clearAll();
       selectOptionsLoader.clearAll();
       selectOptionsTreeLoader.clearAll();
       fieldStatsLoader.clearAll();
@@ -188,9 +176,7 @@ const createLoaders = (
         facts = [],
         factsWithCount = [],
         factsWithMetadata = [],
-        aggregatedFacts = [],
-        aggregatedFactsWithMetadata = [],
-        aggregatedFactsWithCount = [],
+        aggregates = [],
         selectOptions = [],
       } = initialData;
 
@@ -207,14 +193,8 @@ const createLoaders = (
       factsWithMetadata.forEach(({ key, value }) => {
         factWithMetadataLoader.prime(key, value);
       });
-      aggregatedFacts.forEach(({ key, value }) => {
-        aggregatedFactsLoader.prime(key, value);
-      });
-      aggregatedFactsWithMetadata.forEach(({ key, value }) => {
-        aggregatedFactsWithMetadataLoader.prime(key, value);
-      });
-      aggregatedFactsWithCount.forEach(({ key, value }) => {
-        aggregatedFactsWithCountLoader.prime(key, value);
+      aggregates.forEach(({ key, value }) => {
+        aggregatesLoader.prime(key, value);
       });
       selectOptions.forEach(({ key, value }) => {
         selectOptionsLoader.prime(key, value);

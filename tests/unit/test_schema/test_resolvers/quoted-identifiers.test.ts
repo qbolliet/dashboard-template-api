@@ -135,58 +135,78 @@ describe('getFactTable — noms de colonnes avec espace, accent, apostrophe', ()
 
 // ─── Agrégations ──────────────────────────────────────────────────────────────
 
-describe('getAggregatedFacts — regroupement', () => {
+describe('getAggregates — regroupement', () => {
   test('groupBy "zone d\'emploi", AVG de "taux chômage"', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "emploi", groupBy: "zone d'emploi", measure: "taux chômage", aggregation: AVG) {
-          key aggregatedValue count
+        getAggregates(schema: "emploi", groupBy: [{ field: "zone d'emploi" }], aggregates: [{ measure: "taux chômage", aggregation: AVG }]) {
+          columns data
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    expect(result.data!.getAggregatedFacts).toEqual([
-      { key: 'Lyon', aggregatedValue: 5.5, count: 3 },
-      { key: 'Paris', aggregatedValue: 7.5, count: 3 },
-      { key: "Val-d'Oise", aggregatedValue: 9.5, count: 3 },
-    ]);
+    expect(result.data!.getAggregates).toEqual({
+      // Alias par défaut : le nom de la mesure, quoté dans le SQL
+      columns: ["zone d'emploi", 'taux chômage_avg', 'row_count'],
+      data: [
+        { "zone d'emploi": 'Lyon', 'taux chômage_avg': 5.5, row_count: 3 },
+        { "zone d'emploi": 'Paris', 'taux chômage_avg': 7.5, row_count: 3 },
+        { "zone d'emploi": "Val-d'Oise", 'taux chômage_avg': 9.5, row_count: 3 },
+      ],
+    });
   });
 
   test('groupBy "taux chômage", COUNT de "Année"', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "emploi", groupBy: "taux chômage", measure: "Année", aggregation: COUNT) {
-          key aggregatedValue
+        getAggregates(schema: "emploi", groupBy: [{ field: "taux chômage" }], aggregates: [{ measure: "Année", aggregation: COUNT, alias: "n" }]) {
+          data
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    const groups = result.data!.getAggregatedFacts as Array<{
-      key: string;
-      aggregatedValue: number;
-    }>;
+    const groups = (result.data!.getAggregates as { data: Record<string, unknown>[] }).data;
     // Neuf taux distincts (5 à 10), une ligne chacun, triés par clé
-    expect(groups.map((group) => Number(group.key))).toEqual([5, 5.5, 6, 7, 7.5, 8, 9, 9.5, 10]);
-    expect(groups.every((group) => group.aggregatedValue === 1)).toBe(true);
+    expect(groups.map((group) => group['taux chômage'])).toEqual([
+      5, 5.5, 6, 7, 7.5, 8, 9, 9.5, 10,
+    ]);
+    expect(groups.every((group) => group.n === 1)).toBe(true);
   });
 
   test('la mesure par défaut applique defaultAggregation (AVG)', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "emploi", groupBy: "Année", measure: "taux chômage") {
-          key aggregatedValue
+        getAggregates(schema: "emploi", groupBy: [{ field: "Année" }], aggregates: [{ measure: "taux chômage", alias: "taux" }], includeRowCount: false) {
+          data aggregates { aggregation }
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    expect(result.data!.getAggregatedFacts).toEqual([
-      { key: '2022', aggregatedValue: 7 },
-      { key: '2023', aggregatedValue: 7.5 },
-      { key: '2024', aggregatedValue: 8 },
-    ]);
+    expect(result.data!.getAggregates).toEqual({
+      data: [
+        { Année: 2022, taux: 7 },
+        { Année: 2023, taux: 7.5 },
+        { Année: 2024, taux: 8 },
+      ],
+      aggregates: [{ aggregation: 'AVG' }],
+    });
+  });
+
+  test('tri sur une colonne de groupe au nom quoté', async () => {
+    const result = await execute(server, {
+      query: `query {
+        getAggregates(schema: "emploi", groupBy: [{ field: "zone d'emploi" }], aggregates: [{ measure: "taux chômage" }], sort: [{ by: "zone d'emploi", order: DESC }]) {
+          data
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    const groups = (result.data!.getAggregates as { data: Record<string, unknown>[] }).data;
+    expect(groups.map((group) => group["zone d'emploi"])).toEqual(["Val-d'Oise", 'Paris', 'Lyon']);
   });
 });
 

@@ -727,12 +727,11 @@ describe('complex combined query', () => {
           limit: 5
           offset: 0
         ) { data { keys { name value } measures { name value } } total }
-        aggregated: getAggregatedFacts(
-          measure: "value"
-          groupBy: "indicator"
-          aggregation: AVG
+        aggregated: getAggregates(
+          groupBy: [{ field: "indicator" }]
+          aggregates: [{ measure: "value", aggregation: AVG }]
           structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
-        ) { key aggregatedValue }
+        ) { data }
         options: getSelectOptions(fieldName: "country") { value label }
       }
     `;
@@ -743,7 +742,7 @@ describe('complex combined query', () => {
     // Vérification de la présence et cohérence de tous les résultats dans la réponse combinée
     expect((result.data!.countryMeta as { name: string }).name).toBe('country');
     expect((result.data!.facts as { data: unknown }).data).toBeDefined();
-    expect(Array.isArray(result.data!.aggregated)).toBe(true);
+    expect(Array.isArray((result.data!.aggregated as { data: unknown }).data)).toBe(true);
     // Les options du menu sont les libellés eux-mêmes
     const options = result.data!.options as Array<{ value: string; label: string }>;
     expect(options.every((o) => o.value === o.label)).toBe(true);

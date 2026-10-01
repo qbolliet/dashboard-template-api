@@ -282,7 +282,7 @@ const crossDatabaseResolvers = {
       }
 
       // groupBy contrôlé des deux côtés ; libellé de la clé de groupe de chaque
-      // côté, même règle que getAggregatedFacts
+      // côté, même règle que getAggregates
       const [labelFieldA, labelFieldB] = await Promise.all([
         checkSide(loaders, catalogA, schemaA, [groupBy], 'groupBy', groupBy),
         checkSide(loaders, catalogB, schemaB, [groupBy], 'groupBy', groupBy),

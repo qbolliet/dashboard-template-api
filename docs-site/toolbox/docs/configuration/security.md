@@ -84,6 +84,9 @@ SECURITY:
     INTROSPECTION_COST: 1000 # __schema and __type; __typename is free
     ROW_COST: 0.1 # per row of `limit`, bounded by API.PAGINATION.MAX_LIMIT
     STATS_COST_PER_COLUMN: 5 # Metadata.stats, per column of the enclosing list
+    AGGREGATE_COST: 2 # getAggregates: per aggregate
+    HOLISTIC_AGGREGATE_COST: 5 # getAggregates: extra per explicit MEDIAN or MODE
+    GROUP_COLUMN_COST: 3 # getAggregates: per group column
     DEFAULT_ROOT_FIELD_SCORE: 5 # root field missing from the table
     ROOT_FIELD_SCORES:
       getCatalogs: 1
@@ -91,12 +94,12 @@ SECURITY:
       getSelectOptions: 3
       getFactTable: 5
       getFactTableWithMetadata: 8
-      getAggregatedFacts: 10
+      getAggregates: 10
       compareFacts: 15
       # … one entry per root field of the Query type
 ```
 
-Every root field pays its score from `ROOT_FIELD_SCORES` (never zero), plus `ROW_COST` per requested row (an omitted `limit` is charged at its SDL default), +2 for a filter tree and +1 for a sort; nested objects pay `OBJECT_COST × DEPTH_FACTOR^depth`, and `Metadata.stats` pays `STATS_COST_PER_COLUMN` for each column of the list it belongs to. Operations with more than `MAX_ROOT_FIELDS` root fields, or a score above `MAX_ALLOWED`, are rejected before execution with `QUERY_COMPLEXITY_EXCEEDED` (HTTP 400). The full scale and worked examples are in [Security architecture](../architecture/security.md#complexity-scale-srcsecuritycomplexity-analyzerts).
+Every root field pays its score from `ROOT_FIELD_SCORES` (never zero), plus `ROW_COST` per requested row (an omitted `limit` is charged at its SDL default), +2 for a filter tree and +1 for a sort; `getAggregates` also pays `AGGREGATE_COST` per aggregate, `HOLISTIC_AGGREGATE_COST` per explicit `MEDIAN`/`MODE` and `GROUP_COLUMN_COST` per group column; nested objects pay `OBJECT_COST × DEPTH_FACTOR^depth`, and `Metadata.stats` pays `STATS_COST_PER_COLUMN` for each column of the list it belongs to. Operations with more than `MAX_ROOT_FIELDS` root fields, or a score above `MAX_ALLOWED`, are rejected before execution with `QUERY_COMPLEXITY_EXCEEDED` (HTTP 400). The full scale and worked examples are in [Security architecture](../architecture/security.md#complexity-scale-srcsecuritycomplexity-analyzerts).
 
 Adding a root query means adding its entry to `ROOT_FIELD_SCORES`: `tests/integration/complexity-guard.test.ts` fails when a `Query` field has none.
 

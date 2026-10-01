@@ -50,11 +50,13 @@ describe('pagination hors bornes', () => {
     expectBadInput(result, 'getFactTableWithMetadata', fragment);
   });
 
-  test('getAggregatedFacts(limit: 0) → BAD_USER_INPUT', async () => {
+  test('getAggregates(limit: 0) → BAD_USER_INPUT', async () => {
     const result = await execute(server, {
-      query: `query { getAggregatedFacts(groupBy: "country", measure: "value", limit: 0) { key } }`,
+      query: `query {
+        getAggregates(groupBy: [{ field: "country" }], aggregates: [{ measure: "value" }], limit: 0) { total }
+      }`,
     });
-    expectBadInput(result, 'getAggregatedFacts', 'Limit must be a positive integer');
+    expectBadInput(result, 'getAggregates', 'Limit must be a positive integer');
   });
 
   test('compareFacts(offset: -1) → BAD_USER_INPUT', async () => {
@@ -95,20 +97,20 @@ describe('colonnes contrôlées contre metadata', () => {
     expectBadInput(result, 'getFactTable', 'Unknown sort column(s): "nope"');
   });
 
-  test('getAggregatedFacts(groupBy inconnu) → BAD_USER_INPUT', async () => {
+  test('getAggregates(groupBy inconnu) → BAD_USER_INPUT', async () => {
     const result = await execute(server, {
-      query: `query { getAggregatedFacts(groupBy: "nope", measure: "value") { key } }`,
+      query: `query { getAggregates(groupBy: [{ field: "nope" }], aggregates: [{ measure: "value" }]) { total } }`,
     });
-    expectBadInput(result, 'getAggregatedFacts', 'Unknown groupBy column(s): "nope"');
+    expectBadInput(result, 'getAggregates', 'Unknown groupBy column(s): "nope"');
   });
 
-  test('getAggregatedFacts(measure: "indicator", aggregation: SUM) → BAD_USER_INPUT', async () => {
+  test('getAggregates(measure: "indicator", aggregation: SUM) → BAD_USER_INPUT', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(groupBy: "country", measure: "indicator", aggregation: SUM) { key }
+        getAggregates(groupBy: [{ field: "country" }], aggregates: [{ measure: "indicator", aggregation: SUM }]) { total }
       }`,
     });
-    expectBadInput(result, 'getAggregatedFacts', 'Allowed aggregations: COUNT, MODE');
+    expectBadInput(result, 'getAggregates', 'Allowed aggregations: COUNT, MODE');
   });
 
   test('compareFacts(joinFields inconnus) → BAD_USER_INPUT', async () => {

@@ -24,45 +24,68 @@ export type Scalars = {
   JSON: { input: unknown; output: unknown; }
 };
 
-/** An aggregated fact record with key and value */
-export type AggregatedFact = {
-  /**
-   * Aggregated value, serialized like every value of the JSON scalar. Its form depends on the
-   * aggregation: COUNT is a number; SUM, AVG and MEDIAN (numeric measures only) are numbers, an
-   * integer sum beyond 2^53 being its exact decimal string; MIN and MAX (numeric or temporal
-   * measures) are numbers or ISO 8601 dates; MODE is a value of the measure (number, string,
-   * boolean, ISO date). null when the group holds no non-NULL value of the measure.
-   */
-  aggregatedValue?: Maybe<Scalars['JSON']['output']>;
-  /** Number of records in this group */
-  count: Scalars['Float']['output'];
-  /** Grouping key, as a string. null is the group of the rows where the group column is NULL (e.g. a missing level of a column hierarchy) */
-  key?: Maybe<Scalars['String']['output']>;
-  /** Label of the grouping key when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise */
-  keyLabel?: Maybe<Scalars['String']['output']>;
+/** Description of an aggregate column: everything needed for axes, headers and tooltips */
+export type AggregateColumn = {
+  /** Effective operation (argument, else defaultAggregation, else SUM) */
+  aggregation: Aggregation;
+  /** Name of the column in data (or value of measure in the LONG format) */
+  alias: Scalars['String']['output'];
+  /** d3-format string: the one of the measure, except COUNT (",d") and AVG/MEDIAN of an integer measure whose format ends with d (two decimals: ",d" → ",.2f") */
+  displayFormat?: Maybe<Scalars['String']['output']>;
+  /** [min, max] of the values of this page, NULLs ignored: numbers for a numeric aggregate (integers beyond 2^53 compared approximately), ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null otherwise */
+  extent?: Maybe<Scalars['JSON']['output']>;
+  /** Full metadata of the measure (label, family, description, lazy stats…) */
+  field: Metadata;
+  /** Aggregated column */
+  measure: Scalars['String']['output'];
+  /** DuckDB type of the result, read from the query: SUM of an integer → HUGEINT, AVG → DOUBLE, COUNT → BIGINT, MIN/MAX/MODE → type of the measure… */
+  sqlType: Scalars['String']['output'];
+  /** Unit of the measure, null for COUNT */
+  unit?: Maybe<Scalars['String']['output']>;
 };
 
-/** Metadata for aggregated facts optimized for D3 */
-export type AggregatedFactsMetadata = {
-  /** Number of groups in this page */
-  count: Scalars['Int']['output'];
-  /** ISO 8601 timestamp of when this query was executed */
+/** Serialization of the rows of getAggregates */
+export type AggregateFormat =
+  /** One array per group, ordered as columns */
+  | 'ARRAYS'
+  /** Tidy (long) form: one object per (group, aggregate) — {<group columns>, <field>__label, row_count, measure: <alias>, value} — in the order of the aggregates; OBJECTS melted on the aliases. Group and label columns may then not be named measure or value */
+  | 'LONG'
+  /** One object per group: {<group columns>, <field>__label, <aliases>, row_count} */
+  | 'OBJECTS';
+
+/** One requested aggregate: a measure, an operation, an output column name */
+export type AggregateInput = {
+  /** Operation, compatible with the type family of the measure: SUM, AVG, MEDIAN on a numeric measure; MIN, MAX on a numeric or temporal one; MODE, COUNT on any (otherwise BAD_USER_INPUT listing the allowed ones). Absent: metadata.defaultAggregation of the measure, then SUM for a numeric measure only; a non-numeric measure without defaultAggregation requires it (COUNT is never implied). COUNT counts the non-NULL values of the measure */
+  aggregation?: InputMaybe<Aggregation>;
+  /** Name of the output column, matching ^[a-z_][a-z0-9_]*$. Default: <measure>_<aggregation in lower case> (e.g. value_sum). Every output column name must be unique (group columns, label columns, aliases, row_count) */
+  alias?: InputMaybe<Scalars['String']['input']>;
+  /** Column to aggregate (must exist in metadata) */
+  measure: Scalars['String']['input'];
+};
+
+/** Result of getAggregates */
+export type AggregateResult = {
+  /** Aggregate columns, in the requested order */
+  aggregates: Array<AggregateColumn>;
+  /** Order of the columns of data. OBJECTS and ARRAYS: group columns, label columns, aliases, row_count. LONG: group columns, label columns, row_count, measure, value */
+  columns: Array<Scalars['String']['output']>;
+  /** Rows in the requested format. Value types are guaranteed, see the JSON scalar; an aggregate over a group without any non-NULL value is null */
+  data: Array<Scalars['JSON']['output']>;
+  /** ISO 8601 timestamp of when this result was built */
   generatedAt: Scalars['String']['output'];
-  groupByFieldInfo?: Maybe<Metadata>;
-  /** Bounds of the group keys of this page, the NULL key ignored: [min, max] as numbers for a numeric group column, as ISO 8601 strings for a temporal one, [first, last] in page order otherwise; null when the page has no non-NULL key */
-  keyExtent?: Maybe<Scalars['JSON']['output']>;
-  /** Metadata of the aggregated measure (unit and display format of the aggregated value) */
-  measureFieldInfo?: Maybe<Metadata>;
-  /** Descriptive statistics of the non-NULL aggregated values of this page; null when the aggregate is not numeric */
-  statistics?: Maybe<AggregationStatistics>;
-  /** Bounds of the aggregated values of this page, NULLs ignored: [min, max] as numbers for a numeric aggregate, as ISO 8601 strings for MIN/MAX/MODE of a temporal measure; null when the page is empty, holds only NULLs, or the aggregate is text or boolean (MODE) */
-  valueExtent?: Maybe<Scalars['JSON']['output']>;
+  /** Group columns, in the requested order (empty: global aggregate) */
+  groupBy: Array<GroupColumn>;
+  /** Whether groups remain after this page */
+  hasNextPage: Scalars['Boolean']['output'];
+  /** Number of groups matching the filter, the NULL group included (1 without groupBy). In the LONG format a page holds up to limit × aggregates rows */
+  total: Scalars['Float']['output'];
 };
 
-/** Aggregated facts with D3-optimized metadata */
-export type AggregatedFactsWithMetadata = {
-  data: Array<AggregatedFact>;
-  metadata: AggregatedFactsMetadata;
+/** Sort criterion of getAggregates */
+export type AggregateSortInput = {
+  /** An output column: alias of an aggregate, group column, label column (<field>__label) or row_count */
+  by: Scalars['String']['input'];
+  order?: InputMaybe<SortOrder>;
 };
 
 export type Aggregation =
@@ -73,14 +96,6 @@ export type Aggregation =
   | 'MIN'
   | 'MODE'
   | 'SUM';
-
-/** Statistics for aggregated data */
-export type AggregationStatistics = {
-  mean?: Maybe<Scalars['Float']['output']>;
-  median?: Maybe<Scalars['Float']['output']>;
-  quartiles?: Maybe<Array<Maybe<Scalars['Float']['output']>>>;
-  stdDev?: Maybe<Scalars['Float']['output']>;
-};
 
 /** Informations sur un catalogue DuckLake disponible */
 export type Catalog = {
@@ -296,6 +311,28 @@ export type FilterOperation =
   | 'ON_OR_BEFORE'
   | 'STARTS';
 
+/** A group column of getAggregates */
+export type GroupByInput = {
+  /** Column to group by (must exist in metadata); appears at most once in groupBy */
+  field: Scalars['String']['input'];
+  /** Truncates the values of a DATE or TIMESTAMP column before grouping (e.g. MONTH: one group per month, valued by its first instant). The output column keeps the name of field. Any other column type: BAD_USER_INPUT */
+  grain?: InputMaybe<TimeGrain>;
+};
+
+/** A group column of an aggregate result */
+export type GroupColumn = {
+  /** [min, max] of the groups of this page, the NULL group ignored: numbers for a numeric column, ISO 8601 strings for a temporal one; null for other types or when the page holds no non-NULL group */
+  extent?: Maybe<Scalars['JSON']['output']>;
+  /** Metadata of the column (label, typeFamily, unit…) */
+  field: Metadata;
+  /** Truncation applied, null for a column grouped by its raw values */
+  grain?: Maybe<TimeGrain>;
+  /** Column of data holding the label of each group (<name>__label) when the group column is a code with label columns (Metadata.labelFields, default rule: the only one, or the first by alphabetical order), read by ANY_VALUE in the same query; null otherwise (and always with a grain) */
+  labelColumn?: Maybe<Scalars['String']['output']>;
+  /** Name of the column in data (the field of the GroupByInput) */
+  name: Scalars['String']['output'];
+};
+
 /** Métadonnées d'une colonne de la table des faits — contrat entre la base et l'interface */
 export type Metadata = {
   /** Agrégation appliquée par défaut à cette mesure quand la requête n'en précise aucune */
@@ -363,10 +400,8 @@ export type Query = {
   compareFacts: PaginatedComparedFacts;
   /** Retourne les options de sélection communes à plusieurs datasets (intersection sur les labels pour les champs catégoriels) */
   crossDatabaseSelectOptions: Array<SelectOption>;
-  /** Get aggregated facts for charts and summaries */
-  getAggregatedFacts?: Maybe<Array<Maybe<AggregatedFact>>>;
-  /** Get aggregated facts with D3 metadata */
-  getAggregatedFactsWithMetadata?: Maybe<AggregatedFactsWithMetadata>;
+  /** Aggregates of several measures over zero, one or several group columns, in one SQL query. Pagination applies to groups, sorted by sort then by every group column (ascending) as a tie-break */
+  getAggregates: AggregateResult;
   /** Retourne tous les champs (métadonnées) d'un catalogue/schéma, colonnes de libellés comprises (contrat complet) */
   getCatalogSchema: Array<Metadata>;
   /** Liste tous les catalogues disponibles avec leurs schémas (cascade lazy via les selection sets) */
@@ -467,30 +502,16 @@ export type QueryCrossDatabaseSelectOptionsArgs = {
 };
 
 
-export type QueryGetAggregatedFactsArgs = {
-  aggregation?: InputMaybe<Aggregation>;
+export type QueryGetAggregatesArgs = {
+  aggregates: Array<AggregateInput>;
   catalog?: InputMaybe<Scalars['String']['input']>;
-  fields?: InputMaybe<Array<Scalars['String']['input']>>;
-  groupBy: Scalars['String']['input'];
+  format?: InputMaybe<AggregateFormat>;
+  groupBy?: InputMaybe<Array<GroupByInput>>;
+  includeRowCount?: InputMaybe<Scalars['Boolean']['input']>;
   limit?: Scalars['Int']['input'];
-  measure: Scalars['String']['input'];
   offset?: Scalars['Int']['input'];
   schema?: InputMaybe<Scalars['String']['input']>;
-  sort?: InputMaybe<Array<SortInput>>;
-  structuredFilters?: InputMaybe<FilterNode>;
-};
-
-
-export type QueryGetAggregatedFactsWithMetadataArgs = {
-  aggregation?: InputMaybe<Aggregation>;
-  catalog?: InputMaybe<Scalars['String']['input']>;
-  fields?: InputMaybe<Array<Scalars['String']['input']>>;
-  groupBy: Scalars['String']['input'];
-  limit?: Scalars['Int']['input'];
-  measure: Scalars['String']['input'];
-  offset?: Scalars['Int']['input'];
-  schema?: InputMaybe<Scalars['String']['input']>;
-  sort?: InputMaybe<Array<SortInput>>;
+  sort?: InputMaybe<Array<AggregateSortInput>>;
   structuredFilters?: InputMaybe<FilterNode>;
 };
 
@@ -594,6 +615,17 @@ export type SortOrder =
   | 'ASC'
   | 'DESC';
 
+/** Truncation applied to a DATE or TIMESTAMP group column (date_trunc). SECOND, MINUTE and HOUR apply to TIMESTAMP columns only; a TIMESTAMP WITH TIME ZONE is truncated in UTC. WEEK starts on Monday (ISO week) */
+export type TimeGrain =
+  | 'DAY'
+  | 'HOUR'
+  | 'MINUTE'
+  | 'MONTH'
+  | 'QUARTER'
+  | 'SECOND'
+  | 'WEEK'
+  | 'YEAR';
+
 /**
  * Famille de type d'une colonne, dérivée de sqlType par la règle du serveur (celle qui valide
  * les filtres) : un client route ses widgets sur cette valeur au lieu de recopier une table des
@@ -693,11 +725,12 @@ export type DirectiveResolverFn<TResult = Record<PropertyKey, never>, TParent = 
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = {
-  AggregatedFact: ResolverTypeWrapper<AggregatedFact>;
-  AggregatedFactsMetadata: ResolverTypeWrapper<Omit<AggregatedFactsMetadata, 'groupByFieldInfo' | 'measureFieldInfo'> & { groupByFieldInfo?: Maybe<ResolversTypes['Metadata']>, measureFieldInfo?: Maybe<ResolversTypes['Metadata']> }>;
-  AggregatedFactsWithMetadata: ResolverTypeWrapper<Omit<AggregatedFactsWithMetadata, 'metadata'> & { metadata: ResolversTypes['AggregatedFactsMetadata'] }>;
+  AggregateColumn: ResolverTypeWrapper<Omit<AggregateColumn, 'field'> & { field: ResolversTypes['Metadata'] }>;
+  AggregateFormat: AggregateFormat;
+  AggregateInput: AggregateInput;
+  AggregateResult: ResolverTypeWrapper<Omit<AggregateResult, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversTypes['AggregateColumn']>, groupBy: Array<ResolversTypes['GroupColumn']> }>;
+  AggregateSortInput: AggregateSortInput;
   Aggregation: Aggregation;
-  AggregationStatistics: ResolverTypeWrapper<AggregationStatistics>;
   Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
   Catalog: ResolverTypeWrapper<Omit<Catalog, 'schemas'> & { schemas: Array<ResolversTypes['CatalogSchemaInfo']> }>;
   CatalogSchemaInfo: ResolverTypeWrapper<Omit<CatalogSchemaInfo, 'fields'> & { fields: Array<ResolversTypes['Metadata']> }>;
@@ -715,6 +748,8 @@ export type ResolversTypes = {
   FilterNode: FilterNode;
   FilterOperation: FilterOperation;
   Float: ResolverTypeWrapper<Scalars['Float']['output']>;
+  GroupByInput: GroupByInput;
+  GroupColumn: ResolverTypeWrapper<Omit<GroupColumn, 'field'> & { field: ResolversTypes['Metadata'] }>;
   Int: ResolverTypeWrapper<Scalars['Int']['output']>;
   JSON: ResolverTypeWrapper<Scalars['JSON']['output']>;
   Metadata: ResolverTypeWrapper<FieldMetadata>;
@@ -725,15 +760,16 @@ export type ResolversTypes = {
   SortInput: SortInput;
   SortOrder: SortOrder;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
+  TimeGrain: TimeGrain;
   TypeFamily: TypeFamily;
 };
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = {
-  AggregatedFact: AggregatedFact;
-  AggregatedFactsMetadata: Omit<AggregatedFactsMetadata, 'groupByFieldInfo' | 'measureFieldInfo'> & { groupByFieldInfo?: Maybe<ResolversParentTypes['Metadata']>, measureFieldInfo?: Maybe<ResolversParentTypes['Metadata']> };
-  AggregatedFactsWithMetadata: Omit<AggregatedFactsWithMetadata, 'metadata'> & { metadata: ResolversParentTypes['AggregatedFactsMetadata'] };
-  AggregationStatistics: AggregationStatistics;
+  AggregateColumn: Omit<AggregateColumn, 'field'> & { field: ResolversParentTypes['Metadata'] };
+  AggregateInput: AggregateInput;
+  AggregateResult: Omit<AggregateResult, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversParentTypes['AggregateColumn']>, groupBy: Array<ResolversParentTypes['GroupColumn']> };
+  AggregateSortInput: AggregateSortInput;
   Boolean: Scalars['Boolean']['output'];
   Catalog: Omit<Catalog, 'schemas'> & { schemas: Array<ResolversParentTypes['CatalogSchemaInfo']> };
   CatalogSchemaInfo: Omit<CatalogSchemaInfo, 'fields'> & { fields: Array<ResolversParentTypes['Metadata']> };
@@ -748,6 +784,8 @@ export type ResolversParentTypes = {
   FilterCriterion: FilterCriterion;
   FilterNode: FilterNode;
   Float: Scalars['Float']['output'];
+  GroupByInput: GroupByInput;
+  GroupColumn: Omit<GroupColumn, 'field'> & { field: ResolversParentTypes['Metadata'] };
   Int: Scalars['Int']['output'];
   JSON: Scalars['JSON']['output'];
   Metadata: FieldMetadata;
@@ -759,33 +797,25 @@ export type ResolversParentTypes = {
   String: Scalars['String']['output'];
 };
 
-export type AggregatedFactResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregatedFact'] = ResolversParentTypes['AggregatedFact']> = {
-  aggregatedValue?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
-  count?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
-  key?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  keyLabel?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+export type AggregateColumnResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregateColumn'] = ResolversParentTypes['AggregateColumn']> = {
+  aggregation?: Resolver<ResolversTypes['Aggregation'], ParentType, ContextType>;
+  alias?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  displayFormat?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  extent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
+  field?: Resolver<ResolversTypes['Metadata'], ParentType, ContextType>;
+  measure?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  sqlType?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  unit?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 };
 
-export type AggregatedFactsMetadataResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregatedFactsMetadata'] = ResolversParentTypes['AggregatedFactsMetadata']> = {
-  count?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+export type AggregateResultResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregateResult'] = ResolversParentTypes['AggregateResult']> = {
+  aggregates?: Resolver<Array<ResolversTypes['AggregateColumn']>, ParentType, ContextType>;
+  columns?: Resolver<Array<ResolversTypes['String']>, ParentType, ContextType>;
+  data?: Resolver<Array<ResolversTypes['JSON']>, ParentType, ContextType>;
   generatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  groupByFieldInfo?: Resolver<Maybe<ResolversTypes['Metadata']>, ParentType, ContextType>;
-  keyExtent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
-  measureFieldInfo?: Resolver<Maybe<ResolversTypes['Metadata']>, ParentType, ContextType>;
-  statistics?: Resolver<Maybe<ResolversTypes['AggregationStatistics']>, ParentType, ContextType>;
-  valueExtent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
-};
-
-export type AggregatedFactsWithMetadataResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregatedFactsWithMetadata'] = ResolversParentTypes['AggregatedFactsWithMetadata']> = {
-  data?: Resolver<Array<ResolversTypes['AggregatedFact']>, ParentType, ContextType>;
-  metadata?: Resolver<ResolversTypes['AggregatedFactsMetadata'], ParentType, ContextType>;
-};
-
-export type AggregationStatisticsResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregationStatistics'] = ResolversParentTypes['AggregationStatistics']> = {
-  mean?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
-  median?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
-  quartiles?: Resolver<Maybe<Array<Maybe<ResolversTypes['Float']>>>, ParentType, ContextType>;
-  stdDev?: Resolver<Maybe<ResolversTypes['Float']>, ParentType, ContextType>;
+  groupBy?: Resolver<Array<ResolversTypes['GroupColumn']>, ParentType, ContextType>;
+  hasNextPage?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  total?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
 };
 
 export type CatalogResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['Catalog'] = ResolversParentTypes['Catalog']> = {
@@ -852,6 +882,14 @@ export type FieldValueResolvers<ContextType = GraphQLContext, ParentType extends
   value?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
 };
 
+export type GroupColumnResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['GroupColumn'] = ResolversParentTypes['GroupColumn']> = {
+  extent?: Resolver<Maybe<ResolversTypes['JSON']>, ParentType, ContextType>;
+  field?: Resolver<ResolversTypes['Metadata'], ParentType, ContextType>;
+  grain?: Resolver<Maybe<ResolversTypes['TimeGrain']>, ParentType, ContextType>;
+  labelColumn?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  name?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+};
+
 export interface JsonScalarConfig extends GraphQLScalarTypeConfig<ResolversTypes['JSON'], any> {
   name: 'JSON';
 }
@@ -896,8 +934,7 @@ export type QueryResolvers<ContextType = GraphQLContext, ParentType extends Reso
   compareAggregatedFacts?: Resolver<ResolversTypes['PaginatedComparedFacts'], ParentType, ContextType, RequireFields<QueryCompareAggregatedFactsArgs, 'aggregation' | 'catalogA' | 'catalogB' | 'groupBy' | 'limit' | 'offset'>>;
   compareFacts?: Resolver<ResolversTypes['PaginatedComparedFacts'], ParentType, ContextType, RequireFields<QueryCompareFactsArgs, 'catalogA' | 'catalogB' | 'joinFields' | 'limit' | 'offset'>>;
   crossDatabaseSelectOptions?: Resolver<Array<ResolversTypes['SelectOption']>, ParentType, ContextType, RequireFields<QueryCrossDatabaseSelectOptionsArgs, 'catalogs' | 'fieldName' | 'limit'>>;
-  getAggregatedFacts?: Resolver<Maybe<Array<Maybe<ResolversTypes['AggregatedFact']>>>, ParentType, ContextType, RequireFields<QueryGetAggregatedFactsArgs, 'groupBy' | 'limit' | 'measure' | 'offset'>>;
-  getAggregatedFactsWithMetadata?: Resolver<Maybe<ResolversTypes['AggregatedFactsWithMetadata']>, ParentType, ContextType, RequireFields<QueryGetAggregatedFactsWithMetadataArgs, 'groupBy' | 'limit' | 'measure' | 'offset'>>;
+  getAggregates?: Resolver<ResolversTypes['AggregateResult'], ParentType, ContextType, RequireFields<QueryGetAggregatesArgs, 'aggregates' | 'format' | 'groupBy' | 'includeRowCount' | 'limit' | 'offset'>>;
   getCatalogSchema?: Resolver<Array<ResolversTypes['Metadata']>, ParentType, ContextType, Partial<QueryGetCatalogSchemaArgs>>;
   getCatalogs?: Resolver<Array<ResolversTypes['Catalog']>, ParentType, ContextType>;
   getDatasetInfo?: Resolver<ResolversTypes['DatasetInfo'], ParentType, ContextType, Partial<QueryGetDatasetInfoArgs>>;
@@ -917,10 +954,8 @@ export type SelectOptionResolvers<ContextType = GraphQLContext, ParentType exten
 };
 
 export type Resolvers<ContextType = GraphQLContext> = {
-  AggregatedFact?: AggregatedFactResolvers<ContextType>;
-  AggregatedFactsMetadata?: AggregatedFactsMetadataResolvers<ContextType>;
-  AggregatedFactsWithMetadata?: AggregatedFactsWithMetadataResolvers<ContextType>;
-  AggregationStatistics?: AggregationStatisticsResolvers<ContextType>;
+  AggregateColumn?: AggregateColumnResolvers<ContextType>;
+  AggregateResult?: AggregateResultResolvers<ContextType>;
   Catalog?: CatalogResolvers<ContextType>;
   CatalogSchemaInfo?: CatalogSchemaInfoResolvers<ContextType>;
   ComparedFact?: ComparedFactResolvers<ContextType>;
@@ -930,6 +965,7 @@ export type Resolvers<ContextType = GraphQLContext> = {
   Fact?: FactResolvers<ContextType>;
   FieldStats?: FieldStatsResolvers<ContextType>;
   FieldValue?: FieldValueResolvers<ContextType>;
+  GroupColumn?: GroupColumnResolvers<ContextType>;
   JSON?: GraphQLScalarType;
   Metadata?: MetadataResolvers<ContextType>;
   PaginatedComparedFacts?: PaginatedComparedFactsResolvers<ContextType>;

@@ -16,6 +16,20 @@ const AGGREGATIONS: readonly Aggregation[] = [
   'MODE',
 ];
 
+/**
+ * SQL function of each aggregation. Interpolated in the SQL: the key is an enum
+ * value checked by GraphQL, never a client string.
+ */
+const AGGREGATION_SQL: Readonly<Record<Aggregation, string>> = {
+  SUM: 'SUM',
+  AVG: 'AVG',
+  MAX: 'MAX',
+  MIN: 'MIN',
+  COUNT: 'COUNT',
+  MEDIAN: 'MEDIAN',
+  MODE: 'MODE',
+};
+
 // Agrégations admises par famille de type de la mesure ; la famille « other »
 // (TIME, INTERVAL, BLOB, LIST…) n'admet que celles qui valent pour tous les
 // types (MODE, COUNT)
@@ -76,4 +90,4 @@ function aggregatedValueFamily(
   return NUMERIC_RESULT.includes(aggregation) ? 'numeric' : measureFamily(sqlType);
 }
 
-export { AGGREGATIONS, measureFamily, allowedAggregations, aggregatedValueFamily };
+export { AGGREGATIONS, AGGREGATION_SQL, measureFamily, allowedAggregations, aggregatedValueFamily };

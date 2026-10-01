@@ -401,29 +401,23 @@ describe('Metadata.stats', () => {
     expect(page.fields[1].stats).toEqual(await fieldStats('fieldName: "date"'));
   });
 
-  test('getAggregatedFactsWithMetadata: group-by and measure infos carry their stats', async () => {
+  test('getAggregates: group and aggregate fields carry their stats', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFactsWithMetadata(groupBy: "country", measure: "value", aggregation: SUM) {
-          metadata {
-            groupByFieldInfo { name ${STATS} }
-            measureFieldInfo { name ${STATS} }
-          }
+        getAggregates(groupBy: [{ field: "country" }], aggregates: [{ measure: "value", aggregation: SUM }]) {
+          groupBy { field { name ${STATS} } }
+          aggregates { field { name ${STATS} } }
         }
       }`,
     });
     expect(result.errors).toBeUndefined();
-    const metadata = (
-      result.data!.getAggregatedFactsWithMetadata as {
-        metadata: {
-          groupByFieldInfo: { name: string; stats: Stats };
-          measureFieldInfo: { name: string; stats: Stats };
-        };
-      }
-    ).metadata;
+    const payload = result.data!.getAggregates as {
+      groupBy: { field: { name: string; stats: Stats } }[];
+      aggregates: { field: { name: string; stats: Stats } }[];
+    };
 
-    expect(metadata.groupByFieldInfo.stats).toEqual(await fieldStats('fieldName: "country"'));
-    expect(metadata.measureFieldInfo.stats).toEqual(await fieldStats('fieldName: "value"'));
+    expect(payload.groupBy[0].field.stats).toEqual(await fieldStats('fieldName: "country"'));
+    expect(payload.aggregates[0].field.stats).toEqual(await fieldStats('fieldName: "value"'));
   });
 
   test('one request asking the same column twice runs one SQL query', async () => {

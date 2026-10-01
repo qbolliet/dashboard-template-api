@@ -4,8 +4,8 @@ import { FactQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
-import { AggregatedFactsLoader } from './aggregated-facts.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
+import { AGGREGATION_SQL } from '../utils/aggregations.js';
 import type { CacheNamespace, DuckDBConnection, SortItem } from './base-loader.js';
 import type { Aggregation } from '../generated/graphql.js';
 
@@ -360,7 +360,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
    * — then the two results are joined on that key, cast to VARCHAR so differing
    * SQL types align. Uses CTEs to pre-aggregate, avoiding Cartesian products.
    * The label of the key is read by `ANY_VALUE` in each side's aggregation —
-   * the same path as getAggregatedFacts — then merged by COALESCE.
+   * the same path as getAggregates — then merged by COALESCE.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param params - Parameters defining datasets, groupBy, aggregation, and pagination.
@@ -379,7 +379,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const groupColumn = quoteIdent(groupBy);
     const labelFieldA = params.labelFieldA ?? null;
     const labelFieldB = params.labelFieldB ?? null;
-    const aggFn = AggregatedFactsLoader.AGGREGATION_MAP[aggregation] || 'SUM';
+    const aggFn = AGGREGATION_SQL[aggregation] || 'SUM';
 
     // CTE d'agrégation per-side : regroupement direct sur la colonne, libellé par ANY_VALUE
     const aggSide = (catalog: string, schema: string, labelField: string | null): string =>

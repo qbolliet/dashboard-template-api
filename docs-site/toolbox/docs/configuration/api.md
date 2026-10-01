@@ -92,6 +92,17 @@ API:
     SELECT_OPTIONS_LIMIT: ${SELECT_OPTIONS_LIMIT:-50}
 ```
 
+## Aggregates (`getAggregates`)
+
+```yaml
+API:
+  AGGREGATES:
+    MAX_AGGREGATES: 20 # aggregates of one query
+    MAX_GROUP_BY: 4 # group columns of one query
+```
+
+Above either bound, `getAggregates` answers `BAD_USER_INPUT` before any SQL. Each aggregate is one expression of the SELECT; each group column multiplies the number of possible groups. Their complexity cost is set in `config/security.yaml` (`AGGREGATE_COST`, `HOLISTIC_AGGREGATE_COST`, `GROUP_COLUMN_COST`).
+
 ## Export (`GET | POST /api/export`)
 
 Guards of the bulk export endpoint (see [Bulk export](https://qbolliet.github.io/dashboard-template-api/api-guide/export)):

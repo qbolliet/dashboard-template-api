@@ -4,7 +4,7 @@
  *
  * Covers DatasetWithMetadata.fields (aligned on columns, projection through
  * `fields`, OBJECTS and ARRAYS, explicit failure on a column without metadata),
- * AggregatedFactsMetadata.measureFieldInfo, the value types guaranteed on every
+ * the column descriptions of getAggregates, the value types guaranteed on every
  * JSON path (safe integer → number, beyond 2^53 → decimal string, DATE and
  * TIMESTAMP → ISO 8601, BOOLEAN, NULL) and the page extents of numeric and
  * date/timestamp columns.
@@ -149,64 +149,65 @@ describe('DatasetWithMetadata.fields', () => {
   });
 });
 
-// ─── AggregatedFactsMetadata.measureFieldInfo ─────────────────────────────────
+// ─── Description des colonnes de getAggregates ────────────────────────────────
 
-describe('AggregatedFactsMetadata.measureFieldInfo', () => {
+describe('getAggregates: field of the group and aggregate columns', () => {
   /**
-   * Runs getAggregatedFactsWithMetadata and returns its metadata field infos.
+   * Runs getAggregates on one group column and one measure.
    *
    * @param groupBy - Group-by column.
    * @param measure - Measure column.
-   * @returns The groupByFieldInfo and measureFieldInfo of the response.
+   * @returns The group and aggregate column descriptions.
    */
-  // Métadonnées de la clé de groupe et de la mesure d'une agrégation
+  // Métadonnées de la colonne de groupe et de la mesure d'une agrégation
   async function aggregate(groupBy: string, measure: string) {
     const result = await execute(server, {
       query: `
         query {
-          getAggregatedFactsWithMetadata(groupBy: "${groupBy}", measure: "${measure}", limit: 5) {
-            metadata {
-              groupByFieldInfo { name unit }
-              measureFieldInfo { name label unit displayFormat defaultAggregation }
-            }
+          getAggregates(groupBy: [{ field: "${groupBy}" }], aggregates: [{ measure: "${measure}" }], limit: 5) {
+            groupBy { field { name unit } }
+            aggregates { unit displayFormat field { name label unit displayFormat defaultAggregation } }
           }
         }
       `,
     });
     expect(result.errors).toBeUndefined();
-    return (
-      result.data!.getAggregatedFactsWithMetadata as {
-        metadata: {
-          groupByFieldInfo: { name: string; unit: string | null };
-          measureFieldInfo: {
-            name: string;
-            label: string;
-            unit: string | null;
-            displayFormat: string | null;
-            defaultAggregation: string | null;
-          };
+    const payload = result.data!.getAggregates as {
+      groupBy: { field: { name: string; unit: string | null } }[];
+      aggregates: {
+        unit: string | null;
+        displayFormat: string | null;
+        field: {
+          name: string;
+          label: string;
+          unit: string | null;
+          displayFormat: string | null;
+          defaultAggregation: string | null;
         };
-      }
-    ).metadata;
+      }[];
+    };
+    return { group: payload.groupBy[0], aggregate: payload.aggregates[0] };
   }
 
   test('describes the aggregated measure next to the group-by column', async () => {
-    const metadata = await aggregate('country', 'value');
+    const { group, aggregate: column } = await aggregate('country', 'value');
 
-    expect(metadata.groupByFieldInfo.name).toBe('country');
-    expect(metadata.measureFieldInfo).toEqual({
+    expect(group.field.name).toBe('country');
+    expect(column.field).toEqual({
       name: 'value',
       label: 'Measurement Value',
       unit: '€',
       displayFormat: ',.2f',
       defaultAggregation: 'SUM',
     });
+    // L'agrégat SUM garde l'unité et le format de sa mesure
+    expect(column).toMatchObject({ unit: '€', displayFormat: ',.2f' });
   });
 
   test('follows the measure asked for', async () => {
-    const metadata = await aggregate('country', 'quality_score');
+    const { aggregate: column } = await aggregate('country', 'quality_score');
 
-    expect(metadata.measureFieldInfo).toMatchObject({
+    expect(column.field).toMatchObject({
       name: 'quality_score',
       unit: null,
       displayFormat: '.0%',
@@ -310,25 +311,23 @@ describe('value serialization on the JSON paths', () => {
     }
   });
 
-  test('aggregate keys and counts keep their shape', async () => {
+  test('aggregate groups and counts keep their types', async () => {
     const result = await execute(server, {
       query: `
         query {
-          getAggregatedFacts(groupBy: "country", measure: "value", limit: 5) { key count aggregatedValue }
+          getAggregates(groupBy: [{ field: "country" }, { field: "horizon" }], aggregates: [{ measure: "value" }], limit: 5) { data }
         }
       `,
     });
     expect(result.errors).toBeUndefined();
-    const rows = result.data!.getAggregatedFacts as Array<{
-      key: string;
-      count: number;
-      aggregatedValue: number;
-    }>;
+    const rows = (result.data!.getAggregates as { data: Record<string, unknown>[] }).data;
 
     for (const row of rows) {
-      expect(typeof row.key).toBe('string');
-      expect(Number.isInteger(row.count)).toBe(true);
-      expect(typeof row.aggregatedValue).toBe('number');
+      expect(typeof row.country).toBe('string');
+      // Colonne de groupe INTEGER : un nombre, plus une chaîne comme l'ancienne clé
+      expect(Number.isInteger(row.horizon)).toBe(true);
+      expect(Number.isInteger(row.row_count)).toBe(true);
+      expect(typeof row.value_sum).toBe('number');
     }
   });
 });

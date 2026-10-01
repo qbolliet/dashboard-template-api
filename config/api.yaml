@@ -51,6 +51,13 @@ API:
     # à utiliser searchTerm ou maxDepth (aucune troncature silencieuse)
     TREE_MAX_NODES: 5000
 
+  # Requête d'agrégats (getAggregates) : au-delà, BAD_USER_INPUT avant tout SQL
+  AGGREGATES:
+    # Nombre maximal d'agrégats d'une requête (chacun est une expression du SELECT)
+    MAX_AGGREGATES: 20
+    # Nombre maximal de colonnes de groupe (chacune multiplie les groupes possibles)
+    MAX_GROUP_BY: 4
+
   # Export REST volumineux (GET /api/export) — garde-fous propres, hors GraphQL
   EXPORT:
     # Plafond de lignes, appliqué par LIMIT dans la requête

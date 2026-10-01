@@ -194,21 +194,20 @@ describe('every path producing a Metadata', () => {
     });
   });
 
-  test('groupByFieldInfo and measureFieldInfo', async () => {
+  test('getAggregates: field of the group and aggregate columns', async () => {
     const data = await run(`query {
-      getAggregatedFactsWithMetadata(groupBy: "country", measure: "value", limit: 1) {
-        metadata {
-          groupByFieldInfo { ${TYPED_FIELD} }
-          measureFieldInfo { ${TYPED_FIELD} }
-        }
+      getAggregates(groupBy: [{ field: "country" }], aggregates: [{ measure: "value" }], limit: 1) {
+        groupBy { field { ${TYPED_FIELD} } }
+        aggregates { field { ${TYPED_FIELD} } }
       }
     }`);
-    const { metadata } = data.getAggregatedFactsWithMetadata as {
-      metadata: { groupByFieldInfo: TypedField; measureFieldInfo: TypedField };
+    const { groupBy, aggregates } = data.getAggregates as {
+      groupBy: { field: TypedField }[];
+      aggregates: { field: TypedField }[];
     };
 
-    expect(metadata.groupByFieldInfo.typeFamily).toBe('TEXT');
-    expect(metadata.measureFieldInfo.typeFamily).toBe('NUMBER');
-    expectConsistent([metadata.groupByFieldInfo, metadata.measureFieldInfo]);
+    expect(groupBy[0].field.typeFamily).toBe('TEXT');
+    expect(aggregates[0].field.typeFamily).toBe('NUMBER');
+    expectConsistent([groupBy[0].field, aggregates[0].field]);
   });
 });

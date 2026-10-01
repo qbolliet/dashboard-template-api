@@ -3,6 +3,7 @@ import { gql } from 'graphql-tag';
 import { mergeTypeDefs } from '@graphql-tools/merge';
 import { commonTypeDefs } from './common.js';
 import { factTypeDefs } from './fact.js';
+import { aggregateTypeDefs } from './aggregate.js';
 import { metadataTypeDefs } from './metadata.js';
 import { selectTypeDefs } from './select.js';
 import { catalogTypeDefs } from './catalog.js';
@@ -27,7 +28,7 @@ const baseTypeDefs: DocumentNode = gql`
 /**
  * Merged GraphQL type definitions for the entire API schema.
  *
- * Combines base, common, fact, metadata, select, catalog,
+ * Combines base, common, fact, aggregate, metadata, select, catalog,
  * and cross-database type definitions into a single DocumentNode passed
  * to Apollo Server.
  */
@@ -35,6 +36,7 @@ const typeDefs: DocumentNode = mergeTypeDefs([
   baseTypeDefs,
   commonTypeDefs,
   factTypeDefs,
+  aggregateTypeDefs,
   metadataTypeDefs,
   selectTypeDefs,
   catalogTypeDefs,

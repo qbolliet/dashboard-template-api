@@ -347,180 +347,175 @@ query TestFactTableMetadataFiltered {
 }
 
 # ============================================
-# 5. TESTS DES FAITS AGRÉGÉS
+# 5. TESTS DES AGRÉGATS (getAggregates)
 # ============================================
 
 # Test 5.1: Agrégation simple (catalogue default)
-query TestAggregatedFactsSimple {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "country"
-    aggregation: SUM
+query TestAggregatesSimple {
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
     limit: 10
     offset: 0
   ) {
-    key
-    aggregatedValue
-    count
+    columns
+    data
+    total
+    hasNextPage
   }
 }
 
-# Test 5.2: Différentes fonctions d'agrégation (catalogue default)
-query TestAggregationFunctions {
-  sumByCountry: getAggregatedFacts(groupBy: "country", measure: "value", aggregation: SUM) {
-    key
-    aggregatedValue
-  }
-  avgByIndicator: getAggregatedFacts(groupBy: "indicator", measure: "value", aggregation: AVG) {
-    key
-    aggregatedValue
-  }
-  maxByKind: getAggregatedFacts(groupBy: "kind", measure: "value", aggregation: MAX) {
-    key
-    aggregatedValue
-  }
-  countByModel: getAggregatedFacts(groupBy: "model", measure: "value", aggregation: COUNT) {
-    key
-    aggregatedValue
+# Test 5.2: Plusieurs agrégats en une requête (exemple audit-api.md §4.2)
+query TestAggregatesMultiple {
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [
+      { measure: "value", aggregation: SUM }
+      { measure: "value", aggregation: AVG }
+      { measure: "lower_bound", aggregation: MAX }
+    ]
+  ) {
+    columns
+    data
+    aggregates {
+      alias
+      aggregation
+      sqlType
+      unit
+      displayFormat
+      extent
+    }
   }
 }
 
 # Test 5.2b: Agrégations sur les catalogues macroeconomics et public_finance
-query TestAggregationFunctionsCrossDB {
-  macroByScenario: getAggregatedFacts(
-    measure: "value"
-    groupBy: "scenario"
-    aggregation: AVG
+query TestAggregatesCrossDB {
+  macroByScenario: getAggregates(
+    groupBy: [{ field: "scenario" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     catalog: "macroeconomics"
   ) {
-    key
-    aggregatedValue
+    data
   }
-  financeBySector: getAggregatedFacts(
-    measure: "value"
-    groupBy: "sector"
-    aggregation: SUM
+  financeBySector: getAggregates(
+    groupBy: [{ field: "sector" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
     catalog: "public_finance"
   ) {
-    key
-    aggregatedValue
+    data
   }
 }
 
 # Test 5.3: Agrégation avec filtres (catalogue default)
-query TestAggregatedFactsFiltered {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "indicator"
-    aggregation: AVG
+query TestAggregatesFiltered {
+  getAggregates(
+    groupBy: [{ field: "indicator" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     structuredFilters: { children: [{ criterion: { variable: "country", operation: IN, value: ["France", "Germany"] } }, { connector: AND, criterion: { variable: "kind", operation: EQ, value: "Actual" } }] }
     limit: 20
     offset: 0
   ) {
-    key
-    aggregatedValue
-    count
+    data
+    total
   }
 }
 
-# Test 5.4: Agrégation avec tri
-query TestAggregatedFactsSorted {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "country"
-    aggregation: SUM
-    sort: [{ field: "aggregatedValue", order: DESC }]
+# Test 5.4: Agrégation avec tri sur un alias
+query TestAggregatesSorted {
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
+    sort: [{ by: "value_sum", order: DESC }]
     limit: 10
-    offset: 0
   ) {
-    key
-    aggregatedValue
-    count
+    data
   }
 }
 
-# Test 5.5: Agrégation avec labels de clés
-query TestAggregatedFactsByLabel {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "country"
-    aggregation: SUM
-    limit: 5
-    offset: 0
-  ) {
-    key
-    aggregatedValue
-    count
-  }
-}
-
-# ============================================
-# 6. TESTS DES FAITS AGRÉGÉS AVEC MÉTADONNÉES
-# ============================================
-
-# Test 6.1: Agrégation avec métadonnées complètes (catalogue default)
-query TestAggregatedFactsWithMetadata {
-  getAggregatedFactsWithMetadata(
-    measure: "value"
-    groupBy: "indicator"
-    aggregation: AVG
-    limit: 10
-    offset: 0
-  ) {
-    data {
-      key
-      aggregatedValue
-      count
+# Test 5.5: Colonne de libellés (<field>__label)
+query TestAggregatesLabels {
+  getAggregates(schema: "trade", groupBy: [{ field: "nc8" }], aggregates: [{ measure: "value" }]) {
+    columns
+    data
+    groupBy {
+      name
+      labelColumn
     }
-    metadata {
-      count
-      keyExtent
-      valueExtent
-      statistics {
-        mean
-        median
-        stdDev
-        quartiles
-      }
-      groupByFieldInfo {
+  }
+}
+
+# Test 5.6: Agrégat global (sans groupBy, une ligne)
+query TestAggregatesGlobal {
+  getAggregates(aggregates: [{ measure: "value" }, { measure: "headcount" }, { measure: "date", aggregation: MAX }]) {
+    data
+    total
+  }
+}
+
+# Test 5.7: Grain temporel et format LONG (une ligne par mois et par agrégat)
+query TestAggregatesMonthlyLong {
+  getAggregates(
+    groupBy: [{ field: "date", grain: MONTH }]
+    aggregates: [
+      { measure: "value", aggregation: SUM, alias: "total" }
+      { measure: "value", aggregation: AVG, alias: "mean" }
+    ]
+    format: LONG
+    limit: 12
+  ) {
+    columns
+    data
+    total
+  }
+}
+
+# ============================================
+# 6. TESTS DE LA DESCRIPTION DES COLONNES
+# ============================================
+
+# Test 6.1: Métadonnées des colonnes de groupe et des mesures (catalogue default)
+query TestAggregatesColumns {
+  getAggregates(
+    groupBy: [{ field: "indicator" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
+    limit: 10
+  ) {
+    groupBy {
+      name
+      extent
+      field {
         name
         label
-        is_categorical
+        isCategorical
+      }
+    }
+    aggregates {
+      alias
+      unit
+      displayFormat
+      extent
+      field {
+        label
+        stats {
+          min
+          max
+        }
       }
     }
   }
 }
 
-# Test 6.2: Agrégation avec métadonnées depuis macroeconomics
-query TestAggregatedFactsWithMetadataMacro {
-  getAggregatedFactsWithMetadata(
-    measure: "value"
-    groupBy: "source"
-    aggregation: AVG
+# Test 6.2: Format ARRAYS depuis macroeconomics
+query TestAggregatesArraysMacro {
+  getAggregates(
+    groupBy: [{ field: "source" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
+    format: ARRAYS
     limit: 10
-    offset: 0
     catalog: "macroeconomics"
   ) {
-    data {
-      key
-      aggregatedValue
-      count
-    }
-    metadata {
-      count
-      keyExtent
-      valueExtent
-      statistics {
-        mean
-        median
-        stdDev
-      }
-      groupByFieldInfo {
-        name
-        label
-        is_categorical
-      }
-    }
+    columns
+    data
   }
 }
 
@@ -596,17 +591,17 @@ query TestPaginationFacts {
   }
 }
 
-# Test 8.2: Pagination sur les agrégations
-query TestPaginationAggregated {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "country"
-    aggregation: SUM
+# Test 8.2: Pagination sur les agrégats (par groupes)
+query TestPaginationAggregates {
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
     limit: 2
     offset: 2
   ) {
-    key
-    aggregatedValue
+    data
+    total
+    hasNextPage
   }
 }
 
@@ -686,14 +681,12 @@ query TestComplexQuery {
   }
 
   # Agrégations
-  aggregated: getAggregatedFacts(
-    measure: "value"
-    groupBy: "indicator"
-    aggregation: AVG
+  aggregated: getAggregates(
+    groupBy: [{ field: "indicator" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     structuredFilters: { children: [{ criterion: { variable: "country", operation: EQ, value: "France" } }] }
   ) {
-    key
-    aggregatedValue
+    data
   }
 
   # Options de sélection
@@ -722,16 +715,13 @@ query TestLargeDataset {
 
 # Test 11.2: Agrégation sur grande période
 query TestLargeAggregation {
-  getAggregatedFacts(
-    measure: "value"
-    groupBy: "date"
-    aggregation: AVG
+  getAggregates(
+    groupBy: [{ field: "date" }, { field: "country" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     limit: 1000
-    offset: 0
   ) {
-    key
-    aggregatedValue
-    count
+    data
+    total
   }
 }
 
@@ -1440,7 +1430,7 @@ query TestGetFieldsInvalidDatabase {
 # Un catalogue peut contenir plusieurs schémas. L'argument `schema` choisit le
 # schéma au sein du catalogue choisi par `catalog`. Omis => schéma par défaut
 # du catalogue (config SCHEMA, "main"). Les deux arguments sont disponibles sur
-# getMetaData, getFactTable(WithMetadata), getAggregatedFacts(WithMetadata),
+# getMetaData, getFactTable(WithMetadata), getAggregates,
 # getSelectOptions, getSelectOptionsTree, getCatalogSchema et getFields.
 
 # Test 20.1: Métadonnées d'un schéma nommé au sein d'un catalogue

@@ -82,7 +82,7 @@ query {
 ```
 
 The same `schema` argument is available on every data query
-(`getFactTable`, `getAggregatedFacts`, `getMetaData`,
+(`getFactTable`, `getAggregates`, `getMetaData`,
 `getSelectOptions`, `getSelectOptionsTree`, `getFields`). An unknown
 schema returns a `GraphQLError` (allow-list validation).
 
@@ -141,20 +141,19 @@ query {
 }
 ```
 
-### Aggregated facts
+### Aggregates
 
 ```graphql
 query {
-  getAggregatedFacts(
-    groupBy: "country"
-    measure: "gdp_growth"
-    aggregation: AVG
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "gdp_growth", aggregation: AVG }]
     limit: 20
     catalog: "macroeconomics"
     schema: "staging"
   ) {
-    key
-    aggregatedValue
+    columns
+    data
   }
 }
 ```
@@ -263,87 +262,148 @@ query {
 }
 ```
 
-## Bar chart aggregation
+## Grouped bar chart
+
+Two group columns and one aggregate: `country` on the x axis, `kind` as the colour
+(hue), `value_sum` as the bar height. One request yields the rows and everything
+the chart needs to label itself: the axis titles come from `groupBy[].field.label`,
+and the tick format and tooltip suffix from `aggregates[].displayFormat` and
+`aggregates[].unit`.
 
 ```graphql
-query {
-  getAggregatedFacts(
-    groupBy: "country"
-    measure: "gdp_growth"
-    aggregation: AVG
-    structuredFilters: {
-      children: [{ criterion: { variable: "year", operation: GTE, value: 2010 } }]
-    }
-    sort: [{ field: "aggregatedValue", order: DESC }]
-    limit: 20
-    catalog: "macroeconomics"
+query GroupedBars($filter: FilterNode) {
+  getAggregates(
+    groupBy: [{ field: "country" }, { field: "kind" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
+    structuredFilters: $filter
+    sort: [{ by: "country" }]
+    limit: 500
   ) {
-    key
-    aggregatedValue
-    count
-  }
-}
-```
-
-Groups tied on `aggregatedValue` are always ordered by their key, so two
-successive pages never overlap. `key` is `null` for the group of the rows where
-the column is NULL (a missing level of a hierarchy, for instance), and
-`aggregatedValue` is `null` when the group holds no value of the measure.
-
-`aggregatedValue` is a JSON value, serialized like any value of the fact table:
-a number for COUNT, SUM, AVG and MEDIAN (an integer sum beyond 2^53 comes back
-as its exact decimal string), a number or an ISO 8601 date for MIN and MAX, and
-a value of the measure for MODE. The aggregation must suit the type of the
-measure: SUM, AVG and MEDIAN need a numeric measure, MIN and MAX a numeric or
-temporal one, and MODE and COUNT work on any column. Any other combination is
-rejected with `BAD_USER_INPUT`, and the error lists the aggregations allowed.
-When `aggregation` is omitted, the measure's `defaultAggregation` applies,
-falling back to SUM for a numeric measure only.
-
-```graphql
-query {
-  getAggregatedFacts(groupBy: "country", measure: "date", aggregation: MAX, limit: 20) {
-    key
-    aggregatedValue # "2024-01-01"
-  }
-}
-```
-
-## Aggregation with statistics
-
-```graphql
-query {
-  getAggregatedFactsWithMetadata(
-    groupBy: "country"
-    measure: "gdp_growth"
-    aggregation: SUM
-    limit: 50
-    catalog: "public_finance"
-  ) {
-    data {
-      key
-      aggregatedValue
-      count
-    }
-    metadata {
-      count
-      valueExtent
-      statistics {
-        mean
-        median
-        stdDev
-        quartiles
+    columns # ["country", "kind", "value_sum", "row_count"]
+    data # [{ country: "France", kind: "Actual", value_sum: 493.36, row_count: 144 }, …]
+    total
+    hasNextPage
+    groupBy {
+      name
+      field {
+        label
+        typeFamily
       }
-      generatedAt
+    }
+    aggregates {
+      alias
+      unit
+      displayFormat
+      extent
     }
   }
 }
 ```
 
-`valueExtent` is `[min, max]` over the non-NULL values of the page: numbers, or
-ISO 8601 dates for MIN, MAX or MODE of a temporal measure. It is `null` for an
-empty page, a page that holds only NULLs, or a text or boolean MODE. `statistics`
-is `null` when the aggregated value is not numeric.
+```js
+// x = country, hue = kind, y = alias of the aggregate
+const { data, aggregates } = result.getAggregates;
+const y = aggregates[0].alias; // "value_sum"
+const series = d3.group(data, (row) => row.kind); // one series per kind
+const yDomain = [0, aggregates[0].extent[1]]; // max of the page
+```
+
+Bars stay correct on the whole filtered dataset: the API sums every row, not just
+a loaded page, and it applies the measure's `defaultAggregation` when
+`aggregation` is omitted. Pagination applies to groups. A page ends on a group
+boundary, and its rows are ordered by `sort` then by every group column, so two
+pages never overlap. `limit` is a number of (country, kind) pairs.
+
+A group column with label columns adds `<field>__label` to the rows. For example
+`nc8` gives `nc8__label: "Pure-bred breeding horses"`, announced by
+`groupBy[].labelColumn`. Display `row[labelColumn] ?? row[name]`.
+
+## Several measures as series (LONG)
+
+Monthly series of three aggregates, plotted as three lines. `format: LONG` melts
+the aggregates into a `measure` column (the alias) and a `value` column, so each
+aggregate becomes a series without any client-side reshaping. This is the tidy
+form Vega-Lite and Observable Plot expect.
+
+```graphql
+query Series {
+  getAggregates(
+    groupBy: [{ field: "date", grain: MONTH }]
+    aggregates: [
+      { measure: "value", aggregation: SUM, alias: "total" }
+      { measure: "value", aggregation: AVG, alias: "mean" }
+      { measure: "lower_bound", aggregation: MIN, alias: "floor" }
+    ]
+    format: LONG
+    limit: 120 # 120 months, hence up to 360 rows
+  ) {
+    columns # ["date", "row_count", "measure", "value"]
+    data # [{ date: "2022-01-01", row_count: 48, measure: "total", value: 206.18 }, …]
+    aggregates {
+      alias
+      unit
+      displayFormat
+    }
+  }
+}
+```
+
+```js
+// x = date, y = value, colour = measure (the alias)
+Plot.lineY(result.getAggregates.data, { x: 'date', y: 'value', stroke: 'measure' });
+```
+
+- `MONTH` truncates each date to the first day of its month, and `YEAR`, `QUARTER`,
+  `WEEK` (Monday) and `DAY` work the same way.
+- On a `TIMESTAMP` column, `HOUR`, `MINUTE` and `SECOND` are also available. A
+  `TIMESTAMP WITH TIME ZONE` is truncated in UTC.
+- Each group column carries its own grain, and several temporal columns can be
+  combined: `[{ field: "date", grain: MONTH }, { field: "ingested_at", grain: HOUR }]`.
+- `LONG` is `OBJECTS` melted on the aliases, in the order of the aggregates: drop
+  `format: LONG` to get one object per month with `total`, `mean` and `floor`
+  columns.
+- The measures need not share a unit: read `aggregates[]` by alias to format each
+  series.
+
+## Global aggregate (KPI tiles)
+
+Without `groupBy`, the aggregate covers the whole filtered dataset in one row,
+even when no row matches the filter. In that case the aggregates are `null` and
+`row_count` is `0`.
+
+```graphql
+query Kpis($filter: FilterNode) {
+  getAggregates(
+    aggregates: [
+      { measure: "value" } # defaultAggregation of value: SUM
+      { measure: "quality_score" } # defaultAggregation: AVG
+      { measure: "date", aggregation: MAX, alias: "last_date" }
+    ]
+    structuredFilters: $filter
+  ) {
+    data # [{ value_sum: 7446.16, quality_score_avg: 0.82, last_date: "2024-12-01", row_count: 1729 }]
+    aggregates {
+      alias
+      aggregation
+      unit
+      displayFormat
+      field {
+        label
+      }
+    }
+  }
+}
+```
+
+The aggregation must suit the type of the measure:
+
+- `SUM`, `AVG` and `MEDIAN` need a numeric measure;
+- `MIN` and `MAX` need a numeric or temporal one;
+- `MODE` and `COUNT` work on any column.
+
+Any other combination is rejected with `BAD_USER_INPUT`, and the error lists the
+aggregations allowed. An integer sum beyond 2^53 comes back as its exact decimal
+string (`aggregates[].sqlType` is then `HUGEINT`).
 
 ## Schema introspection for a field
 

@@ -28,6 +28,9 @@ interface ComplexityAnalyzerConfig {
   introspectionCost: number;
   rowCost: number;
   statsCostPerColumn: number;
+  aggregateCost: number;
+  holisticAggregateCost: number;
+  groupColumnCost: number;
   defaultRootFieldScore: number;
   rootFieldScores: Record<string, number>;
 }
@@ -78,6 +81,9 @@ interface Walk {
 // (ajouté par Apollo Client et urql à chaque sélection)
 const INTROSPECTION_FIELDS = new Set(['__schema', '__type']);
 
+// Agrégations holistiques (tri ou table de fréquences par groupe) : surcoût dédié
+const HOLISTIC_AGGREGATIONS = new Set(['MEDIAN', 'MODE']);
+
 // Compteur par défaut : chaque liste de Metadata compte pour une colonne
 const SINGLE_COLUMN: ColumnCounter = {
   columnsOf: async () => 1,
@@ -91,7 +97,8 @@ const SINGLE_COLUMN: ColumnCounter = {
  *
  * Every root field pays its configured score (ROOT_FIELD_SCORES, a non-zero
  * default otherwise), the rows requested through `limit`, its filters and
- * sorts; nested objects pay OBJECT_COST times DEPTH_FACTOR^depth, and
+ * sorts; getAggregates also pays per aggregate, per holistic aggregate and per
+ * group column; nested objects pay OBJECT_COST times DEPTH_FACTOR^depth, and
  * `Metadata.stats` pays per column of the list it belongs to. The scale is
  * documented in docs-site/toolbox/docs/architecture/security.md.
  */
@@ -115,6 +122,9 @@ class QueryComplexityAnalyzer {
       introspectionCost: (complexityConfig['INTROSPECTION_COST'] as number) ?? 1000,
       rowCost: (complexityConfig['ROW_COST'] as number) ?? 0.1,
       statsCostPerColumn: (complexityConfig['STATS_COST_PER_COLUMN'] as number) ?? 5,
+      aggregateCost: (complexityConfig['AGGREGATE_COST'] as number) ?? 2,
+      holisticAggregateCost: (complexityConfig['HOLISTIC_AGGREGATE_COST'] as number) ?? 5,
+      groupColumnCost: (complexityConfig['GROUP_COLUMN_COST'] as number) ?? 3,
       defaultRootFieldScore: (complexityConfig['DEFAULT_ROOT_FIELD_SCORE'] as number) ?? 5,
       rootFieldScores: (complexityConfig['ROOT_FIELD_SCORES'] as Record<string, number>) ?? {},
     };
@@ -152,7 +162,7 @@ class QueryComplexityAnalyzer {
         field,
         walk,
         0,
-        this.columnListOf(field, walk, columns),
+        this.columnListsOf(field, walk, columns),
         this.defaultLimitOf(field, options.schema),
       );
     }
@@ -239,26 +249,28 @@ class QueryComplexityAnalyzer {
   }
 
   /**
-   * Locates the Metadata list of a root field, whose `stats` is priced per column.
+   * Locates the Metadata lists of a root field, whose `stats` is priced per column.
    *
    * The only lists of Metadata of the API: the columns of a schema
    * (`getCatalogSchema`), the columns of a page (`getFactTableWithMetadata {
-   * fields }`, the `fields` argument when given) and every column of every
-   * schema (`getCatalogs { schemas { fields } }`). Any other Metadata is a
-   * single column.
+   * fields }`, the `fields` argument when given), every column of every
+   * schema (`getCatalogs { schemas { fields } }`), and the group columns and
+   * measures of an aggregate result (`getAggregates { groupBy { field } }` and
+   * `getAggregates { aggregates { field } }`, as many as the arguments list).
+   * Any other Metadata is a single column.
    *
    * @param root - Root field node.
    * @param walk - Variables of the operation.
    * @param columns - Column counter of the request.
-   * @returns The list below the root field, or null.
+   * @returns The lists below the root field, empty when there is none.
    */
-  private columnListOf(root: FieldNode, walk: Walk, columns: ColumnCounter): ColumnList | null {
+  private columnListsOf(root: FieldNode, walk: Walk, columns: ColumnCounter): ColumnList[] {
     const catalog = this.argumentValue(root, 'catalog', walk.variables);
     const schema = this.argumentValue(root, 'schema', walk.variables);
 
     switch (root.name.value) {
       case 'getCatalogSchema':
-        return { path: [], count: () => columns.columnsOf(catalog, schema) };
+        return [{ path: [], count: () => columns.columnsOf(catalog, schema) }];
       case 'getFactTableWithMetadata': {
         // Colonnes projetées : l'argument `fields`, sinon toutes celles du schéma
         const fields = this.argumentValue(root, 'fields', walk.variables);
@@ -266,13 +278,69 @@ class QueryComplexityAnalyzer {
           Array.isArray(fields) && fields.length > 0
             ? async (): Promise<number> => fields.length
             : (): Promise<number> => columns.columnsOf(catalog, schema);
-        return { path: ['fields'], count };
+        return [{ path: ['fields'], count }];
       }
       case 'getCatalogs':
-        return { path: ['schemas', 'fields'], count: () => columns.allColumns() };
+        return [{ path: ['schemas', 'fields'], count: () => columns.allColumns() }];
+      case 'getAggregates': {
+        // Une métadonnée par colonne de groupe et par agrégat demandés
+        const groups = this.listLength(this.argumentValue(root, 'groupBy', walk.variables));
+        const aggregates = this.listLength(this.argumentValue(root, 'aggregates', walk.variables));
+        return [
+          { path: ['groupBy', 'field'], count: async () => groups },
+          { path: ['aggregates', 'field'], count: async () => aggregates },
+        ];
+      }
       default:
-        return null;
+        return [];
     }
+  }
+
+  /**
+   * Length of a list argument value.
+   *
+   * @param value - Argument value (literal or variable, resolved).
+   * @returns Its length; a single value counts as one (GraphQL list
+   *   coercion), an absent one as zero.
+   */
+  private listLength(value: unknown): number {
+    if (Array.isArray(value)) return value.length;
+    return value === undefined || value === null ? 0 : 1;
+  }
+
+  /**
+   * Prices the aggregates and group columns of a getAggregates root field.
+   *
+   * AGGREGATE_COST per aggregate, plus HOLISTIC_AGGREGATE_COST per explicit
+   * MEDIAN or MODE (a sort or a frequency table per group), plus
+   * GROUP_COLUMN_COST per group column. The lists are read from the effective
+   * argument values, variables and their defaults included; an omitted groupBy
+   * is the empty default (global aggregate). An aggregation implied by
+   * defaultAggregation is unknown here and pays AGGREGATE_COST only.
+   *
+   * @param root - Root field node.
+   * @param variables - Effective variable values of the operation.
+   * @returns The cost, 0 for any other root field.
+   */
+  private aggregatesCost(root: FieldNode, variables: Record<string, unknown>): number {
+    if (root.name.value !== 'getAggregates') {
+      return 0;
+    }
+    const value = this.argumentValue(root, 'aggregates', variables);
+    const aggregates: unknown[] = Array.isArray(value) ? value : value ? [value] : [];
+    const holistic = aggregates.filter(
+      (item) =>
+        item !== null &&
+        typeof item === 'object' &&
+        HOLISTIC_AGGREGATIONS.has(String((item as Record<string, unknown>).aggregation)),
+    ).length;
+    const groups = this.listLength(this.argumentValue(root, 'groupBy', variables));
+
+    return (
+      aggregates.length * this.config.aggregateCost +
+      holistic * this.config.holisticAggregateCost +
+      groups * this.config.groupColumnCost
+    );
   }
 
   /**
@@ -325,7 +393,7 @@ class QueryComplexityAnalyzer {
    * @param node - AST node to analyze (field, inline fragment, or named fragment).
    * @param walk - Fragments and variables of the operation.
    * @param depth - Current recursion depth (0 for a root field).
-   * @param columnList - Metadata list at or below this node, if any.
+   * @param columnLists - Metadata lists at or below this node.
    * @param defaultLimit - SDL default of an omitted `limit` (root fields only).
    * @returns Cumulative complexity score for this node and all its descendants.
    */
@@ -333,14 +401,14 @@ class QueryComplexityAnalyzer {
     node: ComplexityNode,
     walk: Walk,
     depth: number,
-    columnList: ColumnList | null,
+    columnLists: readonly ColumnList[],
     defaultLimit?: number,
   ): Promise<number> {
     // Coût propre du nœud — un fragment (nommé ou en ligne) est un conteneur et
     // non un champ : il ne coûte rien par lui-même, seulement par ses sélections.
     let complexity = 0;
     if (node.kind === 'Field') {
-      complexity = await this.fieldCost(node, depth, columnList);
+      complexity = await this.fieldCost(node, depth, columnLists);
 
       // Complexité additionnelle des arguments du champ
       complexity += this.calculateArgumentsComplexity(
@@ -348,6 +416,11 @@ class QueryComplexityAnalyzer {
         walk.variables,
         defaultLimit,
       );
+
+      // Agrégats et colonnes de groupe de getAggregates (champ racine)
+      if (depth === 0) {
+        complexity += this.aggregatesCost(node, walk.variables);
+      }
     }
 
     // Récursion sur les sélections enfants
@@ -357,14 +430,14 @@ class QueryComplexityAnalyzer {
           selection,
           walk,
           depth + 1,
-          this.childColumnList(columnList, selection),
+          this.childColumnLists(columnLists, selection),
         );
       } else if (selection.kind === 'InlineFragment') {
-        complexity += await this.calculateFieldComplexity(selection, walk, depth, columnList);
+        complexity += await this.calculateFieldComplexity(selection, walk, depth, columnLists);
       } else {
         const fragment = walk.fragments[selection.name.value];
         if (fragment) {
-          complexity += await this.calculateFieldComplexity(fragment, walk, depth, columnList);
+          complexity += await this.calculateFieldComplexity(fragment, walk, depth, columnLists);
         }
       }
     }
@@ -377,13 +450,13 @@ class QueryComplexityAnalyzer {
    *
    * @param field - Field node.
    * @param depth - Depth of the field (0 for a root field).
-   * @param columnList - Metadata list at or below this field, if any.
+   * @param columnLists - Metadata lists at or below this field.
    * @returns The cost of the field itself.
    */
   private async fieldCost(
     field: FieldNode,
     depth: number,
-    columnList: ColumnList | null,
+    columnLists: readonly ColumnList[],
   ): Promise<number> {
     const name = field.name.value;
 
@@ -401,7 +474,8 @@ class QueryComplexityAnalyzer {
     }
     // Metadata.stats : une requête SQL par colonne de la liste englobante
     if (name === 'stats' && field.selectionSet) {
-      const columns = columnList && columnList.path.length === 0 ? await columnList.count() : 1;
+      const list = columnLists.find((candidate) => candidate.path.length === 0);
+      const columns = list ? await list.count() : 1;
       return this.config.statsCostPerColumn * columns;
     }
     // Coût d'objet (sous-sélection) ou de feuille, pondéré par la profondeur
@@ -410,24 +484,25 @@ class QueryComplexityAnalyzer {
   }
 
   /**
-   * Follows the path to a Metadata list one level down.
+   * Follows the paths to the Metadata lists one level down.
    *
-   * @param columnList - List at or below the parent field, if any.
+   * @param columnLists - Lists at or below the parent field.
    * @param child - Child field node.
-   * @returns The list at or below the child, or null when the child leaves the path.
+   * @returns The lists at or below the child; a list whose path the child
+   *   leaves is dropped.
    */
-  private childColumnList(columnList: ColumnList | null, child: FieldNode): ColumnList | null {
-    if (!columnList) {
-      return null;
+  private childColumnLists(columnLists: readonly ColumnList[], child: FieldNode): ColumnList[] {
+    const lists: ColumnList[] = [];
+    for (const columnList of columnLists) {
+      if (columnList.path.length === 0) {
+        // Parent = la liste elle-même : ses enfants (dont `stats`) la voient
+        lists.push(columnList);
+      } else if (columnList.path[0] === child.name.value) {
+        // Descente le long du chemin, les alias étant ignorés
+        lists.push({ path: columnList.path.slice(1), count: columnList.count });
+      }
     }
-    // Parent = la liste elle-même : ses enfants (dont `stats`) la voient
-    if (columnList.path.length === 0) {
-      return columnList;
-    }
-    // Descente le long du chemin, les alias étant ignorés
-    return columnList.path[0] === child.name.value
-      ? { path: columnList.path.slice(1), count: columnList.count }
-      : null;
+    return lists;
   }
 
   /**

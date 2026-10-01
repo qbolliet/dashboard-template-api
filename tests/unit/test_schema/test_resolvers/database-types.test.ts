@@ -97,33 +97,40 @@ describe('DECIMAL declared without precision', () => {
   test('is numeric for aggregations: SUM is allowed and exact', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "no_primary_key", groupBy: "label", measure: "amount", aggregation: SUM) {
-          key aggregatedValue
+        getAggregates(schema: "no_primary_key", groupBy: [{ field: "label" }], aggregates: [{ measure: "amount", aggregation: SUM }], limit: 100) {
+          data aggregates { sqlType }
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    const groups = result.data!.getAggregatedFacts as Array<{
-      key: string;
-      aggregatedValue: number;
-    }>;
+    const { data: groups, aggregates } = result.data!.getAggregates as {
+      data: Array<{ label: string; amount_sum: number }>;
+      aggregates: { sqlType: string }[];
+    };
     expect(groups).toHaveLength(12);
     // item-00 : amounts 1.25 × (0, 12, 24 … 228) = 1.25 × 12 × 190
-    expect(groups.find((group) => group.key === 'item-00')?.aggregatedValue).toBe(2850);
+    expect(groups.find((group) => group.label === 'item-00')?.amount_sum).toBe(2850);
+    // SUM d'un DECIMAL : DECIMAL élargi à 38 chiffres
+    expect(aggregates[0].sqlType).toMatch(/^DECIMAL\(38,\d+\)$/);
   });
 
   test('the default aggregation of the measure applies (SUM)', async () => {
     const result = await execute(server, {
       query: `query {
-        getAggregatedFacts(schema: "no_primary_key", groupBy: "quantity", measure: "amount") {
-          key aggregatedValue
+        getAggregates(schema: "no_primary_key", groupBy: [{ field: "quantity" }], aggregates: [{ measure: "amount" }]) {
+          data aggregates { aggregation }
         }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    expect(result.data!.getAggregatedFacts as unknown[]).toHaveLength(7);
+    const payload = result.data!.getAggregates as {
+      data: unknown[];
+      aggregates: { aggregation: string }[];
+    };
+    expect(payload.data).toHaveLength(7);
+    expect(payload.aggregates).toEqual([{ aggregation: 'SUM' }]);
   });
 });
 

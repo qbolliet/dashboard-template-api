@@ -202,7 +202,7 @@ error listing all offending names — then quoted in the SQL.
 ### Pagination and errors
 
 `limit` must be between 1 and `API.PAGINATION.MAX_LIMIT` (1000) and `offset`
-between 0 and `MAX_OFFSET` (10000), on every paginated query (fact, aggregated,
+between 0 and `MAX_OFFSET` (10000), on every paginated query (fact, aggregate,
 comparison and select-option queries); anything else is rejected with
 `BAD_USER_INPUT` before any database work. No error is ever turned into a silent
 `null`: an input the database refuses (type mismatch such as `SUM` on a `VARCHAR`
@@ -383,32 +383,176 @@ value beyond 2^53 and hands it to `BigInt(value)`; any other integer is a number
 
 ---
 
-### `getAggregatedFacts`
+## Aggregate query
 
-Grouped aggregation for charts.
+### `getAggregates`
+
+Several aggregates of several measures, over zero, one or several group columns,
+in **one SQL query**. This is the query behind charts, KPI tiles and summary
+tables: the API aggregates the whole filtered dataset, not just the loaded page,
+and it applies each measure's `defaultAggregation`.
 
 ```graphql
-getAggregatedFacts(
-  fields: [String!]
+getAggregates(
+  groupBy: [GroupByInput!] = []      # empty: global aggregate, one row
+  aggregates: [AggregateInput!]!     # 1 to API.AGGREGATES.MAX_AGGREGATES (20)
   structuredFilters: FilterNode
-  groupBy: String!
-  aggregation: Aggregation! = SUM
-  limit: Int! = 100
+  sort: [AggregateSortInput!]
+  limit: Int! = 100                  # number of GROUPS of the page
   offset: Int! = 0
-  sort: [SortInput!]
+  format: AggregateFormat = OBJECTS  # OBJECTS | ARRAYS | LONG
+  includeRowCount: Boolean = true    # adds COUNT(*) as row_count
   catalog: String
   schema: String
-): [AggregatedFact]
+): AggregateResult!
+
+input GroupByInput {
+  field: String!   # column to group by, at most once in groupBy
+  grain: TimeGrain # DATE / TIMESTAMP columns only
+}
+
+enum TimeGrain { SECOND MINUTE HOUR DAY WEEK MONTH QUARTER YEAR }
+
+input AggregateInput {
+  measure: String!
+  aggregation: Aggregation # absent: defaultAggregation, then SUM (numeric only)
+  alias: String            # ^[a-z_][a-z0-9_]*$, default <measure>_<aggregation>
+}
+
+input AggregateSortInput {
+  by: String!              # an output column: alias, group column, <field>__label, row_count
+  order: SortOrder = ASC
+}
 ```
 
----
+#### Rules
 
-### `getAggregatedFactsWithMetadata`
+- **Effective aggregation, per aggregate.** The `aggregation` argument wins. Without
+  it, the measure's `defaultAggregation` applies, and then `SUM`, but only for a
+  numeric measure. A non-numeric measure without `defaultAggregation` is a
+  `BAD_USER_INPUT`: `COUNT` is never implied. The effective value is returned in
+  `aggregates[].aggregation`.
+- **Type families.** `SUM`, `AVG` and `MEDIAN` need a numeric measure. `MIN` and
+  `MAX` need a numeric or temporal one. `MODE` and `COUNT` apply to any type.
+  Anything else is a `BAD_USER_INPUT` that lists the allowed aggregations.
+  `COUNT(measure)` counts non-NULL values, while `row_count` counts the rows of the group.
+- **Aliases.** By default an alias is `<measure>_<aggregation in lower case>`
+  (`value_sum`, `lower_bound_max`). An explicit alias must match
+  `^[a-z_][a-z0-9_]*$`. Every output column name must be unique: group columns,
+  label columns, aliases and `row_count`. Asking twice for the same aggregate
+  therefore needs an alias.
+- **Time grains.** `grain` truncates a `DATE` or `TIMESTAMP` column (`date_trunc`)
+  before grouping. The output column keeps the name of the field and holds the
+  first instant of each bucket: `MONTH` turns `2024-03-17` into `2024-03-01`.
+  - `SECOND`, `MINUTE` and `HOUR` apply to `TIMESTAMP` columns only.
+  - A `DATE` stays a `DATE` (`"YYYY-MM-DD"`).
+  - A `TIMESTAMP WITH TIME ZONE` is truncated **in UTC**, so a day is a UTC day, whatever the server time zone.
+  - `WEEK` starts on Monday.
+  - Several temporal columns can be grouped at once, each with its own grain. The API never picks "the" time column for you.
+- **Labels.** A group column (without grain) that has label columns
+  (`Metadata.labelFields`, default rule: the only one, or the first alphabetically)
+  gets a `<field>__label` column. It is read by `ANY_VALUE` in the same query and
+  announced by `groupBy[].labelColumn`.
+- **Sort and pagination.** Pagination applies to **groups**. Rows are sorted by
+  `sort`, then by every group column (ascending) that `sort` does not already
+  name. The order is therefore total and successive pages never overlap. `total`
+  counts the groups, the `NULL` group included; it is `1` without `groupBy`.
+- **Bounds.** At most `API.AGGREGATES.MAX_AGGREGATES` (20) aggregates and
+  `API.AGGREGATES.MAX_GROUP_BY` (4) group columns. An empty `aggregates` list is
+  a `BAD_USER_INPUT`, like an unknown column, a grain on a non-temporal column or
+  an unknown sort column.
 
-Same as `getAggregatedFacts` but includes D3-ready statistics (mean, median, std-dev, quartiles, key/value extents).
-`metadata.groupByFieldInfo` and `metadata.measureFieldInfo` are the `Metadata` of the
-group-by column and of the aggregated measure (unit and display format of the
-aggregated value).
+#### Result
+
+```graphql
+type AggregateResult {
+  groupBy: [GroupColumn!]! # in the requested order
+  aggregates: [AggregateColumn!]! # in the requested order
+  columns: [String!]! # order of the columns of data
+  data: [JSON!]!
+  total: Float! # number of groups (1 without groupBy)
+  hasNextPage: Boolean!
+  generatedAt: String!
+}
+
+type GroupColumn {
+  name: String! # column of data
+  grain: TimeGrain
+  labelColumn: String # <name>__label, or null
+  field: Metadata! # label, typeFamily, unit…
+  extent: JSON # [min, max] of the page (numeric or temporal), else null
+}
+
+type AggregateColumn {
+  alias: String!
+  measure: String!
+  aggregation: Aggregation! # effective
+  sqlType: String! # read from the result: SUM(BIGINT) → HUGEINT, AVG → DOUBLE, COUNT → BIGINT…
+  unit: String # the measure's, null for COUNT
+  displayFormat: String # the measure's; ",d" for COUNT; ",d" → ",.2f" for AVG/MEDIAN of an integer
+  field: Metadata! # the measure
+  extent: JSON # [min, max] of the page
+}
+```
+
+The column descriptions are enough for axes, headers and tooltips, with no
+second request. A `SUM` of a `BIGINT` beyond 2^53 is an exact decimal string,
+like every other value (see _Value types_). An aggregate over a group without
+any non-NULL value is `null`, never `0`.
+
+#### Formats
+
+- `OBJECTS`, the default, gives one object per group:
+  `{ country: "France", value_sum: 1234.5, value_avg: 12.3, row_count: 100 }`.
+- `ARRAYS` gives one array per group, ordered as `columns`.
+- `LONG` is the tidy form, with one row per (group, aggregate):
+  `{ country: "France", row_count: 100, measure: "value_sum", value: 1234.5 }`.
+  - It is exactly the `OBJECTS` rows melted on the aliases, in the order of the aggregates.
+  - `columns` is then the group columns, the label columns, `row_count`, `measure` and `value`.
+  - Plot several aggregates as series by mapping the colour to `measure` (Vega-Lite, Observable Plot, D3).
+  - A group column may not be named `measure` or `value` in this format.
+  - A page holds up to `limit × aggregates` rows, since `limit` still counts groups.
+
+The format is applied after the cache, so the three formats share one cache entry.
+
+```graphql
+query {
+  getAggregates(
+    groupBy: [{ field: "country" }]
+    aggregates: [
+      { measure: "value", aggregation: SUM }
+      { measure: "value", aggregation: AVG }
+      { measure: "lower_bound", aggregation: MAX }
+    ]
+    sort: [{ by: "value_sum", order: DESC }]
+  ) {
+    columns
+    data
+    total
+    aggregates {
+      alias
+      aggregation
+      sqlType
+      unit
+      displayFormat
+      extent
+    }
+  }
+}
+```
+
+#### Cost and cache
+
+- **Complexity score:** 10, plus 2 per aggregate, plus 5 per explicit `MEDIAN` or
+  `MODE`, plus 3 per group column, plus the rows of `limit`. The lengths of the lists
+  are read from the arguments, including variables and their defaults.
+  `Metadata.stats` under `groupBy.field` or `aggregates.field` costs one column per
+  entry of the list.
+- **Cache key:** the resolved parameters, that is the effective aggregations, the
+  aliases, the label columns, the grains, the compiled filter, the effective sort and
+  the page. Two orders of the same aggregates are two entries, because the order
+  fixes the columns.
+- **Group count:** it has an entry of its own, so paging never recounts the groups.
 
 ---
 
