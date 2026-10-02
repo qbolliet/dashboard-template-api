@@ -1203,3 +1203,206 @@ describe('/api/export — transfer guards', () => {
     expect(fs.readdirSync(tmpDir).filter((entry) => entry.startsWith('exp-'))).toEqual([]);
   });
 });
+
+// ─── Export agrégé ───────────────────────────────────────────────────────────
+
+describe('/api/export — aggregated', () => {
+  // Référence : mêmes agrégats calculés directement sur la table de faits
+  const TRADE_REFERENCE = `
+    SELECT nc8, SUM(value) AS value_sum, AVG(value) AS moyenne, COUNT(*) AS row_count
+    FROM "default".trade.fact_table GROUP BY nc8 ORDER BY nc8`;
+
+  test('arrow: rows of getAggregates, aggregate metadata on fields and schema', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'trade',
+      groupBy: 'nc8',
+      aggregates: 'value:sum,value:avg:moyenne',
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers['x-total-count']).toBe('5');
+
+    const table = tableFromIPC(new Uint8Array(res.body as Buffer));
+    expect(table.schema.fields.map((f) => f.name)).toEqual([
+      'nc8',
+      'nc8__label',
+      'value_sum',
+      'moyenne',
+      'row_count',
+    ]);
+
+    const reference = await sourceRows(TRADE_REFERENCE);
+    const rows = table
+      .toArray()
+      .map((row) => (row as { toJSON: () => Record<string, unknown> }).toJSON());
+    expect(rows.map((row) => row.nc8)).toEqual(reference.map((row) => row.nc8));
+    rows.forEach((row, i) => {
+      expect(row.value_sum).toBeCloseTo(Number(reference[i].value_sum), 6);
+      expect(row.moyenne).toBeCloseTo(Number(reference[i].moyenne), 6);
+      expect(Number(row.row_count)).toBe(Number(reference[i].row_count));
+    });
+
+    // Champs : agrégat décrit par sa mesure, libellé rattaché à la colonne de groupe
+    const field = (name: string) => table.schema.fields.find((f) => f.name === name)!.metadata;
+    expect(field('value_sum').get('measure')).toBe('value');
+    expect(field('value_sum').get('aggregation')).toBe('SUM');
+    expect(field('value_sum').get('unit')).toBe('€');
+    expect(field('moyenne').get('aggregation')).toBe('AVG');
+    expect(field('nc8__label').get('labelFor')).toBe('nc8');
+    expect(field('nc8').get('label')).toBe('Code NC8');
+
+    const aggregation = JSON.parse(table.schema.metadata.get('database.aggregation')!) as {
+      groupBy: Array<{ name: string; labelColumn: string | null }>;
+      aggregates: Array<{ alias: string; aggregation: string }>;
+      rowCountColumn: string;
+    };
+    expect(aggregation.groupBy).toMatchObject([{ name: 'nc8', labelColumn: 'nc8__label' }]);
+    expect(aggregation.aggregates.map((a) => [a.alias, a.aggregation])).toEqual([
+      ['value_sum', 'SUM'],
+      ['moyenne', 'AVG'],
+    ]);
+    expect(aggregation.rowCountColumn).toBe('row_count');
+    const sources = JSON.parse(table.schema.metadata.get('database.metadata')!) as Array<{
+      name: string;
+    }>;
+    expect(sources.map((s) => s.name)).toEqual(['nc8', 'nc8_libelle_en', 'value']);
+  });
+
+  test('parquet: the SUM of a BIGINT is read back as DECIMAL(38,0), exact beyond 2^53', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      groupBy: 'region',
+      aggregates: 'budget:sum',
+      format: 'parquet',
+    });
+    expect(res.status).toBe(200);
+
+    const { types } = await describeParquet(res.body as Buffer);
+    expect(types['budget_sum']).toBe('DECIMAL(38,0)');
+
+    const reference = await sourceRows(
+      'SELECT region, SUM(budget)::VARCHAR AS s FROM "default".geography.fact_table ' +
+        'GROUP BY region ORDER BY region',
+    );
+    const rows = (await rowsOf('parquet', res.body as Buffer)).map(
+      (line) => JSON.parse(line) as unknown[],
+    );
+    // Colonnes : region, budget_sum, row_count (region sans libellé)
+    expect(rows.map((row) => [row[0], String(row[1])])).toEqual(
+      reference.map((row) => [row.region, row.s]),
+    );
+    expect(Number(reference[0].s)).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+
+    const { kv } = await readParquetMetadata(res.body as Buffer);
+    expect(JSON.parse(kv['database.aggregation'])).toMatchObject({
+      aggregates: [{ alias: 'budget_sum', measure: 'budget', aggregation: 'SUM' }],
+    });
+  });
+
+  test('csv: header and rows, filter applied before grouping, grain honoured', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'geography',
+      groupBy: 'date:year',
+      aggregates: 'population:max',
+      filters: JSON.stringify({
+        children: [{ criterion: { variable: 'region', operation: 'EQ', value: 'Île-de-France' } }],
+      }),
+      format: 'csv',
+    });
+    expect(res.status).toBe(200);
+
+    const lines = csvLines(res.body as Buffer);
+    expect(lines[0]).toBe('date,population_max,row_count');
+    const reference = await sourceRows(
+      `SELECT CAST(date_trunc('year', date) AS DATE)::VARCHAR AS d, MAX(population) AS m,
+              COUNT(*) AS n FROM "default".geography.fact_table WHERE region = 'Île-de-France'
+       GROUP BY 1 ORDER BY 1`,
+    );
+    expect(reference.length).toBeGreaterThan(0);
+    expect(lines.slice(1)).toEqual(reference.map((row) => `${row.d},${row.m},${row.n}`));
+  });
+
+  test('a sort on an aggregate resumes page by page with after', async () => {
+    const { app } = buildApp();
+    const base = {
+      catalog: 'default',
+      schema: 'trade',
+      groupBy: 'nc8,partner_code',
+      aggregates: 'value:sum',
+      sort: 'value_sum:desc',
+      format: 'csv',
+    };
+    const whole = await exportRequest(app, base);
+    expect(whole.status).toBe(200);
+    const expected = csvLines(whole.body as Buffer).slice(1);
+    expect(expected).toHaveLength(15);
+
+    const pages = await fetchPages((after) =>
+      exportRequest(app, { ...base, limit: '4', ...(after ? { after } : {}) }),
+    );
+    expect(pages).toHaveLength(4);
+    expect(pages.flatMap((page) => csvLines(page.body as Buffer).slice(1))).toEqual(expected);
+  });
+
+  test('the POST body takes groupBy and aggregates as arrays', async () => {
+    const { app } = buildApp();
+    const get = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'trade',
+      groupBy: 'nc8',
+      aggregates: 'value:sum,value:avg:moyenne',
+      format: 'csv',
+    });
+    const post = await exportPost(app, {
+      catalog: 'default',
+      schema: 'trade',
+      groupBy: ['nc8'],
+      aggregates: ['value:sum', 'value:avg:moyenne'],
+      format: 'csv',
+    });
+    expect(post.status).toBe(200);
+    expect((post.body as Buffer).toString('utf8')).toBe((get.body as Buffer).toString('utf8'));
+  });
+
+  test('without groupBy: a single global row', async () => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'trade',
+      aggregates: 'value',
+      format: 'csv',
+    });
+    expect(res.status).toBe(200);
+    const [reference] = await sourceRows(
+      'SELECT SUM(value)::VARCHAR AS s, COUNT(*) AS n FROM "default".trade.fact_table',
+    );
+    const lines = csvLines(res.body as Buffer);
+    expect(lines[0]).toBe('value_sum,row_count');
+    expect(lines.slice(1)).toEqual([`${reference.s},${reference.n}`]);
+  });
+
+  test.each([
+    [{ groupBy: 'nc8' }, /requires "aggregates"/],
+    [{ aggregates: 'value', fields: 'nc8' }, /"fields" does not apply/],
+    [{ aggregates: 'value:total' }, /Unknown aggregation "total"/],
+    [{ aggregates: 'value', groupBy: 'nc8:decade' }, /Unknown grain "decade"/],
+    [{ aggregates: 'nope' }, /Unknown measure/],
+    [{ aggregates: 'value', groupBy: 'nc8', sort: 'value' }, /Unknown sort column/],
+    [{ aggregates: 'nc8_libelle_en:sum' }, /not allowed/],
+  ])('400 for %j', async (query, message) => {
+    const { app } = buildApp();
+    const res = await exportRequest(app, {
+      catalog: 'default',
+      schema: 'trade',
+      ...(query as Record<string, string>),
+    });
+    expect(res.status).toBe(400);
+    const body = JSON.parse((res.body as Buffer).toString('utf8')) as { detail: string };
+    expect(body.detail).toMatch(message);
+  });
+});

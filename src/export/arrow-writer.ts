@@ -25,9 +25,8 @@ import {
 } from 'apache-arrow';
 import type { Data } from 'apache-arrow';
 import { DuckDBTypeId } from '@duckdb/node-api';
-import { embeddedMetadata } from './embedded-metadata.js';
+import { embeddedMetadata, fieldDescriptions } from './embedded-metadata.js';
 import type { ExportDescription } from './embedded-metadata.js';
-import type { FieldMetadata } from '../utils/metadata-mapping.js';
 import type {
   DuckDBDataChunk,
   DuckDBDateValue,
@@ -162,32 +161,11 @@ function planColumn(duckType: DuckDBType): ColumnPlan {
 }
 
 /**
- * Arrow metadata of one field: the display contract of the column.
- *
- * Absent values are left out rather than written empty, so that a reader
- * tests for the key. `isPrimaryKey` is always present.
- *
- * @param column - Metadata row of the column.
- * @returns The key/value pairs of the field.
- */
-function fieldMetadata(column: FieldMetadata): Map<string, string> {
-  const entries: [string, string | null][] = [
-    ['label', column.label],
-    ['unit', column.unit],
-    ['displayFormat', column.displayFormat],
-    ['description', column.description],
-    ['isPrimaryKey', String(column.isPrimaryKey)],
-    ['labelFor', column.labelFor],
-  ];
-  return new Map(entries.filter((e): e is [string, string] => e[1] !== null));
-}
-
-/**
  * Builds the Arrow schema of an export from the DuckDB result columns.
  *
  * Every field is nullable: the fact table declares no NOT NULL constraint
  * the API could rely on. With a description, each field carries its metadata
- * (see {@link fieldMetadata}) and the schema carries the embedded
+ * (see fieldDescriptions) and the schema carries the embedded
  * `database.metadata` / `database.dataset` pairs shared with parquet.
  *
  * @param names - Column names of the DuckDB result.
@@ -201,11 +179,10 @@ function buildArrowLayout(
   description?: ExportDescription,
 ): ArrowExportLayout {
   const plans = types.map(planColumn);
-  const byName = new Map(description?.columns.map((c) => [c.name, c]));
-  const fields = names.map((name, i) => {
-    const column = byName.get(name);
-    return new Field(name, plans[i].type, true, column ? fieldMetadata(column) : null);
-  });
+  const described = description ? fieldDescriptions(description) : new Map();
+  const fields = names.map(
+    (name, i) => new Field(name, plans[i].type, true, described.get(name) ?? null),
+  );
   const schemaMetadata = description
     ? new Map(Object.entries(embeddedMetadata(description)))
     : null;

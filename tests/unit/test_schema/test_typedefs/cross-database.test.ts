@@ -33,14 +33,22 @@ describe('Object types — cross-database', () => {
   /**
    * Verification that PaginatedComparedFacts exposes all pagination fields.
    */
-  test('PaginatedComparedFacts has data, total, hasNextPage, currentPage, totalPages', () => {
+  test('PaginatedComparedFacts has data, measure, aggregation and the pagination fields', () => {
     // Extraction des champs du type paginé
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('PaginatedComparedFacts'),
     ).getFields();
 
     // Présence des champs de pagination
-    for (const f of ['data', 'total', 'hasNextPage', 'currentPage', 'totalPages']) {
+    for (const f of [
+      'data',
+      'measure',
+      'aggregation',
+      'total',
+      'hasNextPage',
+      'currentPage',
+      'totalPages',
+    ]) {
       expect(fields).toHaveProperty(f);
     }
   });
@@ -73,16 +81,37 @@ describe('Query fields — cross-database', () => {
   });
 
   /**
-   * Verification that compareAggregatedFacts accepts groupBy and aggregation args.
+   * Verification that compareFacts takes an optional measure and aggregation.
    */
-  test('compareAggregatedFacts has groupBy and aggregation args', () => {
-    expect(queryFields).toHaveProperty('compareAggregatedFacts');
+  test('compareFacts has optional measure and aggregation args', () => {
+    for (const argName of ['measure', 'aggregation']) {
+      const arg = queryFields.compareFacts.args.find((a) => a.name === argName);
+      expect(arg).toBeDefined();
+      expect(isNonNullType(arg!.type)).toBe(false);
+    }
+  });
 
-    // Présence des arguments d'agrégation
-    expect(queryFields.compareAggregatedFacts.args.find((a) => a.name === 'groupBy')).toBeDefined();
-    expect(
-      queryFields.compareAggregatedFacts.args.find((a) => a.name === 'aggregation'),
-    ).toBeDefined();
+  /**
+   * Verification that compareAggregatedFacts takes the inputs of getAggregates
+   * and returns an AggregateComparison.
+   */
+  test('compareAggregatedFacts has groupBy, aggregates and sort args of getAggregates', () => {
+    expect(queryFields).toHaveProperty('compareAggregatedFacts');
+    const args = queryFields.compareAggregatedFacts.args;
+    const typeOf = (name: string): string => String(args.find((a) => a.name === name)!.type);
+
+    expect(typeOf('groupBy')).toBe('[GroupByInput!]');
+    expect(typeOf('aggregates')).toBe('[AggregateInput!]!');
+    expect(typeOf('sort')).toBe('[AggregateSortInput!]');
+    expect(args.find((a) => a.name === 'aggregation')).toBeUndefined();
+    expect(String(queryFields.compareAggregatedFacts.type)).toBe('AggregateComparison!');
+
+    const fields = assertObjectType(schema.getType('AggregateComparison')).getFields();
+    for (const f of ['groupBy', 'aggregates', 'columns', 'data', 'total', 'hasNextPage']) {
+      expect(fields).toHaveProperty(f);
+    }
+    expect(String(fields.aggregates.type)).toBe('[AggregateColumn!]!');
+    expect(String(fields.data.type)).toBe('[JSON!]!');
   });
 
   /**

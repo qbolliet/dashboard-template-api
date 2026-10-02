@@ -197,6 +197,9 @@ function sendExportError(res: Response, error: unknown): void {
  * `filters` (URL-encoded JSON of a FilterNode), `sort` (`col:asc,col2:desc`,
  * default: the schema's cluster_by), `format` (arrow | csv | parquet, default
  * arrow), `limit` (capped by EXPORT.MAX_ROWS) and `after` (resume cursor).
+ * With `aggregates` (`measure[:aggregation[:alias]]`, comma-separated) and
+ * optionally `groupBy` (`field[:grain]`), the export sends the rows of
+ * getAggregates instead of the fact rows.
  * `POST /api/export` takes the same parameters as a JSON body, for filters
  * too large for a URL; same handler, same guards.
  *

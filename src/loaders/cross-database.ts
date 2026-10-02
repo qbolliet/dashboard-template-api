@@ -5,13 +5,21 @@ import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
 import { qualifiedTable, quoteIdent } from '../utils/identifiers.js';
-import { AGGREGATION_SQL } from '../utils/aggregations.js';
+import {
+  buildAggregateSelect,
+  buildOutputOrderBy,
+  labelColumnOf,
+  paginationBound,
+} from '../utils/aggregate-query.js';
+import type { Json } from '@duckdb/node-api';
 import type { CacheNamespace, DuckDBConnection, SortItem } from './base-loader.js';
 import type { Aggregation } from '../generated/graphql.js';
+import type { ColumnExtent } from '../db/json-conversion.js';
+import type { ResolvedAggregate, ResolvedGroup, ResolvedSort } from '../utils/aggregate-query.js';
 
 // ─── Interfaces des paramètres de requêtes cross-database ─────────────────────
 
-/** Parameters for comparing the fact table between two catalogs/schemas. */
+/** Parameters for comparing a measure between two catalogs/schemas. */
 interface CompareFactsParams {
   catalogA: string;
   catalogB: string;
@@ -20,6 +28,10 @@ interface CompareFactsParams {
   /** Schema within catalogB. Null/undefined uses the catalog's default schema. */
   schemaB?: string | null;
   joinFields: string[];
+  /** Compared measure, checked against the metadata of both sides by the resolver. */
+  measure: string;
+  /** Aggregation of the measure per key, the same on both sides (resolved by the resolver). */
+  aggregation: Aggregation;
   /**
    * Effective label columns of the single join field on each side, resolved by
    * resolveLabelField (null: none, or several join fields). Part of the key.
@@ -31,17 +43,24 @@ interface CompareFactsParams {
   sort?: SortItem[];
 }
 
-/** Parameters for comparing aggregated facts between two catalogs/schemas. */
+/** Groups and aggregates of one side of an aggregate comparison, resolved. */
+interface ComparisonSide {
+  groups: ResolvedGroup[];
+  aggregates: ResolvedAggregate[];
+}
+
+/** Parameters for comparing aggregates between two catalogs/schemas. */
 interface CompareAggregatedFactsParams {
   catalogA: string;
   catalogB: string;
   schemaA?: string | null;
   schemaB?: string | null;
-  groupBy: string;
-  aggregation?: Aggregation;
-  /** Effective label columns of groupBy on each side (null: none). Part of the key. */
-  labelFieldA?: string | null;
-  labelFieldB?: string | null;
+  /** Resolved against the metadata of side A (same fields, aliases and aggregations as B). */
+  sideA: ComparisonSide;
+  /** Resolved against the metadata of side B (its own label columns). */
+  sideB: ComparisonSide;
+  /** Sort on output columns, tie-broken by every group column. */
+  sort: ResolvedSort[];
   limit: number;
   offset: number;
 }
@@ -68,7 +87,7 @@ interface ComparisonRow {
   deltaPercent: number | null;
 }
 
-/** Paginated result of a cross-catalog comparison. */
+/** Paginated result of compareFacts. */
 interface ComparisonResult {
   data: ComparisonRow[];
   total: number;
@@ -77,24 +96,98 @@ interface ComparisonResult {
   totalPages: number;
 }
 
-// Alias interne du libellé de la clé dans les CTE de chaque côté
-const KEY_LABEL_ALIAS = '_key_label';
+/** One page of an aggregate comparison, rows as objects. */
+interface AggregateComparisonPage {
+  /** Output columns, in SELECT order: groups, labels, then <alias>_a/_b/_delta/_delta_pct. */
+  columns: string[];
+  /** DuckDB types of the columns, same order. */
+  columnTypes: string[];
+  /** Rows, serialized by the single JSON converter (NULL preserved). */
+  data: Record<string, Json>[];
+  /** [min, max] of the numeric and temporal columns of the page, keyed by column. */
+  extents: Record<string, ColumnExtent>;
+  /** Number of groups common to both sides. */
+  total: number;
+}
+
+// Alias interne de la mesure comparée par compareFacts dans le SELECT de chaque côté
+const MEASURE_ALIAS = '_compared_value';
+
+/** Suffixes of the four output columns of a compared aggregate. */
+const COMPARISON_SUFFIXES = ['_a', '_b', '_delta', '_delta_pct'] as const;
 
 /**
- * Builds the keyLabel expression from the label columns available on each side.
+ * Output columns of a compared aggregate, in order.
  *
- * @param labelFieldA - Label column on side A, or null.
- * @param labelFieldB - Label column on side B, or null.
- * @returns `COALESCE(a._key_label, b._key_label)` over the sides that have one,
- *   or `NULL` when neither side has a label column.
+ * @param alias - Alias of the aggregate.
+ * @returns `<alias>_a`, `<alias>_b`, `<alias>_delta`, `<alias>_delta_pct`.
  */
-// Expression du libellé de la clé : COALESCE des côtés dotés de libellés
-function keyLabelExpression(labelFieldA: string | null, labelFieldB: string | null): string {
-  const sides = [
-    labelFieldA ? `a.${KEY_LABEL_ALIAS}` : null,
-    labelFieldB ? `b.${KEY_LABEL_ALIAS}` : null,
-  ].filter((side): side is string => side !== null);
-  return sides.length > 0 ? `COALESCE(${sides.join(', ')})` : 'NULL';
+// Colonnes de sortie d'un agrégat comparé
+function comparedColumnsOf(alias: string): string[] {
+  return COMPARISON_SUFFIXES.map((suffix) => `${alias}${suffix}`);
+}
+
+/**
+ * Builds the label expression of a group column from the label columns
+ * available on each side.
+ *
+ * @param field - Group column.
+ * @param labelFieldA - Label column of the field on side A, or null.
+ * @param labelFieldB - Label column of the field on side B, or null.
+ * @returns `COALESCE(a.<field>__label, b.<field>__label)` over the sides that
+ *   have one, or null when neither side has a label column.
+ */
+// Expression du libellé d'une colonne de groupe : COALESCE des côtés dotés de libellés
+function labelExpression(
+  field: string,
+  labelFieldA: string | null,
+  labelFieldB: string | null,
+): string | null {
+  const column = quoteIdent(labelColumnOf(field));
+  const sides = [labelFieldA ? `a.${column}` : null, labelFieldB ? `b.${column}` : null].filter(
+    (side): side is string => side !== null,
+  );
+  return sides.length > 0 ? `COALESCE(${sides.join(', ')})` : null;
+}
+
+/**
+ * Builds the delta and delta% expressions of a measure present on both sides.
+ *
+ * @param column - Quoted column name of the measure in each side's SELECT.
+ * @returns B - A, and (B - A) / A * 100, NULL when A is 0 or NULL.
+ */
+// Écart absolu et relatif entre les deux côtés
+function deltaExpressions(column: string): { delta: string; deltaPercent: string } {
+  return {
+    delta: `b.${column} - a.${column}`,
+    deltaPercent:
+      `CASE WHEN a.${column} IS NOT NULL AND a.${column} != 0 ` +
+      `THEN (b.${column} - a.${column}) / a.${column} * 100.0 END`,
+  };
+}
+
+/**
+ * Builds the condition joining both sides on their group columns.
+ *
+ * Values are compared as VARCHAR so that two catalogs typing the same column
+ * differently still align; `nullSafe` makes the NULL groups match each other.
+ *
+ * @param fields - Group columns.
+ * @param nullSafe - Whether NULL matches NULL (IS NOT DISTINCT FROM).
+ * @returns The FROM clause joining `a` and `b` (a cross join of two single
+ *   rows without group column).
+ */
+// Jointure a↔b sur les colonnes de groupe, alignées en VARCHAR
+function joinClause(fields: readonly string[], nullSafe: boolean): string {
+  if (fields.length === 0) return 'FROM a CROSS JOIN b';
+  const operator = nullSafe ? 'IS NOT DISTINCT FROM' : '=';
+  const condition = fields
+    .map((field) => {
+      const column = quoteIdent(field);
+      return `CAST(a.${column} AS VARCHAR) ${operator} CAST(b.${column} AS VARCHAR)`;
+    })
+    .join(' AND ');
+  return `FROM a JOIN b ON ${condition}`;
 }
 
 /**
@@ -117,15 +210,19 @@ function toComparisonRow(row: Record<string, unknown>): ComparisonRow {
 
 /** Select option from a cross-catalog query. */
 interface CrossDatabaseSelectOption {
-  value: unknown;
-  label?: unknown;
+  /** Value cast to VARCHAR. */
+  value: string;
+  /** Same as value: the column carries its own label. */
+  label: string;
 }
 
 // Classe de chargement des requêtes cross-database
 /**
  * Loader for cross-catalog / cross-schema comparison queries.
  *
- * Compares fact and aggregated fact data between two datasets (catalog + schema),
+ * Compares a measure, or several aggregates, between two datasets (catalog +
+ * schema) — each side aggregated by its keys with the SQL of getAggregates
+ * before the join, so a key yields one row whatever its number of fact rows —
  * and computes the intersection of select options across multiple datasets.
  *
  * The fact table stores labels directly (no dim_* table exists), so a column
@@ -239,51 +336,46 @@ class CrossDatabaseLoader extends FactQueryLoader {
     };
   }
 
-  // Construction du SELECT d'un côté : mesure + colonnes de jointure alignées
+  // SELECT d'agrégats d'un côté, produit par le constructeur unique de getAggregates
   /**
-   * Builds the per-side SELECT that exposes the measure plus one key column per
-   * join field, cast to VARCHAR so both sides align whatever their SQL type.
-   * Join columns are quoted and aliased by position (`k_0`, `k_1`…), so any
-   * column name works; they were checked against each side's metadata by the
-   * resolver.
+   * Builds the aggregate SELECT of one side, without sort nor pagination.
    *
    * @param catalog - Catalog alias for this side.
    * @param schema - Resolved schema for this side.
-   * @param joinFields - Fields participating in the join.
-   * @param labelField - Label column of the single join field on this side, or null.
-   * @returns A SQL SELECT statement (no trailing semicolon).
+   * @param side - Group columns and aggregates of this side.
+   * @returns The SQL (no bound value: comparisons take no filter).
    */
-  private buildSideSelect(
-    catalog: string,
-    schema: string,
-    joinFields: string[],
-    labelField: string | null,
-  ): string {
-    const keyCols = joinFields.map((f, i) => `CAST(f.${quoteIdent(f)} AS VARCHAR) AS k_${i}`);
-    // Libellé de la clé lu dans la même ligne que le code
-    if (labelField) keyCols.push(`f.${quoteIdent(labelField)} AS ${KEY_LABEL_ALIAS}`);
-    return `SELECT f.value AS value, ${keyCols.join(', ')} FROM ${qualifiedTable(catalog, schema, 'fact_table')} f`;
+  private sideSelect(catalog: string, schema: string, side: ComparisonSide): string {
+    return buildAggregateSelect(
+      { ...side, includeRowCount: false },
+      qualifiedTable(catalog, schema, 'fact_table'),
+    ).sql;
   }
 
-  // Méthode de comparaison des tables de faits entre deux datasets
+  // Méthode de comparaison d'une mesure entre deux datasets
   /**
-   * Compares fact table rows between two datasets via a JOIN on shared fields.
+   * Compares a measure between two datasets, one row per join key.
    *
-   * Join fields are matched directly on their stored values — the fact table
-   * carries the labels — cast to VARCHAR to align differing SQL types. Returns
-   * delta (B - A) and deltaPercent per row, with pagination metadata. With a
-   * single join field that has a label column, `keyLabel` is read in the same
-   * query, COALESCE of both sides.
+   * Each side is first aggregated by the join fields (buildAggregateSelect,
+   * the SQL of getAggregates), so a key occurring on several rows yields one
+   * value per side; both sides are then joined on the join fields, cast to
+   * VARCHAR to align differing SQL types (a NULL key matches nothing). Returns
+   * delta (B - A) and deltaPercent per key, sorted by the client sort then by
+   * every join field, so pages never overlap. With a single join field that
+   * has a label column, `keyLabel` is read by ANY_VALUE on each side, then
+   * merged by COALESCE.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Parameters defining the two datasets, join fields, and pagination.
+   * @param params - Datasets, join fields, measure, aggregation and pagination.
    * @returns Paginated comparison result with delta values.
    */
   async compareFacts(
     connection: DuckDBConnection,
     params: CompareFactsParams,
   ): Promise<ComparisonResult> {
-    const { catalogA, catalogB, joinFields, limit, offset, sort = [] } = params;
+    const { catalogA, catalogB, joinFields, measure, aggregation, sort = [] } = params;
+    const limit = paginationBound('limit', params.limit);
+    const offset = paginationBound('offset', params.offset);
 
     const schemaA = this.resolveSchema(catalogA, params.schemaA);
     const schemaB = this.resolveSchema(catalogB, params.schemaB);
@@ -294,47 +386,54 @@ class CrossDatabaseLoader extends FactQueryLoader {
     const labelFieldA = single ? (params.labelFieldA ?? null) : null;
     const labelFieldB = single ? (params.labelFieldB ?? null) : null;
 
-    const selectA = this.buildSideSelect(catalogA, schemaA, joinFields, labelFieldA);
-    const selectB = this.buildSideSelect(catalogB, schemaB, joinFields, labelFieldB);
+    // Chaque côté agrégé par les champs de jointure : une ligne par clé
+    const side = (labelField: string | null, withMeasure: boolean): ComparisonSide => ({
+      groups: joinFields.map((field) => ({
+        field,
+        grain: null,
+        truncation: null,
+        labelField: withMeasure ? labelField : null,
+      })),
+      aggregates: withMeasure ? [{ measure, aggregation, alias: MEASURE_ALIAS }] : [],
+    });
+    const selectA = this.sideSelect(catalogA, schemaA, side(labelFieldA, true));
+    const selectB = this.sideSelect(catalogB, schemaB, side(labelFieldB, true));
 
-    // Condition de jointure a↔b sur les libellés portés par les colonnes
-    const joinCondition = joinFields.map((_, i) => `a.k_${i} = b.k_${i}`).join(' AND ');
+    // Clé : valeur du champ unique, ou valeurs jointes par '::'
+    const keyColumns = joinFields.map((field) => `CAST(a.${quoteIdent(field)} AS VARCHAR)`);
+    const keyExpr = single ? keyColumns[0] : `CONCAT(${keyColumns.join(", '::', ")})`;
+    const keyLabel = single ? labelExpression(joinFields[0], labelFieldA, labelFieldB) : null;
+    const value = quoteIdent(MEASURE_ALIAS);
+    const { delta, deltaPercent } = deltaExpressions(value);
 
-    // Expression de la clé principale dans le résultat
-    const keyExpr =
-      joinFields.length === 1
-        ? 'a.k_0'
-        : `CONCAT(${joinFields.map((_, i) => `a.k_${i}`).join(", '::', ")})`;
-
-    // Tri déterministe : sans tri explicite, la clé de jointure ordonne le
-    // résultat. Les colonnes de cluster_by ne survivent pas aux CTE (seules
-    // key/valueA/valueB/delta/deltaPercent sont projetées), et `key` est
-    // construite depuis les joinFields.
-    const sortClause = sort.length > 0 ? this.buildSortClause(sort) : 'ORDER BY key ASC';
+    // Tri client puis départage par chaque champ de jointure : ordre total
+    const tieBreak = joinFields.map((_, i) => `_k_${i} ASC`);
+    const clientSort = this.buildSortClause(sort).replace(/^ORDER BY /, '');
+    const orderBy = `ORDER BY ${[clientSort, ...tieBreak].filter(Boolean).join(', ')}`;
 
     const query = `
             WITH a AS (${selectA}),
                  b AS (${selectB})
-            SELECT
-                ${keyExpr} AS key,
-                ${keyLabelExpression(labelFieldA, labelFieldB)} AS keyLabel,
-                a.value AS valueA,
-                b.value AS valueB,
-                b.value - a.value AS delta,
-                CASE WHEN a.value IS NOT NULL AND a.value != 0
-                    THEN (b.value - a.value) / a.value * 100.0
-                END AS deltaPercent
-            FROM a JOIN b ON ${joinCondition}
-            ${sortClause}
+            SELECT key, keyLabel, valueA, valueB, delta, deltaPercent FROM (
+                SELECT
+                    ${keyExpr} AS key,
+                    ${keyLabel ?? 'NULL'} AS keyLabel,
+                    a.${value} AS valueA,
+                    b.${value} AS valueB,
+                    ${delta} AS delta,
+                    ${deltaPercent} AS deltaPercent,
+                    ${keyColumns.map((column, i) => `${column} AS _k_${i}`).join(', ')}
+                ${joinClause(joinFields, false)}
+            )
+            ${orderBy}
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-    // Comptage total pour le calcul de la pagination
+    // Comptage des clés communes, sur des côtés réduits aux colonnes de jointure
     const countQuery = `
-            WITH a AS (${selectA}),
-                 b AS (${selectB})
-            SELECT COUNT(*) AS total
-            FROM a JOIN b ON ${joinCondition}
+            WITH a AS (${this.sideSelect(catalogA, schemaA, side(null, false))}),
+                 b AS (${this.sideSelect(catalogB, schemaB, side(null, false))})
+            SELECT COUNT(*) AS total ${joinClause(joinFields, false)}
         `;
 
     const [results, countResult] = await Promise.all([
@@ -348,84 +447,93 @@ class CrossDatabaseLoader extends FactQueryLoader {
       total,
       hasNextPage: offset + limit < total,
       currentPage: Math.floor(offset / limit) + 1,
-      totalPages: limit > 0 ? Math.ceil(total / limit) : 1,
+      totalPages: Math.ceil(total / limit),
     };
   }
 
-  // Méthode de comparaison des faits agrégés entre deux datasets
+  // Méthode de comparaison de plusieurs agrégats entre deux datasets
   /**
-   * Compares aggregated fact values between two datasets.
+   * Compares several aggregates between two datasets, one row per group.
    *
-   * Each side is aggregated by its own groupBy column — which carries the label
-   * — then the two results are joined on that key, cast to VARCHAR so differing
-   * SQL types align. Uses CTEs to pre-aggregate, avoiding Cartesian products.
-   * The label of the key is read by `ANY_VALUE` in each side's aggregation —
-   * the same path as getAggregates — then merged by COALESCE.
+   * Each side runs the SELECT of getAggregates (buildAggregateSelect) over its
+   * own fact table; both are joined on the group columns, cast to VARCHAR so
+   * differing SQL types align, NULL groups matching each other. For each
+   * aggregate alias the row holds `<alias>_a`, `<alias>_b`, `<alias>_delta`
+   * (B - A) and `<alias>_delta_pct`; the group columns keep the values of
+   * side A and each label column is the COALESCE of both sides. Without group
+   * columns, the two single rows are cross-joined.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Parameters defining datasets, groupBy, aggregation, and pagination.
-   * @returns Paginated comparison result with aggregated delta values.
+   * @param params - Datasets, resolved sides, sort and pagination.
+   * @returns The page, its columns, their types and extents, and the group count.
    */
   async compareAggregatedFacts(
     connection: DuckDBConnection,
     params: CompareAggregatedFactsParams,
-  ): Promise<ComparisonResult> {
-    const { catalogA, catalogB, groupBy, aggregation = 'SUM', limit, offset } = params;
+  ): Promise<AggregateComparisonPage> {
+    // Extraction des parmaètres d'intérêt
+    const { catalogA, catalogB, sideA, sideB, sort } = params;
+    const limit = paginationBound('limit', params.limit);
+    const offset = paginationBound('offset', params.offset);
 
     const schemaA = this.resolveSchema(catalogA, params.schemaA);
     const schemaB = this.resolveSchema(catalogB, params.schemaB);
+    const fields = sideA.groups.map((group) => group.field);
 
-    // groupBy et libellés contrôlés contre metadata par le resolver, quotés ici
-    const groupColumn = quoteIdent(groupBy);
-    const labelFieldA = params.labelFieldA ?? null;
-    const labelFieldB = params.labelFieldB ?? null;
-    const aggFn = AGGREGATION_SQL[aggregation] || 'SUM';
+    // Colonnes de sortie : groupes (côté A), libellés, puis quatre colonnes par agrégat
+    const projection = [
+      ...fields.map((field) => `a.${quoteIdent(field)} AS ${quoteIdent(field)}`),
+      ...sideA.groups.flatMap((group, i) => {
+        const label = labelExpression(group.field, group.labelField, sideB.groups[i].labelField);
+        return label ? [`${label} AS ${quoteIdent(labelColumnOf(group.field))}`] : [];
+      }),
+      ...sideA.aggregates.flatMap(({ alias }) => {
+        const column = quoteIdent(alias);
+        const [colA, colB, colDelta, colDeltaPct] = comparedColumnsOf(alias).map(quoteIdent);
+        const { delta, deltaPercent } = deltaExpressions(column);
+        return [
+          `a.${column} AS ${colA}`,
+          `b.${column} AS ${colB}`,
+          `${delta} AS ${colDelta}`,
+          `${deltaPercent} AS ${colDeltaPct}`,
+        ];
+      }),
+    ];
+    const join = joinClause(fields, true);
 
-    // CTE d'agrégation per-side : regroupement direct sur la colonne, libellé par ANY_VALUE
-    const aggSide = (catalog: string, schema: string, labelField: string | null): string =>
-      `SELECT CAST(${groupColumn} AS VARCHAR) AS key,
-              ${labelField ? `ANY_VALUE(${quoteIdent(labelField)}) AS ${KEY_LABEL_ALIAS},` : ''}
-              ${aggFn}(value) AS value
-       FROM ${qualifiedTable(catalog, schema, 'fact_table')}
-       GROUP BY ${groupColumn}`;
-
+    // Construction de la requête
     const query = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA, labelFieldA)}),
-                 agg_b AS (${aggSide(catalogB, schemaB, labelFieldB)})
-            SELECT
-                a.key,
-                ${keyLabelExpression(labelFieldA, labelFieldB)} AS keyLabel,
-                a.value AS valueA,
-                b.value AS valueB,
-                b.value - a.value AS delta,
-                CASE WHEN a.value IS NOT NULL AND a.value != 0
-                    THEN (b.value - a.value) / a.value * 100.0
-                END AS deltaPercent
-            FROM agg_a a
-            JOIN agg_b b ON a.key = b.key
-            ORDER BY a.key ASC
+            WITH a AS (${this.sideSelect(catalogA, schemaA, sideA)}),
+                 b AS (${this.sideSelect(catalogB, schemaB, sideB)})
+            SELECT * FROM (SELECT ${projection.join(', ')} ${join})
+            ${buildOutputOrderBy(sort)}
             LIMIT ${limit} OFFSET ${offset}
         `;
 
-    // Comptage total des clés communes pour la pagination
+    // Comptage des groupes communs, sur des côtés réduits aux colonnes de groupe
+    const groupsOnly = (side: ComparisonSide): ComparisonSide => ({
+      groups: side.groups.map((group) => ({ ...group, labelField: null })),
+      aggregates: [],
+    });
     const countQuery = `
-            WITH agg_a AS (${aggSide(catalogA, schemaA, null)}),
-                 agg_b AS (${aggSide(catalogB, schemaB, null)})
-            SELECT COUNT(*) AS total FROM agg_a a JOIN agg_b b ON a.key = b.key
+            WITH a AS (${this.sideSelect(catalogA, schemaA, groupsOnly(sideA))}),
+                 b AS (${this.sideSelect(catalogB, schemaB, groupsOnly(sideB))})
+            SELECT COUNT(*) AS total ${join}
         `;
 
-    const [results, countResult] = await Promise.all([
-      connection.all(query),
-      connection.all(countQuery),
+    const [page, total] = await Promise.all([
+      connection.getWithMetadata(query),
+      fields.length > 0
+        ? connection.all(countQuery).then((rows) => Number(rows[0]?.total ?? 0))
+        : Promise.resolve(1),
     ]);
-    const total = Number(countResult[0]?.total ?? 0);
 
     return {
-      data: results.map(toComparisonRow),
+      columns: page.columns,
+      columnTypes: page.columnTypes ?? [],
+      data: page.data as Record<string, Json>[],
+      extents: page.metadata.extents,
       total,
-      hasNextPage: offset + limit < total,
-      currentPage: Math.floor(offset / limit) + 1,
-      totalPages: limit > 0 ? Math.ceil(total / limit) : 1,
     };
   }
 
@@ -495,12 +603,12 @@ const createCompareFacts = () => {
 /**
  * Creates a DataLoader for aggregated fact comparison between two datasets.
  *
- * @returns DataLoader keyed by CompareAggregatedFactsParams, returning ComparisonResult.
+ * @returns DataLoader keyed by CompareAggregatedFactsParams, returning AggregateComparisonPage.
  */
 const createCompareAggregatedFacts = () => {
-  const loader = new CrossDatabaseLoader(config.API.TIMEOUTS.AGGREGATED_SIMPLE);
-  return loader.createLoader<CompareAggregatedFactsParams, ComparisonResult>((connection, params) =>
-    loader.compareAggregatedFacts(connection, params),
+  const loader = new CrossDatabaseLoader(config.API.TIMEOUTS.AGGREGATED_COMPLEX);
+  return loader.createLoader<CompareAggregatedFactsParams, AggregateComparisonPage>(
+    (connection, params) => loader.compareAggregatedFacts(connection, params),
   );
 };
 
@@ -518,6 +626,8 @@ const createCrossDatabaseSelectOptions = () => {
 };
 
 export {
+  COMPARISON_SUFFIXES,
+  comparedColumnsOf,
   createCompareFacts,
   createCompareAggregatedFacts,
   createCrossDatabaseSelectOptions,
@@ -526,8 +636,10 @@ export {
 export type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
+  ComparisonSide,
   CrossDatabaseSelectOptionsParams,
   ComparisonRow,
   ComparisonResult,
+  AggregateComparisonPage,
   CrossDatabaseSelectOption,
 };

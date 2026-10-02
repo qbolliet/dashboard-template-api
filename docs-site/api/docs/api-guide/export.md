@@ -38,6 +38,8 @@ rate-limit budget and adds its own guards (see [Guards](#guards)).
 | `after`       | none                              | Resume cursor: the `X-Next-After` header of the previous page, passed back unchanged.                                                                                                                                                                          |
 | `bom`         | `0`                               | `csv` only. `1` (or `true`) prefixes the file with a UTF-8 byte order mark, which Excel on Windows needs to decode accents correctly.                                                                                                                          |
 | `compression` | `snappy`                          | `parquet` only. `snappy` (fast), `zstd` (smaller, still fast) or `gzip` (smallest, slowest). Any other value is a 400.                                                                                                                                         |
+| `aggregates`  | none                              | Exports aggregates instead of fact rows: `measure[:aggregation[:alias]]`, comma-separated (`aggregates=value:sum,value:avg:mean`). See [Aggregated export](#aggregated-export).                                                                                |
+| `groupBy`     | none (one global row)             | With `aggregates` only: `field[:grain]`, comma-separated (`groupBy=nc8,date:month`).                                                                                                                                                                           |
 
 Unknown parameters are rejected with a 400. A typo such as `filter=` would otherwise
 silently export the whole table. So is an option given to the wrong format
@@ -80,11 +82,13 @@ Arrow is an IPC **stream** (`.arrows`), not an IPC file. Read it with
 `pyarrow.ipc.open_stream` or `apache-arrow`'s `tableFromIPC`. Download a Parquet
 export before reading it: the endpoint does not serve HTTP range requests.
 
-`HUGEINT` and `UHUGEINT` columns are written as `Decimal128(38, 0)` in Arrow, and read
-back as integers of that width (`decimal128(38, 0)` in pyarrow). A value that needs
+`HUGEINT` and `UHUGEINT` columns — the `SUM` of an integer column, for instance — are
+written as `Decimal128(38, 0)` in Arrow and as `DECIMAL(38, 0)` in Parquet (DuckDB alone
+would degrade them to `DOUBLE` there), and read back as integers of that width
+(`decimal128(38, 0)` in pyarrow). A value that needs
 more than 38 digits (a `HUGEINT` beyond ±10^38, a `UHUGEINT` beyond 2^127) cannot be
 represented: the stream is cut short, without its end marker, rather than
-corrupting the column. Leave such a column out with `fields`. The other types outside the database
+corrupting the column (the Parquet `COPY` fails). Leave such a column out with `fields`. The other types outside the database
 specification (`LIST`, `STRUCT`…) are written as `Utf8`.
 
 Responses are never cached: `Cache-Control: no-store`. The server's gzip compression
@@ -101,6 +105,7 @@ labels, units and display formats of its columns. CSV cannot carry them.
 | Parquet file, Arrow schema | `database.metadata`                                                         | JSON array, one object per **exported** column, in the order of `fields`: the `metadata` row in camelCase (`name`, `label`, `sqlType`, `typeFamily`, `unit`, `displayFormat`, `isPrimaryKey`, `labelFor`, `labelFields`, `description`…). |
 | Parquet file, Arrow schema | `database.dataset`                                                          | JSON object of the dataset: `label`, `description`, `source`, `updatedAt`, `schemaVersion`, `clusterBy` (same as GraphQL `DatasetInfo`).                                                                                                  |
 | Arrow field                | `label`, `unit`, `displayFormat`, `description`, `isPrimaryKey`, `labelFor` | Per-field metadata. A key is absent when the value is null; `isPrimaryKey` is always there, as `"true"` or `"false"`.                                                                                                                     |
+| Parquet file, Arrow schema | `database.aggregation`                                                      | [Aggregated export](#aggregated-export) only: JSON of `groupBy` (`name`, `grain`, `labelColumn`, `labelField`), `aggregates` (`alias`, `measure`, `aggregation`, `unit`, `displayFormat`) and `rowCountColumn`.                           |
 
 A label column keeps its link to the code column through `labelFor`
 (`nc8_libelle_fr` → `nc8`), so a client can join codes and labels from the file alone.
@@ -135,6 +140,49 @@ const unit = table.schema.fields.find((f) => f.name === 'population')?.metadata.
 
 DuckDB reads the Parquet pairs with
 `SELECT decode(key), decode(value) FROM parquet_kv_metadata('file.parquet')`.
+
+## Aggregated export {#aggregated-export}
+
+With `aggregates`, the file holds the rows of the GraphQL `getAggregates` query
+instead of the fact rows. The filter applies before the grouping.
+
+| Item         | Syntax                          | Examples                                                       |
+| ------------ | ------------------------------- | -------------------------------------------------------------- |
+| `aggregates` | `measure[:aggregation[:alias]]` | `value` (defaultAggregation), `value:avg:mean`, `value::total` |
+| `groupBy`    | `field[:grain]`                 | `nc8`, `date:month`                                            |
+
+Aggregations and grains are case-insensitive. The columns are, in order: the group
+columns, their label columns (`<field>__label`), the aggregates under their alias, and
+`row_count` (`COUNT(*)` of each group). `sort` names these columns
+(`sort=value_sum:desc`); the group columns are appended as tiebreakers, so the order
+is total and `limit` / `after` work as for fact rows. `fields` does not apply
+(400), nor does `groupBy` without `aggregates`. An invalid measure, aggregation, alias
+or sort column is a 400 carrying the message of `getAggregates`.
+
+In Parquet and Arrow, `database.metadata` describes the **source** columns (groups,
+label columns, measures) and `database.aggregation` how each output column was
+computed. In Arrow, an aggregate field carries the label of its measure, the unit and
+display format of the aggregate (none for `COUNT`; two decimals for the mean of an
+integer), plus `measure` and `aggregation`; a label field carries `labelFor`.
+
+```bash
+curl -o trade_by_nc8.parquet \
+  "http://localhost:3000/api/export?catalog=default&schema=trade&format=parquet&groupBy=nc8&aggregates=value:sum,value:avg:mean,weight_kg"
+```
+
+```python
+import json
+import pyarrow.parquet as pq
+
+table = pq.read_table("trade_by_nc8.parquet")
+aggregation = json.loads(table.schema.metadata[b"database.aggregation"])
+for aggregate in aggregation["aggregates"]:
+    print(aggregate["alias"], aggregate["aggregation"], aggregate["unit"])
+print(table.select(["nc8", "nc8__label", "value_sum", "mean"]).to_pandas())
+```
+
+The `SUM` of an integer measure is a 128-bit integer: it is read back as
+`decimal128(38, 0)` in both formats, exact beyond 2^53.
 
 ## Examples
 

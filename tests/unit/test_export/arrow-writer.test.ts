@@ -286,6 +286,59 @@ describe('embedded metadata', () => {
     expect(meta('untouched')).toEqual({});
   });
 
+  test('an aggregated export describes its label and aggregate columns', async () => {
+    const aggregated: ExportDescription = {
+      ...DESCRIPTION,
+      aggregation: {
+        groupBy: [
+          {
+            name: 'region',
+            grain: null,
+            labelColumn: 'region__label',
+            labelField: 'region_libelle',
+          },
+        ],
+        aggregates: [
+          {
+            alias: 'population_avg',
+            measure: 'population',
+            aggregation: 'AVG',
+            unit: 'hab.',
+            displayFormat: ',.2f',
+          },
+        ],
+        rowCountColumn: 'row_count',
+      },
+    };
+    const { table } = await roundTrip(
+      "SELECT 'A' AS region, 'Alpha' AS region__label, 12.5::DOUBLE AS population_avg, " +
+        '3::BIGINT AS row_count',
+      aggregated,
+    );
+    const meta = (name: string): Record<string, string> =>
+      Object.fromEntries(table.schema.fields.find((f) => f.name === name)!.metadata);
+
+    expect(meta('region')).toEqual({ label: 'Région', isPrimaryKey: 'true' });
+    expect(meta('region__label')).toEqual({
+      label: 'region_libelle',
+      isPrimaryKey: 'false',
+      labelFor: 'region',
+    });
+    expect(meta('population_avg')).toEqual({
+      label: 'Population',
+      unit: 'hab.',
+      displayFormat: ',.2f',
+      description: DESCRIPTION.columns[2].description,
+      isPrimaryKey: 'false',
+      measure: 'population',
+      aggregation: 'AVG',
+    });
+    expect(meta('row_count')).toEqual({});
+    expect(JSON.parse(table.schema.metadata.get('database.aggregation')!)).toEqual(
+      aggregated.aggregation,
+    );
+  });
+
   test('the schema carries the dataset and the column rows as JSON, typeFamily included', async () => {
     const { table } = await roundTrip(SQL, DESCRIPTION);
 

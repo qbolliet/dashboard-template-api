@@ -505,9 +505,9 @@ describe('ComparedFact.keyLabel', () => {
 
     expect(result.errors).toBeUndefined();
     const { total, data } = result.data!.compareFacts as { total: number; data: Compared[] };
-    // 6 lignes côté default × 2 côté macroeconomics, pour 3 codes communs
-    expect(total).toBe(36);
-    expect([...new Set(data.map((row) => row.key))]).toEqual(Object.keys(EXPECTED_LABELS));
+    // Chaque côté agrégé par nc8 avant la jointure : une ligne par code commun
+    expect(total).toBe(3);
+    expect(data.map((row) => row.key)).toEqual(Object.keys(EXPECTED_LABELS));
     data.forEach((row) => expect(row.keyLabel).toBe(EXPECTED_LABELS[row.key]));
   });
 
@@ -548,18 +548,20 @@ describe('ComparedFact.keyLabel', () => {
         compareAggregatedFacts(
           catalogA: "default", schemaA: "trade",
           catalogB: "macroeconomics", schemaB: "trade",
-          groupBy: "nc8"
-        ) { total data { key keyLabel } }
+          groupBy: [{ field: "nc8" }], aggregates: [{ measure: "value" }]
+        ) { total groupBy { name labelColumn } data }
       }`,
     });
 
     expect(result.errors).toBeUndefined();
-    const { total, data } = result.data!.compareAggregatedFacts as {
+    const { total, groupBy, data } = result.data!.compareAggregatedFacts as {
       total: number;
-      data: Compared[];
+      groupBy: Array<{ name: string; labelColumn: string | null }>;
+      data: Array<Record<string, unknown>>;
     };
     expect(total).toBe(3);
-    expect(data).toEqual(
+    expect(groupBy).toEqual([{ name: 'nc8', labelColumn: 'nc8__label' }]);
+    expect(data.map((row) => ({ key: row.nc8, keyLabel: row.nc8__label }))).toEqual(
       Object.entries(EXPECTED_LABELS).map(([key, keyLabel]) => ({ key, keyLabel })),
     );
   });

@@ -9,6 +9,14 @@ import { resolveEffectiveSort } from '../utils/default-sort.js';
 import { assertColumns, quoteIdent } from '../utils/identifiers.js';
 import { indexMetadataByName } from '../utils/metadata-mapping.js';
 import {
+  ROW_COUNT_COLUMN,
+  aggregateDisplayFormat,
+  aggregateUnit,
+  buildAggregateSelect,
+  labelColumnOf,
+  resolveAggregateParams,
+} from '../utils/aggregate-query.js';
+import {
   assertCursorOrder,
   buildAfterPredicate,
   buildOrderBy,
@@ -19,6 +27,9 @@ import type { KeyColumn, SqlFragment } from './after-cursor.js';
 import { ExportHttpError } from './export-params.js';
 import type { ExportDescription } from './embedded-metadata.js';
 import type { ExportParams } from './export-params.js';
+import type { DatasetInfo } from '../loaders/dataset-info.js';
+import type { CompiledFilter } from '../utils/filter-tree.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
 // ─── Cible et requête d'un export ────────────────────────────────────────────
 
@@ -107,6 +118,108 @@ function asHttpError(error: unknown): unknown {
 }
 
 /**
+ * Builds the statements of an aggregated export.
+ *
+ * The rows are those of getAggregates: the request is resolved by
+ * resolveAggregateParams (same checks, defaults and aliases, row_count
+ * included) and computed by buildAggregateSelect, the single producer of
+ * aggregate SQL, the filter applying before the grouping. The export then
+ * reads that SELECT as a subquery: its total order is the resolved sort — the
+ * client sort on output columns, then every group column, unique per row —
+ * the key of the `after` cursor, whose predicate applies to the output
+ * columns. Without group column the export is one row, with no order.
+ *
+ * @param params - Validated export parameters, aggregates set.
+ * @param table - Qualified fact table.
+ * @param byName - Metadata of the schema, keyed by column name.
+ * @param dataset - Description of the dataset, embedded in the file.
+ * @param where - Compiled filter tree, or null.
+ * @returns The SELECT, the count and boundary probes, and the total order.
+ * @throws {GraphQLError} BAD_USER_INPUT on an invalid groupBy, aggregate or sort.
+ */
+function buildAggregatedExportQuery(
+  params: ExportParams,
+  table: string,
+  byName: Map<string, FieldMetadata>,
+  dataset: DatasetInfo,
+  where: CompiledFilter | null,
+): ExportQuery {
+  // Résolution des parmaètres d'agrégation
+  const resolved = resolveAggregateParams(
+    {
+      groupBy: params.groupBy,
+      aggregates: params.aggregates ?? [],
+      sort: params.sort?.map(({ field, order }) => ({ by: field, order })),
+      includeRowCount: true,
+    },
+    byName,
+  );
+  const inner = buildAggregateSelect({ ...resolved, where }, table);
+
+  // Ordre total : tri client puis toutes les colonnes de groupe (uniques par ligne)
+  const order: KeyColumn[] = resolved.sort.map(({ by, order: direction }) => ({
+    field: by,
+    order: direction,
+  }));
+  let after: SqlFragment | null = null;
+  if (params.after) {
+    const cursor = decodeCursor(params.after);
+    assertCursorOrder(cursor, order);
+    after = buildAfterPredicate(order, cursor.values);
+  }
+  const from = `FROM (${inner.sql})${after ? ` WHERE (${after.sql})` : ''}`;
+  const values = [...inner.values, ...(after?.params ?? [])];
+  const orderBy = order.length > 0 ? buildOrderBy(order) : '';
+
+  // Description : colonnes source (groupes, libellés, mesures) et calcul de chaque colonne
+  const sources = [
+    ...new Set([
+      ...resolved.groups.flatMap((group) =>
+        group.labelField ? [group.field, group.labelField] : [group.field],
+      ),
+      ...resolved.aggregates.map((aggregate) => aggregate.measure),
+    ]),
+  ];
+  const description: ExportDescription = {
+    columns: sources.map((name) => byName.get(name)!),
+    dataset,
+    aggregation: {
+      groupBy: resolved.groups.map((group) => ({
+        name: group.field,
+        grain: group.grain,
+        labelColumn: group.labelField ? labelColumnOf(group.field) : null,
+        labelField: group.labelField,
+      })),
+      aggregates: resolved.aggregates.map(({ alias, measure, aggregation }) => {
+        const measureMeta = byName.get(measure)!;
+        return {
+          alias,
+          measure,
+          aggregation,
+          unit: aggregateUnit(aggregation, measureMeta),
+          displayFormat: aggregateDisplayFormat(aggregation, measureMeta),
+        };
+      }),
+      rowCountColumn: ROW_COUNT_COLUMN,
+    },
+  };
+
+  return {
+    sql: `SELECT * ${from} ${orderBy} LIMIT ${params.limit}`,
+    params: values,
+    order,
+    description,
+    count: { sql: `SELECT count(*) AS total ${from}`, params: values },
+    boundary: (offset) => ({
+      sql:
+        `SELECT ${order.map((k) => `CAST(${quoteIdent(k.field)} AS VARCHAR)`).join(', ')} ` +
+        `FROM (SELECT * ${from} ${orderBy} LIMIT 1 OFFSET ${offset})`,
+      params: values,
+    }),
+  };
+}
+
+/**
  * Builds the statements of an export.
  *
  * Reuses the GraphQL fact path end to end: the filter tree is compiled by
@@ -118,7 +231,8 @@ function asHttpError(error: unknown): unknown {
  * the key of the `after` cursor, whose predicate joins the filters.
  * Projected and sorted columns must exist in the schema metadata
  * (assertColumns), so a typo is a 400 rather than a DuckDB binder error; any
- * column name the database accepts is exported, quoted.
+ * column name the database accepts is exported, quoted. With `aggregates`, the
+ * export sends the rows of getAggregates instead (buildAggregatedExportQuery).
  *
  * @param params - Validated export parameters.
  * @param target - Resolved catalog and schema.
@@ -144,6 +258,18 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
     const where = await compileFilterTree(params.filters, (names) =>
       loaders.metadata.loadMany(names),
     );
+    const builder = new FactLoader(catalog, schema);
+
+    // Export agrégé : lignes de getAggregates
+    if (params.aggregates) {
+      return buildAggregatedExportQuery(
+        params,
+        builder.qualifyTable('fact_table'),
+        byName,
+        dataset,
+        where,
+      );
+    }
     const sort = await resolveEffectiveSort(params.sort, loaders, catalog, schema);
 
     // Ordre total : clé du curseur de reprise, identique d'une page à l'autre
@@ -165,7 +291,6 @@ async function buildExportQuery(params: ExportParams, target: ExportTarget): Pro
     const whereParams = conditions.flatMap((c) => c.params);
 
     // Constructeurs de clauses partagés avec les requêtes GraphQL sur les faits
-    const builder = new FactLoader(catalog, schema);
     const from = `FROM ${builder.qualifyTable('fact_table')} ${whereClause}`.trim();
     const orderBy = buildOrderBy(order);
     const keys = builder.buildSelectClause(order.map((k) => k.field));

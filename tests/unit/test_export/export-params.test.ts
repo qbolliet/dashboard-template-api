@@ -49,6 +49,8 @@ describe('parseExportParams', () => {
       fields: null,
       filters: null,
       sort: null,
+      groupBy: null,
+      aggregates: null,
       format: 'arrow',
       limit: 1000,
       explicitLimit: false,
@@ -82,6 +84,8 @@ describe('parseExportParams', () => {
         { field: 'population', order: 'DESC' },
         { field: 'region', order: 'ASC' },
       ],
+      groupBy: null,
+      aggregates: null,
       format: 'csv',
       limit: 10,
       explicitLimit: true,
@@ -210,11 +214,55 @@ describe('parseExportParams', () => {
     [{ limit: '1e3' }, 'positive integer'],
     [{ format: ['csv', 'arrow'] }, 'given once'],
     [{ where: 'x' }, 'Unknown parameter(s): where'],
+    [{ groupBy: 'nc8' }, '"groupBy" requires "aggregates"'],
+    [{ aggregates: 'value', fields: 'nc8' }, '"fields" does not apply'],
+    [{ aggregates: 'value:total' }, 'Unknown aggregation "total"'],
+    [{ aggregates: 'value:sum:a:b' }, 'Invalid aggregates item'],
+    [{ aggregates: ':sum' }, 'Invalid aggregates item'],
+    [{ aggregates: 'value', groupBy: 'date:decade' }, 'Unknown grain "decade"'],
+    [{ aggregates: 'value', groupBy: 'date:month:x' }, 'Invalid groupBy item'],
   ])('400 for %j', (query, message) => {
     const error = failure(query);
     expect(error.status).toBe(400);
     expect(error.error).toBe('Invalid export parameter');
     expect(error.detail).toContain(message);
+  });
+});
+
+describe('parseExportParams — export agrégé', () => {
+  test('groupBy « col[:grain] » et aggregates « measure[:aggregation[:alias]] »', () => {
+    const params = parseExportParams(
+      {
+        groupBy: 'nc8, date:Month',
+        aggregates: 'value:sum,value:avg:moyenne,weight_kg,value::total',
+        sort: 'moyenne:desc',
+      },
+      settings,
+    );
+
+    expect(params.groupBy).toEqual([{ field: 'nc8' }, { field: 'date', grain: 'MONTH' }]);
+    expect(params.aggregates).toEqual([
+      { measure: 'value', aggregation: 'SUM' },
+      { measure: 'value', aggregation: 'AVG', alias: 'moyenne' },
+      { measure: 'weight_kg' },
+      { measure: 'value', alias: 'total' },
+    ]);
+    expect(params.sort).toEqual([{ field: 'moyenne', order: 'DESC' }]);
+  });
+
+  test('aggregates sans groupBy : agrégat global ; le corps POST prend des tableaux', () => {
+    expect(parseExportParams({ aggregates: 'value' }, settings).groupBy).toEqual([]);
+
+    const body = parseExportParams(
+      { groupBy: ['nc8'], aggregates: ['value:max', 'value:count:n'] },
+      settings,
+      'body',
+    );
+    expect(body.groupBy).toEqual([{ field: 'nc8' }]);
+    expect(body.aggregates).toEqual([
+      { measure: 'value', aggregation: 'MAX' },
+      { measure: 'value', aggregation: 'COUNT', alias: 'n' },
+    ]);
   });
 });
 

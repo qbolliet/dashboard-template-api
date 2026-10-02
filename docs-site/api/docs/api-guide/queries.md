@@ -696,11 +696,13 @@ getSelectOptionsTree(
 
 ## Cross-catalog queries
 
-Join fields are matched directly on their stored values — the fact table carries the labels — cast to VARCHAR so two catalogs that type a column differently still align. Catalog A and B may be the same catalog with different schemas. `schemaA`/`schemaB` default to each catalog's configured schema.
+Each side is **aggregated by its keys before the join**, with the same SQL as `getAggregates`: a key that occurs on several fact rows yields one value per side, so a comparison returns one row per key common to both datasets (a key present on one side only is left out). Keys are matched on their stored values — the fact table carries the labels — cast to VARCHAR so two catalogs that type a column differently still align. Catalog A and B may be the same catalog with different schemas. `schemaA`/`schemaB` default to each catalog's configured schema. Every column must exist on both sides; the error names the side at fault.
+
+A comparison computes deltas, so every compared aggregate must be numeric: SUM, AVG, MEDIAN or COUNT, or MIN/MAX/MODE of a numeric measure (`BAD_USER_INPUT` otherwise).
 
 ### `compareFacts`
 
-Joins facts from two catalogs on shared fields and computes deltas.
+Compares one measure of two datasets, one row per join key.
 
 ```graphql
 compareFacts(
@@ -709,15 +711,21 @@ compareFacts(
   schemaA: String         # schema within catalogA (default: catalog's schema)
   schemaB: String         # schema within catalogB (default: catalog's schema)
   joinFields: [String!]!  # fields present in both datasets
+  measure: String         # default: value (BAD_USER_INPUT when there is no such column)
+  aggregation: Aggregation # default: defaultAggregation of the measure, then SUM if numeric
   limit: Int! = 100
-  offset: Int! = 0
-  sort: [SortInput!]
+  offset: Int! = 0        # at most API.PAGINATION.MAX_OFFSET
+  sort: [SortInput!]      # key, keyLabel, valueA, valueB, delta, deltaPercent
 ): PaginatedComparedFacts!
 ```
 
+- Each side computes `aggregation(measure)` grouped by `joinFields`; the two sides must agree on the aggregation: when their metadata declare different `defaultAggregation`s, pass `aggregation` explicitly.
+- `ComparedFact` carries `key` (the join values, `::`-separated for several fields), `keyLabel` (single join field with a label column), `valueA`, `valueB`, `delta` (B − A) and `deltaPercent` ((B − A) / A × 100, null when A is 0). The result echoes the compared `measure` and `aggregation`.
+- Rows are sorted by `sort`, then by every join field: the order is total, so pages never overlap nor skip a key. A NULL key matches nothing.
+
 ### `compareAggregatedFacts`
 
-Same as `compareFacts` but for aggregated values with a shared `groupBy`.
+Compares several aggregates of two datasets over common group columns, in the shape of [`getAggregates`](#getaggregates): same `GroupByInput` (time grains included), `AggregateInput` (default aggregations and aliases) and `AggregateSortInput`.
 
 ```graphql
 compareAggregatedFacts(
@@ -725,14 +733,24 @@ compareAggregatedFacts(
   catalogB: String!
   schemaA: String
   schemaB: String
-  groupBy: String!
-  aggregation: Aggregation! = SUM
+  groupBy: [GroupByInput!] = []     # empty: one global row
+  aggregates: [AggregateInput!]!
+  sort: [AggregateSortInput!]       # any column of data
   limit: Int! = 100
   offset: Int! = 0
-): PaginatedComparedFacts!
+): AggregateComparison!
 ```
 
-`ComparedFact` carries `valueA`, `valueB`, `delta` (absolute), and `deltaPercent` (relative).
+Each row of `data` holds the group columns (values of side A), their label columns (`<field>__label`, COALESCE of both sides), then four columns per aggregate:
+
+| Column              | Value                                           |
+| ------------------- | ----------------------------------------------- |
+| `<alias>_a`         | aggregate in dataset A                          |
+| `<alias>_b`         | aggregate in dataset B                          |
+| `<alias>_delta`     | `<alias>_b − <alias>_a`                         |
+| `<alias>_delta_pct` | `(b − a) / a × 100`, null when `a` is 0 or null |
+
+`aggregates` describes each aggregate as in `getAggregates` (`alias` is the prefix of its four columns; `sqlType` is the type of `<alias>_a`; `extent` spans `<alias>_a` and `<alias>_b`, for a shared axis). Groups are joined NULL-safe (a NULL group of A matches the NULL group of B) and sorted by `sort`, then by every group column. Both sides must resolve each aggregate to the same aggregation and each grained column to the same truncation, otherwise `BAD_USER_INPUT`.
 
 ### `crossDatabaseSelectOptions`
 

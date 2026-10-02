@@ -6,8 +6,10 @@ import { once } from 'events';
 import { pipeline } from 'stream/promises';
 import { RecordBatchStreamWriter } from 'apache-arrow';
 import type { Response } from 'express';
+import { DuckDBTypeId } from '@duckdb/node-api';
 import type { DuckDBMaterializedResult, DuckDBResult } from '@duckdb/node-api';
 import { bindParam, escapeSqlString } from '../db/pool.js';
+import { quoteIdent } from '../utils/identifiers.js';
 import { runInterruptible } from '../db/interrupt.js';
 import type { ConnectionWrapper } from '../db/pool.js';
 import { buildArrowLayout, chunkToRecordBatch, emptyRecordBatch } from './arrow-writer.js';
@@ -200,7 +202,11 @@ async function runCopyExport(
     const target = escapeSqlString(file.split(path.sep).join('/'));
     const copyOptions =
       format === 'csv' ? CSV_COPY_OPTIONS : parquetCopyOptions(ctx.query, options.compression);
-    const copySql = `COPY (${ctx.query.sql}) TO '${target}' (${copyOptions})`;
+    const source =
+      format === 'parquet'
+        ? await interruptible(ctx, () => parquetExactSql(ctx.connection, ctx.query.sql))
+        : ctx.query.sql;
+    const copySql = `COPY (${source}) TO '${target}' (${copyOptions})`;
 
     const result: DuckDBMaterializedResult = await interruptible(ctx, async () => {
       const prepared = await prepareBound(ctx.connection, copySql, ctx.query.params);
@@ -221,6 +227,35 @@ async function runCopyExport(
     // Nouvelles tentatives : sous Windows le descripteur peut se fermer avec retard
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
+}
+
+// Types 128 bits : écrits en DOUBLE par le writer Parquet de DuckDB (perte au-delà de 2^53)
+const WIDE_INTEGER_TYPES = new Set([DuckDBTypeId.HUGEINT, DuckDBTypeId.UHUGEINT]);
+
+/**
+ * Keeps the 128-bit integer columns of a parquet export exact.
+ *
+ * DuckDB's Parquet writer degrades HUGEINT / UHUGEINT (e.g. the SUM of a
+ * BIGINT) to DOUBLE; they are cast to DECIMAL(38, 0) instead, the type the
+ * Arrow export uses too, so pyarrow reads them back as decimal128(38, 0). The
+ * result types are read from the prepared statement, without running it. A
+ * value beyond 38 digits makes the COPY fail, as it fails the Arrow export.
+ *
+ * @param connection - Pool connection.
+ * @param sql - SELECT of the export.
+ * @returns The SELECT, wrapped with the casts when a column needs one.
+ */
+async function parquetExactSql(connection: ConnectionWrapper, sql: string): Promise<string> {
+  const prepared = await connection.conn.prepare(sql);
+  const wide: string[] = [];
+  for (let i = 0; i < prepared.columnCount; i++) {
+    if (WIDE_INTEGER_TYPES.has(prepared.columnTypeId(i))) wide.push(prepared.columnName(i));
+  }
+  if (wide.length === 0) return sql;
+  const casts = wide.map(
+    (name) => `CAST(${quoteIdent(name)} AS DECIMAL(38, 0)) AS ${quoteIdent(name)}`,
+  );
+  return `SELECT * REPLACE (${casts.join(', ')}) FROM (${sql})`;
 }
 
 /**

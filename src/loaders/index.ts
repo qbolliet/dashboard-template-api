@@ -35,6 +35,7 @@ import type {
   CompareAggregatedFactsParams,
   CrossDatabaseSelectOptionsParams,
   ComparisonResult,
+  AggregateComparisonPage,
   CrossDatabaseSelectOption,
 } from './cross-database.js';
 import type DataLoader from 'dataloader';
@@ -75,7 +76,7 @@ interface LoadersCollection {
   catalogMetadata: Loader<CatalogSchemaKey, FieldMetadata[]>;
   datasetInfo: Loader<CatalogSchemaKey, DatasetInfo>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
-  compareAggregatedFacts: Loader<CompareAggregatedFactsParams, ComparisonResult>;
+  compareAggregatedFacts: Loader<CompareAggregatedFactsParams, AggregateComparisonPage>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
   clearAll: () => void;
   prime: (initialData?: PrimeData) => Promise<void>;

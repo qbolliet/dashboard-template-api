@@ -463,18 +463,70 @@ A departement without communal level (`commune` NULL) is a leaf. Add
 
 ## Cross-database comparison
 
+Each side is aggregated by the group columns before the join: one row per
+country present in both catalogs, with the sum and the mean of `value` on each
+side and their deltas.
+
 ```graphql
 query {
   compareAggregatedFacts(
     catalogA: "macroeconomics"
     catalogB: "public_finance"
-    groupBy: "country"
-    aggregation: SUM
+    groupBy: [{ field: "country" }]
+    aggregates: [
+      { measure: "value", aggregation: SUM }
+      { measure: "value", aggregation: AVG, alias: "mean" }
+    ]
+    sort: [{ by: "value_sum_delta_pct", order: DESC }]
     limit: 30
   ) {
     total
+    columns
+    aggregates {
+      alias
+      aggregation
+      unit
+      displayFormat
+      extent
+    }
+    data
+  }
+}
+```
+
+```json
+{
+  "country": "France",
+  "value_sum_a": 1520.4,
+  "value_sum_b": 1611.2,
+  "value_sum_delta": 90.8,
+  "value_sum_delta_pct": 5.97,
+  "mean_a": 12.67,
+  "mean_b": 13.43,
+  "mean_delta": 0.76,
+  "mean_delta_pct": 5.97
+}
+```
+
+For a single measure, `compareFacts` returns typed rows (`key`, `valueA`,
+`valueB`, `delta`, `deltaPercent`); `measure` defaults to `value`:
+
+```graphql
+query {
+  compareFacts(
+    catalogA: "default"
+    schemaA: "trade"
+    catalogB: "macroeconomics"
+    schemaB: "trade"
+    joinFields: ["nc8"]
+    measure: "weight_kg"
+  ) {
+    measure
+    aggregation
+    total
     data {
       key
+      keyLabel
       valueA
       valueB
       delta

@@ -8,6 +8,7 @@ import { resolveLabelField, typeFamilyOf } from './metadata-mapping.js';
 import {
   AGGREGATIONS,
   AGGREGATION_SQL,
+  aggregatedValueFamily,
   allowedAggregations,
   measureFamily,
 } from './aggregations.js';
@@ -289,6 +290,27 @@ function aggregateUnit(aggregation: Aggregation, measure: FieldMetadata): string
   return aggregation === 'COUNT' ? null : measure.unit;
 }
 
+/**
+ * Checks that an aggregate yields a number, as a comparison delta requires.
+ *
+ * SUM, AVG, MEDIAN and COUNT always do; MIN, MAX and MODE only on a numeric
+ * measure (the MIN of a date or the MODE of a text has no delta).
+ *
+ * @param aggregation - Effective aggregation.
+ * @param measure - Metadata of the measure.
+ * @throws {GraphQLError} BAD_USER_INPUT when the aggregated value is not numeric.
+ */
+// Agrégat numérique exigé par le calcul d'un écart
+function assertNumericAggregate(aggregation: Aggregation, measure: FieldMetadata): void {
+  if (aggregatedValueFamily(aggregation, measure.sqlType) !== 'numeric') {
+    throw badInput(
+      `${aggregation} of ${previewValue(measure.name)} (${measure.sqlType || 'untyped'}) is not ` +
+        'numeric: a comparison computes deltas, so it needs SUM, AVG, MEDIAN or COUNT, or a ' +
+        'numeric measure.',
+    );
+  }
+}
+
 // ─── Résolution des paramètres ────────────────────────────────────────────────
 
 /**
@@ -507,27 +529,29 @@ function buildGroupCountQuery(params: AggregateCountParams, table: string): Aggr
 }
 
 /**
- * Builds the SQL of one page of an aggregate query.
+ * Builds the unsorted, unpaginated SELECT of an aggregate query.
  *
  * The single producer of aggregate SQL: one query computes every aggregate of
- * every group. The inner query selects the group columns (truncated when
- * grained), their labels (ANY_VALUE — licit because the writer guarantees the
- * functional dependency code → label), the aggregates under their aliases and
- * COUNT(*) as row_count; the outer query sorts on these output columns only —
- * no ambiguity when a grained column keeps the name of its source — then
- * paginates. Without group columns there is no GROUP BY: one row, even when
- * no row matches the filter. Identifiers are quoted, the aggregation and grain
- * keywords come from fixed tables, values are bound.
+ * every group. It selects the group columns (truncated when grained), their
+ * labels (ANY_VALUE — licit because the writer guarantees the functional
+ * dependency code → label), the aggregates under their aliases and COUNT(*) as
+ * row_count. Without group columns there is no GROUP BY: one row, even when no
+ * row matches the filter. Identifiers are quoted, the aggregation and grain
+ * keywords come from fixed tables, values are bound. getAggregates paginates
+ * it (buildAggregateQuery); the comparisons and the export use it as a
+ * subquery.
  *
- * @param params - Resolved parameters, compiled filter and page.
+ * @param params - Resolved groups, aggregates and row count flag, compiled
+ *   filter; `aggregates` may be empty (group columns only) when there are groups.
  * @param table - Qualified fact table.
- * @returns The page query and its bound values.
+ * @returns The SELECT and its bound values.
  */
-// Constructeur unique du SQL d'agrégats
-function buildAggregateQuery(params: AggregatePageParams, table: string): AggregateQuery {
-  const { groups, aggregates, sort, includeRowCount, where } = params;
-  const limit = paginationBound('limit', params.limit);
-  const offset = paginationBound('offset', params.offset);
+// Constructeur unique du SELECT d'agrégats, sans tri ni pagination
+function buildAggregateSelect(
+  params: Omit<ResolvedAggregateParams, 'sort'> & { where?: CompiledFilter | null },
+  table: string,
+): AggregateQuery {
+  const { groups, aggregates, includeRowCount, where } = params;
 
   // Colonnes de sortie : groupes, libellés, agrégats, comptage
   const select = [
@@ -546,19 +570,49 @@ function buildAggregateQuery(params: AggregatePageParams, table: string): Aggreg
   ];
   const groupByClause =
     groups.length > 0 ? `GROUP BY ${groups.map(groupExpression).join(', ')}` : '';
-  const orderByClause =
-    sort.length > 0
-      ? `ORDER BY ${sort.map(({ by, order }) => `${quoteIdent(by)} ${order === 'DESC' ? 'DESC' : 'ASC'}`).join(', ')}`
-      : '';
 
-  const inner = sqlClauses(
-    `SELECT ${select.join(', ')} FROM ${table}`,
-    buildWhere(where),
-    groupByClause,
-  );
   return {
-    sql: sqlClauses(`SELECT * FROM (${inner})`, orderByClause, `LIMIT ${limit} OFFSET ${offset}`),
+    sql: sqlClauses(`SELECT ${select.join(', ')} FROM ${table}`, buildWhere(where), groupByClause),
     values: where?.params ?? [],
+  };
+}
+
+/**
+ * Renders an ORDER BY over output columns.
+ *
+ * @param sort - Sort criteria on output columns (quoted here).
+ * @returns The ORDER BY clause, or an empty string without criteria.
+ */
+// Clause ORDER BY sur des colonnes de sortie
+function buildOutputOrderBy(sort: readonly ResolvedSort[]): string {
+  return sort.length > 0
+    ? `ORDER BY ${sort.map(({ by, order }) => `${quoteIdent(by)} ${order === 'DESC' ? 'DESC' : 'ASC'}`).join(', ')}`
+    : '';
+}
+
+/**
+ * Builds the SQL of one page of an aggregate query.
+ *
+ * The SELECT of buildAggregateSelect, sorted in an outer query on its output
+ * columns only — no ambiguity when a grained column keeps the name of its
+ * source — then paginated.
+ *
+ * @param params - Resolved parameters, compiled filter and page.
+ * @param table - Qualified fact table.
+ * @returns The page query and its bound values.
+ */
+// Page d'agrégats : SELECT d'agrégats trié puis paginé
+function buildAggregateQuery(params: AggregatePageParams, table: string): AggregateQuery {
+  const limit = paginationBound('limit', params.limit);
+  const offset = paginationBound('offset', params.offset);
+  const inner = buildAggregateSelect(params, table);
+  return {
+    sql: sqlClauses(
+      `SELECT * FROM (${inner.sql})`,
+      buildOutputOrderBy(params.sort),
+      `LIMIT ${limit} OFFSET ${offset}`,
+    ),
+    values: inner.values,
   };
 }
 
@@ -613,14 +667,19 @@ function meltRows(
 export {
   ROW_COUNT_COLUMN,
   TIME_GRAIN_PART,
+  badInput,
   effectiveAggregation,
+  assertNumericAggregate,
   defaultAlias,
   labelColumnOf,
   aggregateDisplayFormat,
   aggregateUnit,
   resolveAggregateParams,
+  buildAggregateSelect,
+  buildOutputOrderBy,
   buildAggregateQuery,
   buildGroupCountQuery,
+  paginationBound,
   longColumns,
   meltRows,
 };

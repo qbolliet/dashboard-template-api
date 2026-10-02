@@ -53,7 +53,7 @@ plain arguments — the API never reads routing information from request headers
 When `catalog` is omitted, the `DEFAULT_CATALOG` is used (configurable in `config/database.yaml`); when `schema`
 is omitted, the catalog's own default schema is used.
 
-Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two explicit catalog IDs (and optional per-side schemas) and execute against both in a single request. The fact table stores labels directly, so they join on the columns themselves (cast to `VARCHAR` to absorb a type difference between catalogs): a match is on the label.
+Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two explicit catalog IDs (and optional per-side schemas) and execute against both in a single request. Each side is first aggregated by its keys (one row per key, whatever the number of fact rows), then the two sides are joined. The fact table stores labels directly, so they join on the columns themselves (cast to `VARCHAR` to absorb a type difference between catalogs): a match is on the label.
 
 ## HTTP cache headers
 

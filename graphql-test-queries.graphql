@@ -1083,8 +1083,8 @@ query TestCrossDatabaseSelectOptionsCountry {
 }
 
 # Test 17.2: Comparaison de faits ligne à ligne entre deux catalogues
-# Joint les tables de faits sur le champ country
-# → Pour chaque ligne de default, trouve la ligne correspondante dans macroeconomics
+# Agrège value (defaultAggregation) par country de chaque côté, puis joint les deux côtés
+# → Une ligne par pays commun aux deux catalogues
 query TestCompareFacts {
   compareFacts(
     catalogA: "default"
@@ -1157,27 +1157,21 @@ query TestCompareFactsMultiJoin {
 }
 
 # Test 17.3: Comparaison de faits agrégés entre deux catalogues
-# Agrège (SUM) les valeurs par country dans chaque catalogue puis compare
+# Agrège (SUM) les valeurs par country dans chaque catalogue puis compare : une ligne par
+# pays commun, colonnes value_sum_a, value_sum_b, value_sum_delta, value_sum_delta_pct
 query TestCompareAggregatedFacts {
   compareAggregatedFacts(
     catalogA: "default"
     catalogB: "macroeconomics"
-    groupBy: "country"
-    aggregation: SUM
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
     limit: 10
     offset: 0
   ) {
-    data {
-      key
-      valueA
-      valueB
-      delta
-      deltaPercent
-    }
+    columns
+    data
     total
     hasNextPage
-    currentPage
-    totalPages
   }
 }
 
@@ -1187,22 +1181,15 @@ query TestCompareAggregatedFactsByIndicator {
   compareAggregatedFacts(
     catalogA: "default"
     catalogB: "macroeconomics"
-    groupBy: "indicator"
-    aggregation: AVG
+    groupBy: [{ field: "indicator" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     limit: 10
     offset: 0
   ) {
-    data {
-      key
-      valueA
-      valueB
-      delta
-      deltaPercent
-    }
+    columns
+    data
     total
     hasNextPage
-    currentPage
-    totalPages
   }
 }
 
@@ -1211,22 +1198,15 @@ query TestCompareAggregatedFactsOtherPair {
   compareAggregatedFacts(
     catalogA: "macroeconomics"
     catalogB: "public_finance"
-    groupBy: "country"
-    aggregation: AVG
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: AVG }]
     limit: 10
     offset: 0
   ) {
-    data {
-      key
-      valueA
-      valueB
-      delta
-      deltaPercent
-    }
+    columns
+    data
     total
     hasNextPage
-    currentPage
-    totalPages
   }
 }
 
@@ -1466,7 +1446,7 @@ query TestGetCatalogSchemaNamedSchema {
 
 # Test 20.4: Comparaison cross-catalogue (default vs public_finance) sur 'country'
 # Requiert ALLOW_CROSS_CATALOG_QUERIES=true. Schémas par défaut ('main') de chaque côté.
-# Les champs catégoriels sont résolus en labels via dim_* avant la jointure.
+# Chaque côté est agrégé par les champs de jointure avant la jointure (une ligne par clé).
 # Pour comparer DEUX SCHÉMAS d'un MÊME catalogue (ex: default.main vs default.predictions),
 # ajouter le schéma cible à DEFAULT_SCHEMAS dans la config (ex: ["main","predictions"])
 # avant de fixer catalogA === catalogB avec schemaA / schemaB différents.
@@ -1495,18 +1475,13 @@ query TestCompareAggregatedCrossCatalog {
   compareAggregatedFacts(
     catalogA: "default"
     catalogB: "public_finance"
-    groupBy: "country"
-    aggregation: SUM
+    groupBy: [{ field: "country" }]
+    aggregates: [{ measure: "value", aggregation: SUM }]
     limit: 10
     offset: 0
   ) {
-    data {
-      key
-      valueA
-      valueB
-      delta
-      deltaPercent
-    }
+    columns
+    data
     total
   }
 }

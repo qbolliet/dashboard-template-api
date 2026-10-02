@@ -1,13 +1,15 @@
 /**
  * Unit tests for CrossDatabaseLoader (src/loaders/cross-database.ts).
  *
- * Verifies fact comparison across two datasets (JOIN generation, numeric
- * coercion, null handling), aggregated comparison with CTEs, and cross-catalog
+ * Verifies the comparison of a measure across two datasets (each side
+ * aggregated by the join fields before the join, numeric coercion, null
+ * handling, total order), the comparison of several aggregates (SQL of
+ * getAggregates per side, four output columns per aggregate), and cross-catalog
  * select options.
  *
  * Note: the fact table carries the labels, so no table is consulted before the
  * comparison itself — each loader issues exactly its main query and its count
- * query, which the mocked `connection.all` results follow in that order.
+ * query, which the mocked results follow in that order.
  *
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
@@ -16,32 +18,51 @@ import { jest } from '@jest/globals';
 import {
   makeLoaderConfig,
   makePool,
-  makeConnection,
+  makeExtendedConnection,
   makeDatabaseManager,
 } from '../../helpers/mocks.js';
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
-/** Paramètres pour la comparaison de faits bruts entre deux datasets. */
+/** Paramètres pour la comparaison d'une mesure entre deux datasets. */
 interface CompareFactsParams {
   catalogA: string;
   catalogB: string;
   schemaA?: string | null;
   schemaB?: string | null;
   joinFields: string[];
+  measure: string;
+  aggregation: string;
+  labelFieldA?: string | null;
+  labelFieldB?: string | null;
   limit: number;
   offset: number;
   sort: Array<{ field: string; order: string }>;
 }
 
-/** Paramètres pour la comparaison de faits agrégés entre deux datasets. */
+/** Colonne de groupe résolue. */
+interface Group {
+  field: string;
+  grain: string | null;
+  truncation: string | null;
+  labelField: string | null;
+}
+
+/** Côté d'une comparaison d'agrégats. */
+interface Side {
+  groups: Group[];
+  aggregates: Array<{ measure: string; aggregation: string; alias: string }>;
+}
+
+/** Paramètres pour la comparaison de plusieurs agrégats entre deux datasets. */
 interface CompareAggregatedParams {
   catalogA: string;
   catalogB: string;
   schemaA?: string | null;
   schemaB?: string | null;
-  groupBy: string;
-  aggregation: string;
+  sideA: Side;
+  sideB: Side;
+  sort: Array<{ by: string; order: string }>;
   limit: number;
   offset: number;
 }
@@ -88,7 +109,7 @@ interface CrossDatabaseModule {
 
 // Connexion et pool réutilisés dans tous les tests du fichier
 const mockPool = makePool();
-const mockConnection = makeConnection();
+const mockConnection = makeExtendedConnection();
 const mockDatabaseManager = makeDatabaseManager(mockPool);
 const mockConfig = makeLoaderConfig();
 
@@ -130,6 +151,78 @@ beforeAll(async () => {
     (await import('../../../src/loaders/cross-database.js')) as unknown as CrossDatabaseModule);
 });
 
+// ─── Fabriques de paramètres ──────────────────────────────────────────────────
+
+/**
+ * Parameters of compareFacts, value summed by default.
+ *
+ * @param extra - Fields overriding the defaults.
+ * @returns The parameters.
+ */
+const factsParams = (extra: Partial<CompareFactsParams> = {}): CompareFactsParams => ({
+  catalogA: 'db_a',
+  catalogB: 'db_b',
+  joinFields: ['country'],
+  measure: 'value',
+  aggregation: 'SUM',
+  limit: 10,
+  offset: 0,
+  sort: [],
+  ...extra,
+});
+
+/**
+ * One resolved side grouping by the given fields and summing value.
+ *
+ * @param fields - Group columns.
+ * @param labelField - Label column of the first group column, if any.
+ * @returns The side.
+ */
+const side = (fields: string[], labelField: string | null = null): Side => ({
+  groups: fields.map((field, i) => ({
+    field,
+    grain: null,
+    truncation: null,
+    labelField: i === 0 ? labelField : null,
+  })),
+  aggregates: [{ measure: 'value', aggregation: 'SUM', alias: 'value_sum' }],
+});
+
+/**
+ * Parameters of compareAggregatedFacts grouping by country.
+ *
+ * @param extra - Fields overriding the defaults.
+ * @returns The parameters.
+ */
+const aggregatedParams = (
+  extra: Partial<CompareAggregatedParams> = {},
+): CompareAggregatedParams => ({
+  catalogA: 'db_a',
+  catalogB: 'db_b',
+  sideA: side(['country']),
+  sideB: side(['country']),
+  sort: [{ by: 'country', order: 'ASC' }],
+  limit: 10,
+  offset: 0,
+  ...extra,
+});
+
+/** Page returned by the mocked getWithMetadata. */
+const PAGE = {
+  columns: ['country', 'value_sum_a', 'value_sum_b', 'value_sum_delta', 'value_sum_delta_pct'],
+  columnTypes: ['VARCHAR', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE'],
+  data: [
+    {
+      country: 'France',
+      value_sum_a: 100,
+      value_sum_b: 120,
+      value_sum_delta: 20,
+      value_sum_delta_pct: 20,
+    },
+  ],
+  metadata: { extents: { value_sum_a: [100, 100] } },
+};
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('CrossDatabaseLoader', () => {
@@ -140,7 +233,7 @@ describe('CrossDatabaseLoader', () => {
     mockPool.acquire.mockResolvedValue(mockConnection);
   });
 
-  // ── Comparaison de faits bruts ────────────────────────────────────────────
+  // ── Comparaison d'une mesure ──────────────────────────────────────────────
 
   describe('createCompareFacts', () => {
     test('crée un DataLoader valide', () => {
@@ -149,21 +242,13 @@ describe('CrossDatabaseLoader', () => {
       expect(typeof loader.load).toBe('function');
     });
 
-    test('retourne les données de comparaison entre deux datasets', async () => {
+    test('retourne les données de comparaison et la pagination', async () => {
       const rows: CompareRow[] = [
         { key: '1', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
       ];
       mockConnection.all.mockResolvedValueOnce(rows).mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareFacts();
-      const result = (await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2024',
-        joinFields: ['id'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams)) as Record<string, unknown>;
+      const result = (await createCompareFacts().load(factsParams())) as Record<string, unknown>;
 
       expect(result).toHaveProperty('data');
       expect(result).toHaveProperty('total', 1);
@@ -172,115 +257,100 @@ describe('CrossDatabaseLoader', () => {
       expect(result).toHaveProperty('totalPages', 1);
     });
 
-    test('inclut les deux catalogues dans la requête JOIN', async () => {
+    test('agrège chaque côté par les champs de jointure AVANT la jointure', async () => {
       mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
-      const loader = createCompareFacts();
-      await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ['country'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
+      await createCompareFacts().load(factsParams({ measure: 'weight_kg', aggregation: 'AVG' }));
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"db_a"');
-      expect(query).toContain('"db_b"');
-      expect(query).toContain('JOIN');
+      // Côtés : SELECT d'agrégats de getAggregates, une ligne par clé
+      expect(query).toContain(
+        'a AS (SELECT "country" AS "country", AVG("weight_kg") AS "_compared_value" ' +
+          'FROM "db_a"."main"."fact_table" GROUP BY "country")',
+      );
+      expect(query).toContain('FROM "db_b"."main"."fact_table" GROUP BY "country"');
+      // Jointure des côtés agrégés, clés alignées en VARCHAR
+      expect(query).toContain(
+        'FROM a JOIN b ON CAST(a."country" AS VARCHAR) = CAST(b."country" AS VARCHAR)',
+      );
+      expect(query).not.toContain('"value"');
     });
 
-    test('gère plusieurs joinFields (clé concaténée)', async () => {
+    test('le comptage joint des côtés réduits aux clés', async () => {
       mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
-      const loader = createCompareFacts();
-      await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ['country', 'year'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
+      await createCompareFacts().load(factsParams());
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('CONCAT');
+      const count = mockConnection.all.mock.calls[1][0] as string;
+      expect(count).toContain('SELECT COUNT(*) AS total');
+      expect(count).toContain('GROUP BY "country"');
+      expect(count).not.toContain('SUM(');
     });
 
-    test('convertit les valeurs numériques correctement', async () => {
+    test('plusieurs joinFields : clé concaténée, départage par chaque champ', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
+      await createCompareFacts().load(
+        factsParams({
+          joinFields: ["zone d'emploi", 'Année'],
+          sort: [{ field: 'delta', order: 'DESC' }],
+        }),
+      );
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain(
+        `CONCAT(CAST(a."zone d'emploi" AS VARCHAR), '::', CAST(a."Année" AS VARCHAR)) AS key`,
+      );
+      expect(query).toContain(`GROUP BY "zone d'emploi", "Année"`);
+      expect(query).toContain(
+        `CAST(a."zone d'emploi" AS VARCHAR) = CAST(b."zone d'emploi" AS VARCHAR) AND ` +
+          'CAST(a."Année" AS VARCHAR) = CAST(b."Année" AS VARCHAR)',
+      );
+      // Ordre total : tri client puis chaque clé
+      expect(query).toContain('ORDER BY "delta" DESC, _k_0 ASC, _k_1 ASC');
+    });
+
+    test('sans tri explicite, ordonné par les clés', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
+      await createCompareFacts().load(factsParams({ limit: 5, offset: 10 }));
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toMatch(/ORDER BY _k_0 ASC\s+LIMIT 5 OFFSET 10/);
+    });
+
+    test('libellé de la clé : ANY_VALUE de chaque côté puis COALESCE', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
+      await createCompareFacts().load(
+        factsParams({ joinFields: ['nc8'], labelFieldA: 'nc8_en', labelFieldB: 'nc8_fr' }),
+      );
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ANY_VALUE("nc8_en") AS "nc8__label"');
+      expect(query).toContain('ANY_VALUE("nc8_fr") AS "nc8__label"');
+      expect(query).toContain('COALESCE(a."nc8__label", b."nc8__label") AS keyLabel');
+    });
+
+    test('convertit les valeurs numériques et préserve les null', async () => {
       mockConnection.all
         .mockResolvedValueOnce([
-          {
-            key: '42',
-            valueA: '100.5',
-            valueB: '120.0',
-            delta: '19.5',
-            deltaPercent: '19.4',
-          },
+          { key: '42', valueA: '100.5', valueB: 120n, delta: '19.5', deltaPercent: null },
         ])
         .mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareFacts();
-      const result = (await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ['id'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams)) as { data: CompareResult[] };
+      const result = (await createCompareFacts().load(factsParams())) as {
+        data: CompareResult[];
+      };
 
-      expect(typeof result.data[0].valueA).toBe('number');
-      expect(typeof result.data[0].valueB).toBe('number');
-      expect(typeof result.data[0].delta).toBe('number');
-    });
-
-    test('gère les valeurs null dans delta et deltaPercent', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([
-          {
-            key: '1',
-            valueA: null,
-            valueB: 100,
-            delta: null,
-            deltaPercent: null,
-          },
-        ])
-        .mockResolvedValueOnce([{ total: 1 }]);
-
-      const loader = createCompareFacts();
-      const result = (await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ['id'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams)) as { data: CompareResult[] };
-
-      expect(result.data[0].valueA).toBeNull();
-      expect(result.data[0].delta).toBeNull();
-    });
-
-    test('quote les champs de jointure et les aliase par position', async () => {
-      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
-
-      // L'existence des champs est contrôlée par le resolver des deux côtés
-      const loader = createCompareFacts();
-      await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        joinFields: ["zone d'emploi", 'Année'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
-
-      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
-      expect(mainQuery).toContain(`CAST(f."zone d'emploi" AS VARCHAR) AS k_0`);
-      expect(mainQuery).toContain('CAST(f."Année" AS VARCHAR) AS k_1');
-      expect(mainQuery).toContain('a.k_0 = b.k_0 AND a.k_1 = b.k_1');
+      expect(result.data[0]).toEqual({
+        key: '42',
+        keyLabel: null,
+        valueA: 100.5,
+        valueB: 120,
+        delta: 19.5,
+        deltaPercent: null,
+      });
     });
 
     test('une erreur DuckDB rejette la clé au lieu de renvoyer null', async () => {
@@ -288,83 +358,32 @@ describe('CrossDatabaseLoader', () => {
         .mockRejectedValueOnce(new Error('IO Error: catalog unreachable'))
         .mockResolvedValueOnce([{ total: 0 }]);
 
-      const loader = createCompareFacts();
-      await expect(
-        loader.load({
-          catalogA: 'db_a',
-          catalogB: 'db_b',
-          joinFields: ['country'],
-          limit: 10,
-          offset: 0,
-          sort: [],
-        } satisfies CompareFactsParams),
-      ).rejects.toThrow('IO Error: catalog unreachable');
-    });
-
-    test('joint directement sur les libellés, sans table dim_*', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([
-          { key: 'France', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
-        ])
-        .mockResolvedValueOnce([{ total: 1 }]);
-
-      const loader = createCompareFacts();
-      await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2024',
-        joinFields: ['country'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
-
-      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
-      // La colonne porte le libellé : aucune table de dimension n'est jointe
-      expect(mainQuery).not.toContain('dim_');
-      // Chaque côté expose sa colonne de jointure, alignée en VARCHAR
-      expect(mainQuery).toContain('CAST(f."country" AS VARCHAR) AS k_0');
-      expect(mainQuery).toContain('a.k_0 = b.k_0');
+      await expect(createCompareFacts().load(factsParams())).rejects.toThrow(
+        'IO Error: catalog unreachable',
+      );
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
       mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
 
-      const loader = createCompareFacts();
-      await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2023',
-        schemaA: 'schema_a',
-        schemaB: 'schema_b',
-        joinFields: ['country'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams);
+      await createCompareFacts().load(
+        factsParams({ catalogB: 'db_a', schemaA: 'schema_a', schemaB: 'schema_b' }),
+      );
 
-      const mainQuery = mockConnection.all.mock.calls[0][0] as string;
-      expect(mainQuery).toContain('"db_2023"."schema_a"."fact_table"');
-      expect(mainQuery).toContain('"db_2023"."schema_b"."fact_table"');
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('"db_a"."schema_a"."fact_table"');
+      expect(query).toContain('"db_a"."schema_b"."fact_table"');
+      expect(query).not.toContain('dim_');
     });
 
     test('ne lit aucune métadonnée avant de comparer', async () => {
       mockConnection.all
         .mockResolvedValueOnce([
-          { key: 'France', valueA: 100, valueB: 120, delta: 20, deltaPercent: 20 },
+          { key: 'France', valueA: 1, valueB: 2, delta: 1, deltaPercent: 100 },
         ])
         .mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareFacts();
-      const result = (await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2024',
-        joinFields: ['country'],
-        limit: 10,
-        offset: 0,
-        sort: [],
-      } satisfies CompareFactsParams)) as { data: CompareResult[] } | null;
-
-      expect(result).not.toBeNull();
-      expect(result!.data[0]).toHaveProperty('key', 'France');
+      await createCompareFacts().load(factsParams());
 
       // Deux requêtes seulement : la comparaison et son comptage
       expect(mockConnection.all).toHaveBeenCalledTimes(2);
@@ -373,117 +392,100 @@ describe('CrossDatabaseLoader', () => {
     });
   });
 
-  // ── Comparaison de faits agrégés ──────────────────────────────────────────
+  // ── Comparaison de plusieurs agrégats ─────────────────────────────────────
 
   describe('createCompareAggregatedFacts', () => {
     test('crée un DataLoader valide', () => {
-      const loader = createCompareAggregatedFacts();
-      expect(loader).toBeDefined();
+      expect(createCompareAggregatedFacts()).toBeDefined();
     });
 
-    test('retourne les faits agrégés comparés', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([
-          { key: 'FR', valueA: 1000, valueB: 1200, delta: 200, deltaPercent: 20 },
-        ])
-        .mockResolvedValueOnce([{ total: 1 }]);
+    test('renvoie la page, ses types et extents, et le nombre de groupes', async () => {
+      mockConnection.getWithMetadata.mockResolvedValueOnce(PAGE);
+      mockConnection.all.mockResolvedValueOnce([{ total: 7 }]);
 
-      const loader = createCompareAggregatedFacts();
-      const result = (await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2024',
-        groupBy: 'country',
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams)) as { data: CompareResult[] };
+      const result = await createCompareAggregatedFacts().load(aggregatedParams());
 
-      expect(result).toHaveProperty('data');
-      expect(result.data[0]).toHaveProperty('key', 'FR');
-      expect(result.data[0]).toHaveProperty('valueA');
-      expect(result.data[0]).toHaveProperty('delta');
+      expect(result).toEqual({
+        columns: PAGE.columns,
+        columnTypes: PAGE.columnTypes,
+        data: PAGE.data,
+        extents: PAGE.metadata.extents,
+        total: 7,
+      });
     });
 
-    test('utilise les CTEs pour éviter le produit cartésien', async () => {
-      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+    test('quatre colonnes par agrégat sur des côtés agrégés par le SQL de getAggregates', async () => {
+      mockConnection.getWithMetadata.mockResolvedValueOnce(PAGE);
+      mockConnection.all.mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareAggregatedFacts();
-      await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        groupBy: 'country',
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams);
+      await createCompareAggregatedFacts().load(
+        aggregatedParams({
+          sort: [
+            { by: 'value_sum_delta', order: 'DESC' },
+            { by: 'country', order: 'ASC' },
+          ],
+          limit: 5,
+          offset: 15,
+        }),
+      );
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('WITH');
-      expect(query).toContain('agg_a');
-      expect(query).toContain('agg_b');
+      const query = mockConnection.getWithMetadata.mock.calls[0][0] as string;
+      expect(query).toContain(
+        'a AS (SELECT "country" AS "country", SUM("value") AS "value_sum" ' +
+          'FROM "db_a"."main"."fact_table" GROUP BY "country")',
+      );
+      expect(query).toContain('a."value_sum" AS "value_sum_a"');
+      expect(query).toContain('b."value_sum" AS "value_sum_b"');
+      expect(query).toContain('b."value_sum" - a."value_sum" AS "value_sum_delta"');
+      expect(query).toContain(
+        'CASE WHEN a."value_sum" IS NOT NULL AND a."value_sum" != 0 ' +
+          'THEN (b."value_sum" - a."value_sum") / a."value_sum" * 100.0 END AS "value_sum_delta_pct"',
+      );
+      // Groupes NULL appariés, clés alignées en VARCHAR
+      expect(query).toContain(
+        'FROM a JOIN b ON CAST(a."country" AS VARCHAR) IS NOT DISTINCT FROM CAST(b."country" AS VARCHAR)',
+      );
+      expect(query).toMatch(/ORDER BY "value_sum_delta" DESC, "country" ASC\s+LIMIT 5 OFFSET 15/);
     });
 
-    test('quote le groupBy (contrôlé contre metadata par le resolver)', async () => {
-      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+    test('libellé : COALESCE des seuls côtés qui en ont un', async () => {
+      mockConnection.getWithMetadata.mockResolvedValueOnce(PAGE);
+      mockConnection.all.mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareAggregatedFacts();
-      await loader.load({
-        catalogA: 'db_a',
-        catalogB: 'db_b',
-        groupBy: "zone d'emploi",
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams);
+      await createCompareAggregatedFacts().load(
+        aggregatedParams({ sideA: side(['nc8']), sideB: side(['nc8'], 'nc8_fr') }),
+      );
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain(`CAST("zone d'emploi" AS VARCHAR) AS key`);
-      expect(query).toContain(`GROUP BY "zone d'emploi"`);
+      const query = mockConnection.getWithMetadata.mock.calls[0][0] as string;
+      expect(query).toContain('COALESCE(b."nc8__label") AS "nc8__label"');
+      expect(query).not.toContain('a."nc8__label"');
     });
 
-    test('agrège directement sur la colonne, sans jointure de dimension', async () => {
-      mockConnection.all
-        .mockResolvedValueOnce([
-          { key: 'France', valueA: 1000, valueB: 1200, delta: 200, deltaPercent: 20 },
-        ])
-        .mockResolvedValueOnce([{ total: 1 }]);
+    test('sans groupe : produit croisé de deux lignes, total 1 sans comptage', async () => {
+      mockConnection.getWithMetadata.mockResolvedValueOnce(PAGE);
 
-      const loader = createCompareAggregatedFacts();
-      await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2024',
-        groupBy: 'country',
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams);
+      const result = (await createCompareAggregatedFacts().load(
+        aggregatedParams({ sideA: side([]), sideB: side([]), sort: [] }),
+      )) as { total: number };
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      // La colonne porte le libellé : GROUP BY direct, aucune table dim_*
-      expect(query).not.toContain('dim_');
-      expect(query).toContain('GROUP BY "country"');
-      // Les clés des deux côtés sont alignées en VARCHAR avant la jointure
-      expect(query).toContain('CAST("country" AS VARCHAR) AS key');
+      const query = mockConnection.getWithMetadata.mock.calls[0][0] as string;
+      expect(query).toContain('FROM a CROSS JOIN b');
+      expect(query).not.toContain('ORDER BY');
+      expect(result.total).toBe(1);
+      expect(mockConnection.all).not.toHaveBeenCalled();
     });
 
     test('supporte les requêtes cross-schéma dans un même catalogue', async () => {
-      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+      mockConnection.getWithMetadata.mockResolvedValueOnce(PAGE);
+      mockConnection.all.mockResolvedValueOnce([{ total: 1 }]);
 
-      const loader = createCompareAggregatedFacts();
-      await loader.load({
-        catalogA: 'db_2023',
-        catalogB: 'db_2023',
-        schemaA: 'schema_a',
-        schemaB: 'schema_b',
-        groupBy: 'country',
-        aggregation: 'SUM',
-        limit: 10,
-        offset: 0,
-      } satisfies CompareAggregatedParams);
+      await createCompareAggregatedFacts().load(
+        aggregatedParams({ catalogB: 'db_a', schemaA: 'schema_a', schemaB: 'schema_b' }),
+      );
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"db_2023"."schema_a"."fact_table"');
-      expect(query).toContain('"db_2023"."schema_b"."fact_table"');
+      const query = mockConnection.getWithMetadata.mock.calls[0][0] as string;
+      expect(query).toContain('"db_a"."schema_a"."fact_table"');
+      expect(query).toContain('"db_a"."schema_b"."fact_table"');
     });
   });
 

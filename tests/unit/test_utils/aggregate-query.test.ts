@@ -18,6 +18,8 @@ import {
   longColumns,
   meltRows,
   resolveAggregateParams,
+  buildAggregateSelect,
+  assertNumericAggregate,
 } from '../../../src/utils/aggregate-query.js';
 import type { FieldMetadata } from '../../../src/utils/metadata-mapping.js';
 import type {
@@ -416,6 +418,55 @@ describe('buildAggregateQuery', () => {
     );
     expect(() => buildAggregateQuery(page(resolve({}), { offset: -1 }), TABLE)).toThrow(
       'Invalid offset',
+    );
+  });
+});
+
+describe('buildAggregateSelect', () => {
+  test('le SELECT interne de buildAggregateQuery, sans tri ni pagination', () => {
+    const resolved = resolve({ groupBy: [{ field: 'nc8' }] });
+    const where = { sql: '"kind" = ?', params: ['Actual'] };
+    const select = buildAggregateSelect({ ...resolved, where }, TABLE);
+    const pageQuery = buildAggregateQuery(page(resolved, { where }), TABLE);
+
+    expect(select.sql).toBe(
+      'SELECT "nc8" AS "nc8", ANY_VALUE("nc8_libelle_en") AS "nc8__label", ' +
+        'SUM("value") AS "value_sum", COUNT(*) AS "row_count" FROM "cat"."main"."fact_table" ' +
+        'WHERE "kind" = ? GROUP BY "nc8"',
+    );
+    expect(pageQuery.sql).toBe(
+      `SELECT * FROM (${select.sql}) ORDER BY "nc8" ASC LIMIT 100 OFFSET 0`,
+    );
+    expect(select.values).toEqual(['Actual']);
+  });
+
+  test('sans agrégat : colonnes de groupe seules (comptage des groupes)', () => {
+    const resolved = resolve({ groupBy: [{ field: 'country' }], includeRowCount: false });
+    const { sql } = buildAggregateSelect({ ...resolved, aggregates: [] }, TABLE);
+
+    expect(sql).toBe(
+      'SELECT "country" AS "country" FROM "cat"."main"."fact_table" GROUP BY "country"',
+    );
+  });
+});
+
+describe('assertNumericAggregate', () => {
+  test.each([
+    ['SUM', 'value'],
+    ['COUNT', 'notes'],
+    ['MAX', 'horizon'],
+    ['MODE', 'value'],
+  ] as const)('%s de %s : résultat numérique accepté', (aggregation, measure) => {
+    expect(() => assertNumericAggregate(aggregation, METADATA.get(measure)!)).not.toThrow();
+  });
+
+  test.each([
+    ['MAX', 'date'],
+    ['MODE', 'notes'],
+    ['MODE', 'is_provisional'],
+  ] as const)('%s de %s : refusé, un écart exige un nombre', (aggregation, measure) => {
+    expect(() => assertNumericAggregate(aggregation, METADATA.get(measure)!)).toThrow(
+      /is not numeric/,
     );
   });
 });

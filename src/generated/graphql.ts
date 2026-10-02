@@ -44,6 +44,24 @@ export type AggregateColumn = {
   unit?: Maybe<Scalars['String']['output']>;
 };
 
+/** Résultat de compareAggregatedFacts */
+export type AggregateComparison = {
+  /** Agrégats comparés, dans l'ordre demandé. alias est le préfixe des quatre colonnes de data : <alias>_a, <alias>_b, <alias>_delta (b - a) et <alias>_delta_pct ((b - a) / a * 100, null quand a vaut 0 ou null). sqlType est le type de <alias>_a ; extent couvre <alias>_a et <alias>_b */
+  aggregates: Array<AggregateColumn>;
+  /** Ordre des colonnes de data : colonnes de groupe, colonnes de libellés, puis pour chaque agrégat <alias>_a, <alias>_b, <alias>_delta, <alias>_delta_pct */
+  columns: Array<Scalars['String']['output']>;
+  /** Une ligne (objet) par groupe commun aux deux datasets. Les colonnes de groupe gardent le type du dataset A ; les libellés sont le COALESCE des deux côtés */
+  data: Array<Scalars['JSON']['output']>;
+  /** Horodatage ISO 8601 de construction du résultat */
+  generatedAt: Scalars['String']['output'];
+  /** Colonnes de groupe, dans l'ordre demandé (métadonnées du dataset A ; vide : comparaison globale) */
+  groupBy: Array<GroupColumn>;
+  /** Indique s'il reste des groupes après cette page */
+  hasNextPage: Scalars['Boolean']['output'];
+  /** Nombre de groupes communs aux deux datasets (1 sans groupBy) */
+  total: Scalars['Float']['output'];
+};
+
 /** Serialization of the rows of getAggregates */
 export type AggregateFormat =
   /** One array per group, ordered as columns */
@@ -125,19 +143,19 @@ export type CatalogSchemaInput = {
   schema?: InputMaybe<Scalars['String']['input']>;
 };
 
-/** Comparaison d'une valeur entre deux catalogues sur une clé commune */
+/** Comparaison d'une mesure agrégée entre deux datasets pour une clé commune */
 export type ComparedFact = {
   /** Différence absolue (valueB - valueA) */
   delta?: Maybe<Scalars['Float']['output']>;
-  /** Différence relative en % ((valueB - valueA) / valueA * 100) */
+  /** Différence relative en % ((valueB - valueA) / valueA * 100) ; null quand valueA vaut 0 ou null */
   deltaPercent?: Maybe<Scalars['Float']['output']>;
-  /** Valeur de la clé commune (libellé porté par la colonne de jointure) */
+  /** Valeur de la clé commune (libellé porté par la colonne de jointure ; valeurs jointes par '::' sur plusieurs champs) */
   key: Scalars['String']['output'];
-  /** Libellé de la clé quand la comparaison porte sur un seul champ doté de colonnes de libellés (règle par défaut, COALESCE des deux côtés, même requête) ; null sinon */
+  /** Libellé de la clé quand la comparaison porte sur un seul champ doté de colonnes de libellés (règle par défaut, ANY_VALUE de chaque côté puis COALESCE) ; null sinon */
   keyLabel?: Maybe<Scalars['String']['output']>;
-  /** Valeur dans le catalogue A */
+  /** Mesure agrégée dans le dataset A */
   valueA?: Maybe<Scalars['Float']['output']>;
-  /** Valeur dans le catalogue B */
+  /** Mesure agrégée dans le dataset B */
   valueB?: Maybe<Scalars['Float']['output']>;
 };
 
@@ -369,11 +387,17 @@ export type Metadata = {
   unit?: Maybe<Scalars['String']['output']>;
 };
 
-/** Résultat paginé pour les comparaisons cross-database */
+/** Résultat paginé de compareFacts */
 export type PaginatedComparedFacts = {
+  /** Agrégation appliquée à la mesure de chaque côté */
+  aggregation: Aggregation;
   currentPage: Scalars['Int']['output'];
+  /** Une ligne par clé commune aux deux datasets */
   data: Array<ComparedFact>;
   hasNextPage: Scalars['Boolean']['output'];
+  /** Mesure comparée */
+  measure: Scalars['String']['output'];
+  /** Nombre de clés communes */
   total: Scalars['Float']['output'];
   totalPages: Scalars['Float']['output'];
 };
@@ -394,9 +418,9 @@ export type PaginatedFacts = {
 
 export type Query = {
   _empty?: Maybe<Scalars['String']['output']>;
-  /** Compare les faits agrégés de deux datasets (catalogue + schéma) sur un groupBy commun. Chaque côté agrège directement sur sa colonne, qui porte le libellé. */
-  compareAggregatedFacts: PaginatedComparedFacts;
-  /** Compare les faits de deux datasets (catalogue + schéma) sur des champs de jointure communs. La fact table porte les libellés : la jointure est directe sur les colonnes, alignées en VARCHAR pour absorber une différence de type entre catalogues. */
+  /** Compare plusieurs agrégats de deux datasets (catalogue + schéma) sur des colonnes de groupe communes, dans la forme de getAggregates. Chaque côté est agrégé par la même requête que getAggregates, puis les deux côtés sont joints sur les colonnes de groupe (alignées en VARCHAR) ; un groupe absent d'un côté est écarté. Pagination sur les groupes, triés par sort puis par chaque colonne de groupe (ordre croissant) */
+  compareAggregatedFacts: AggregateComparison;
+  /** Compare une mesure de deux datasets (catalogue + schéma) sur des champs de jointure communs. Chaque côté est d'abord agrégé par les champs de jointure (une ligne par clé), puis les deux côtés sont joints sur ces champs, alignés en VARCHAR pour absorber une différence de type entre catalogues ; une clé absente d'un côté est écartée. */
   compareFacts: PaginatedComparedFacts;
   /** Retourne les options de sélection communes à plusieurs datasets (intersection sur les labels pour les champs catégoriels) */
   crossDatabaseSelectOptions: Array<SelectOption>;
@@ -471,22 +495,25 @@ export type Query = {
 
 
 export type QueryCompareAggregatedFactsArgs = {
-  aggregation?: Aggregation;
+  aggregates: Array<AggregateInput>;
   catalogA: Scalars['String']['input'];
   catalogB: Scalars['String']['input'];
-  groupBy: Scalars['String']['input'];
+  groupBy?: InputMaybe<Array<GroupByInput>>;
   limit?: Scalars['Int']['input'];
   offset?: Scalars['Int']['input'];
   schemaA?: InputMaybe<Scalars['String']['input']>;
   schemaB?: InputMaybe<Scalars['String']['input']>;
+  sort?: InputMaybe<Array<AggregateSortInput>>;
 };
 
 
 export type QueryCompareFactsArgs = {
+  aggregation?: InputMaybe<Aggregation>;
   catalogA: Scalars['String']['input'];
   catalogB: Scalars['String']['input'];
   joinFields: Array<Scalars['String']['input']>;
   limit?: Scalars['Int']['input'];
+  measure?: InputMaybe<Scalars['String']['input']>;
   offset?: Scalars['Int']['input'];
   schemaA?: InputMaybe<Scalars['String']['input']>;
   schemaB?: InputMaybe<Scalars['String']['input']>;
@@ -726,6 +753,7 @@ export type DirectiveResolverFn<TResult = Record<PropertyKey, never>, TParent = 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = {
   AggregateColumn: ResolverTypeWrapper<Omit<AggregateColumn, 'field'> & { field: ResolversTypes['Metadata'] }>;
+  AggregateComparison: ResolverTypeWrapper<Omit<AggregateComparison, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversTypes['AggregateColumn']>, groupBy: Array<ResolversTypes['GroupColumn']> }>;
   AggregateFormat: AggregateFormat;
   AggregateInput: AggregateInput;
   AggregateResult: ResolverTypeWrapper<Omit<AggregateResult, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversTypes['AggregateColumn']>, groupBy: Array<ResolversTypes['GroupColumn']> }>;
@@ -767,6 +795,7 @@ export type ResolversTypes = {
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = {
   AggregateColumn: Omit<AggregateColumn, 'field'> & { field: ResolversParentTypes['Metadata'] };
+  AggregateComparison: Omit<AggregateComparison, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversParentTypes['AggregateColumn']>, groupBy: Array<ResolversParentTypes['GroupColumn']> };
   AggregateInput: AggregateInput;
   AggregateResult: Omit<AggregateResult, 'aggregates' | 'groupBy'> & { aggregates: Array<ResolversParentTypes['AggregateColumn']>, groupBy: Array<ResolversParentTypes['GroupColumn']> };
   AggregateSortInput: AggregateSortInput;
@@ -806,6 +835,16 @@ export type AggregateColumnResolvers<ContextType = GraphQLContext, ParentType ex
   measure?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   sqlType?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   unit?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+};
+
+export type AggregateComparisonResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregateComparison'] = ResolversParentTypes['AggregateComparison']> = {
+  aggregates?: Resolver<Array<ResolversTypes['AggregateColumn']>, ParentType, ContextType>;
+  columns?: Resolver<Array<ResolversTypes['String']>, ParentType, ContextType>;
+  data?: Resolver<Array<ResolversTypes['JSON']>, ParentType, ContextType>;
+  generatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  groupBy?: Resolver<Array<ResolversTypes['GroupColumn']>, ParentType, ContextType>;
+  hasNextPage?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  total?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
 };
 
 export type AggregateResultResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['AggregateResult'] = ResolversParentTypes['AggregateResult']> = {
@@ -914,9 +953,11 @@ export type MetadataResolvers<ContextType = GraphQLContext, ParentType extends R
 };
 
 export type PaginatedComparedFactsResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['PaginatedComparedFacts'] = ResolversParentTypes['PaginatedComparedFacts']> = {
+  aggregation?: Resolver<ResolversTypes['Aggregation'], ParentType, ContextType>;
   currentPage?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
   data?: Resolver<Array<ResolversTypes['ComparedFact']>, ParentType, ContextType>;
   hasNextPage?: Resolver<ResolversTypes['Boolean'], ParentType, ContextType>;
+  measure?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   total?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
   totalPages?: Resolver<ResolversTypes['Float'], ParentType, ContextType>;
 };
@@ -931,7 +972,7 @@ export type PaginatedFactsResolvers<ContextType = GraphQLContext, ParentType ext
 
 export type QueryResolvers<ContextType = GraphQLContext, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = {
   _empty?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  compareAggregatedFacts?: Resolver<ResolversTypes['PaginatedComparedFacts'], ParentType, ContextType, RequireFields<QueryCompareAggregatedFactsArgs, 'aggregation' | 'catalogA' | 'catalogB' | 'groupBy' | 'limit' | 'offset'>>;
+  compareAggregatedFacts?: Resolver<ResolversTypes['AggregateComparison'], ParentType, ContextType, RequireFields<QueryCompareAggregatedFactsArgs, 'aggregates' | 'catalogA' | 'catalogB' | 'groupBy' | 'limit' | 'offset'>>;
   compareFacts?: Resolver<ResolversTypes['PaginatedComparedFacts'], ParentType, ContextType, RequireFields<QueryCompareFactsArgs, 'catalogA' | 'catalogB' | 'joinFields' | 'limit' | 'offset'>>;
   crossDatabaseSelectOptions?: Resolver<Array<ResolversTypes['SelectOption']>, ParentType, ContextType, RequireFields<QueryCrossDatabaseSelectOptionsArgs, 'catalogs' | 'fieldName' | 'limit'>>;
   getAggregates?: Resolver<ResolversTypes['AggregateResult'], ParentType, ContextType, RequireFields<QueryGetAggregatesArgs, 'aggregates' | 'format' | 'groupBy' | 'includeRowCount' | 'limit' | 'offset'>>;
@@ -955,6 +996,7 @@ export type SelectOptionResolvers<ContextType = GraphQLContext, ParentType exten
 
 export type Resolvers<ContextType = GraphQLContext> = {
   AggregateColumn?: AggregateColumnResolvers<ContextType>;
+  AggregateComparison?: AggregateComparisonResolvers<ContextType>;
   AggregateResult?: AggregateResultResolvers<ContextType>;
   Catalog?: CatalogResolvers<ContextType>;
   CatalogSchemaInfo?: CatalogSchemaInfoResolvers<ContextType>;

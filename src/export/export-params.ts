@@ -3,8 +3,11 @@ import os from 'os';
 import path from 'path';
 import { config } from '../utils/config-loader.js';
 import type { ExportConfig } from '../utils/config-loader.js';
+import { AGGREGATIONS } from '../utils/aggregations.js';
+import { TIME_GRAIN_PART } from '../utils/aggregate-query.js';
 import type { SortItem } from '../loaders/base-loader.js';
 import type { FilterNodeInput } from '../utils/filter-tree.js';
+import type { AggregateInput, Aggregation, GroupByInput, TimeGrain } from '../generated/graphql.js';
 
 // ─── Formats d'export ────────────────────────────────────────────────────────
 
@@ -144,8 +147,12 @@ interface ExportParams {
   fields: string[] | null;
   /** Filter tree, structurally parsed; compiled later against the metadata. */
   filters: FilterNodeInput | null;
-  /** Explicit sort; null falls back to cluster_by. */
+  /** Explicit sort; null falls back to cluster_by (or to the group columns of an aggregated export). */
   sort: SortItem[] | null;
+  /** Group columns of an aggregated export; null without aggregates. */
+  groupBy: GroupByInput[] | null;
+  /** Aggregates of an aggregated export; null exports the fact rows. */
+  aggregates: AggregateInput[] | null;
   format: ExportFormat;
   /** Row ceiling actually applied (never above settings.maxRows). */
   limit: number;
@@ -167,6 +174,8 @@ const KNOWN_PARAMETERS = new Set([
   'fields',
   'filters',
   'sort',
+  'groupBy',
+  'aggregates',
   'format',
   'limit',
   'after',
@@ -261,6 +270,66 @@ function parseSort(items: string[]): SortItem[] {
 }
 
 /**
+ * Parses the `groupBy` items (`"col"` or `"col:grain"`, grain case-insensitive).
+ *
+ * @param items - Group items, already split (`"nc8,date:month"` in a query string).
+ * @returns Group columns, in the given order (duplicates are refused later,
+ *   with the other aggregate rules).
+ * @throws {ExportHttpError} 400 on an empty column or an unknown grain.
+ */
+function parseGroupBy(items: string[]): GroupByInput[] {
+  return items.map((item) => {
+    const [column, grainRaw, ...rest] = item.split(':').map((s) => s.trim());
+    if (rest.length > 0 || !column) {
+      throw badParameter(`Invalid groupBy item "${item}": expected "column" or "column:grain".`);
+    }
+    const field = columnName(column, 'groupBy column');
+    if (!grainRaw) return { field };
+    const grain = grainRaw.toUpperCase();
+    if (!Object.hasOwn(TIME_GRAIN_PART, grain)) {
+      throw badParameter(
+        `Unknown grain "${grainRaw}". Accepted: ${Object.keys(TIME_GRAIN_PART).join(', ').toLowerCase()}.`,
+      );
+    }
+    return { field, grain: grain as TimeGrain };
+  });
+}
+
+/**
+ * Parses the `aggregates` items (`"measure"`, `"measure:aggregation"` or
+ * `"measure:aggregation:alias"`; an empty aggregation, as in `"value::total"`,
+ * applies the default aggregation of the measure).
+ *
+ * @param items - Aggregate items, already split (`"value:sum,value:avg:moyenne"`).
+ * @returns Aggregates, in the given order; aliases and aggregations are
+ *   checked against the metadata later, with the rules of getAggregates.
+ * @throws {ExportHttpError} 400 on an empty measure or an unknown aggregation.
+ */
+function parseAggregates(items: string[]): AggregateInput[] {
+  return items.map((item) => {
+    const [measureRaw, aggregationRaw, alias, ...rest] = item.split(':').map((s) => s.trim());
+    if (rest.length > 0 || !measureRaw) {
+      throw badParameter(
+        `Invalid aggregates item "${item}": expected "measure", "measure:aggregation" ` +
+          'or "measure:aggregation:alias".',
+      );
+    }
+    const aggregate: AggregateInput = { measure: columnName(measureRaw, 'measure') };
+    if (aggregationRaw) {
+      const aggregation = aggregationRaw.toUpperCase();
+      if (!(AGGREGATIONS as readonly string[]).includes(aggregation)) {
+        throw badParameter(
+          `Unknown aggregation "${aggregationRaw}". Accepted: ${AGGREGATIONS.join(', ').toLowerCase()}.`,
+        );
+      }
+      aggregate.aggregation = aggregation as Aggregation;
+    }
+    if (alias) aggregate.alias = alias;
+    return aggregate;
+  });
+}
+
+/**
  * Reads the `filters` parameter: the JSON of a FilterNode tree or, in a JSON
  * body, the tree itself.
  *
@@ -335,7 +404,8 @@ function readBom(input: Record<string, unknown>): boolean {
  *
  * GET passes its query string, POST its JSON body: same names, rules and
  * errors, the body only accepting native JSON forms on top (arrays for
- * `fields` / `sort`, an object for `filters`, a number for `limit`).
+ * `fields` / `sort` / `groupBy` / `aggregates`, an object for `filters`, a
+ * number for `limit`).
  * Pure function: no database access. Column names only need to be non-empty
  * here; their existence in the schema is checked once the metadata is loaded,
  * and catalog/schema against their allow-lists (resolveExportTarget).
@@ -400,6 +470,19 @@ function parseExportParams(
   }
   const sortRaw = readList(input, 'sort', source);
 
+  // Export agrégé : agrégats requis par groupBy, exclusifs de fields
+  const groupByRaw = readList(input, 'groupBy', source);
+  const aggregatesRaw = readList(input, 'aggregates', source);
+  if (groupByRaw && !aggregatesRaw) {
+    throw badParameter('Parameter "groupBy" requires "aggregates".');
+  }
+  if (aggregatesRaw && fields) {
+    throw badParameter(
+      'Parameter "fields" does not apply to an aggregated export: its columns are the groupBy ' +
+        'columns, their labels, the aggregates and row_count.',
+    );
+  }
+
   return {
     // Catalogue et schéma contrôlés contre leurs allow-lists par resolveExportTarget
     catalog: catalogRaw,
@@ -407,6 +490,8 @@ function parseExportParams(
     fields,
     filters: readFilters(input, source),
     sort: sortRaw ? parseSort(sortRaw) : null,
+    groupBy: aggregatesRaw ? parseGroupBy(groupByRaw ?? []) : null,
+    aggregates: aggregatesRaw ? parseAggregates(aggregatesRaw) : null,
     format: formatRaw as ExportFormat,
     limit: Math.min(requestedLimit ?? settings.maxRows, settings.maxRows),
     explicitLimit: requestedLimit !== null,

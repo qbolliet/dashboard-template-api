@@ -76,10 +76,10 @@ describe('cross-database feature disabled (CROSS_DATABASE_DISABLED)', () => {
         compareAggregatedFacts(
           catalogA: "a"
           catalogB: "b"
-          groupBy: "country"
-          aggregation: SUM
+          groupBy: [{ field: "country" }]
+          aggregates: [{ measure: "value", aggregation: SUM }]
           limit: 5
-        ) { data { key valueA valueB } total }
+        ) { data total }
       }
     `;
     const result = await execute(server, { query });
@@ -158,10 +158,10 @@ describe('input validation (feature enabled, invalid inputs)', () => {
         compareAggregatedFacts(
           catalogA: "${dbA}"
           catalogB: "nonexistent_xyz"
-          groupBy: "country"
-          aggregation: SUM
+          groupBy: [{ field: "country" }]
+          aggregates: [{ measure: "value" }]
           limit: 5
-        ) { data { key } total }
+        ) { data total }
       }
     `;
     const result = await execute(server, { query });
@@ -318,7 +318,7 @@ describeCrossDB('compareFacts (enabled)', () => {
 });
 
 describeCrossDB('compareAggregatedFacts (enabled)', () => {
-  test('returns aggregated comparison with correct structure', async () => {
+  test('returns AggregateComparison with correct structure', async () => {
     const [dbA, dbB] = availableDatabases;
     if (!dbA || !dbB) return;
 
@@ -327,16 +327,18 @@ describeCrossDB('compareAggregatedFacts (enabled)', () => {
         compareAggregatedFacts(
           catalogA: "${dbA}"
           catalogB: "${dbB}"
-          groupBy: "country"
-          aggregation: SUM
+          groupBy: [{ field: "country" }]
+          aggregates: [{ measure: "value", aggregation: SUM }]
           limit: 10
           offset: 0
         ) {
-          data { key valueA valueB delta deltaPercent }
+          groupBy { name labelColumn }
+          aggregates { alias measure aggregation sqlType }
+          columns
+          data
           total
           hasNextPage
-          currentPage
-          totalPages
+          generatedAt
         }
       }
     `;
@@ -344,15 +346,23 @@ describeCrossDB('compareAggregatedFacts (enabled)', () => {
 
     expect(result.errors).toBeUndefined();
     const r = result.data!.compareAggregatedFacts as {
+      groupBy: Array<{ name: string; labelColumn: string | null }>;
+      aggregates: Array<{ alias: string; measure: string; aggregation: string; sqlType: string }>;
+      columns: string[];
       total: number;
-      data: Array<{ key: string; valueA: unknown; valueB: unknown }>;
     };
     expect(typeof r.total).toBe('number');
-    if (r.data.length > 0) {
-      expect(r.data[0]).toHaveProperty('key');
-      expect(r.data[0]).toHaveProperty('valueA');
-      expect(r.data[0]).toHaveProperty('valueB');
-    }
+    expect(r.groupBy).toEqual([{ name: 'country', labelColumn: null }]);
+    expect(r.aggregates).toEqual([
+      { alias: 'value_sum', measure: 'value', aggregation: 'SUM', sqlType: 'DOUBLE' },
+    ]);
+    expect(r.columns).toEqual([
+      'country',
+      'value_sum_a',
+      'value_sum_b',
+      'value_sum_delta',
+      'value_sum_delta_pct',
+    ]);
   });
 
   test('AVG aggregation groupBy indicator', async () => {
@@ -364,11 +374,11 @@ describeCrossDB('compareAggregatedFacts (enabled)', () => {
         compareAggregatedFacts(
           catalogA: "${dbA}"
           catalogB: "${dbB}"
-          groupBy: "indicator"
-          aggregation: AVG
+          groupBy: [{ field: "indicator" }]
+          aggregates: [{ measure: "value", aggregation: AVG }]
           limit: 10
           offset: 0
-        ) { data { key valueA valueB delta } total }
+        ) { data total }
       }
     `;
     const result = await execute(server, { query });
@@ -386,7 +396,7 @@ describeCrossDB('comparaisons sur les libellés des catalogues de test', () => {
    * assertions below never depend on where the pagination window falls.
    *
    * @param groupBy - Column used as the grouping key.
-   * @returns The compareAggregatedFacts rows.
+   * @returns The rows, reduced to key, valueA, valueB, delta and deltaPercent.
    */
   // Comparaison default ↔ macroeconomics, agrégée par libellé
   async function compareAggregatedOn(groupBy: string) {
@@ -396,27 +406,25 @@ describeCrossDB('comparaisons sur les libellés des catalogues de test', () => {
           compareAggregatedFacts(
             catalogA: "default"
             catalogB: "macroeconomics"
-            groupBy: "${groupBy}"
-            aggregation: SUM
+            groupBy: [{ field: "${groupBy}" }]
+            aggregates: [{ measure: "value", aggregation: SUM }]
             limit: 100
             offset: 0
-          ) { data { key valueA valueB delta deltaPercent } total }
+          ) { data total }
         }
       `,
     });
     expect(result.errors).toBeUndefined();
-    return (
-      result.data!.compareAggregatedFacts as {
-        total: number;
-        data: Array<{
-          key: string;
-          valueA: number | null;
-          valueB: number | null;
-          delta: number | null;
-          deltaPercent: number | null;
-        }>;
-      }
-    ).data;
+    const { data } = result.data!.compareAggregatedFacts as {
+      data: Array<Record<string, number | string | null>>;
+    };
+    return data.map((row) => ({
+      key: row[groupBy] as string,
+      valueA: row.value_sum_a as number | null,
+      valueB: row.value_sum_b as number | null,
+      delta: row.value_sum_delta as number | null,
+      deltaPercent: row.value_sum_delta_pct as number | null,
+    }));
   }
 
   test('apparie les libellés communs et écarte les libellés disjoints', async () => {
@@ -513,5 +521,321 @@ describeCrossDB('comparaisons sur les libellés des catalogues de test', () => {
     expect(values).not.toContain('Belgium');
     // label = value partout
     expect(opts.every((o) => o.value === o.label)).toBe(true);
+  });
+});
+
+// ─── Comparaisons pré-agrégées sur des clés non uniques (trade) ───────────────
+
+/**
+ * Runs a reference query on the API pool.
+ *
+ * @param sql - Query to run.
+ * @returns Rows as objects.
+ */
+// Calcul DuckDB de référence, indépendant du SQL des comparaisons
+async function referenceRows(sql: string): Promise<Record<string, unknown>[]> {
+  const pool = databaseManager.getPool('default');
+  const conn = await pool.acquire();
+  try {
+    return await conn.all(sql);
+  } finally {
+    pool.release(conn);
+  }
+}
+
+/**
+ * Aggregates a measure by nc8 on both trade schemas, then pairs them in JS.
+ *
+ * @param aggregate - SQL aggregate over the fact rows, e.g. `SUM(weight_kg)`.
+ * @returns Map nc8 → [value in default.trade, value in macroeconomics.trade],
+ *   for the codes present on both sides.
+ */
+// Référence : agrégat par nc8 de chaque côté, appariement des codes communs
+async function referenceByNc8(aggregate: string): Promise<Map<string, [number, number]>> {
+  const side = async (catalog: string): Promise<Map<string, number>> => {
+    const rows = await referenceRows(
+      `SELECT nc8, ${aggregate} AS v FROM "${catalog}"."trade"."fact_table" GROUP BY nc8`,
+    );
+    return new Map(rows.map((row) => [String(row.nc8), Number(row.v)]));
+  };
+  const [a, b] = await Promise.all([side('default'), side('macroeconomics')]);
+  return new Map(
+    [...a.entries()]
+      .filter(([code]) => b.has(code))
+      .map(([code, value]) => [code, [value, b.get(code)!] as [number, number]]),
+  );
+}
+
+// Codes nc8 partagés par default.trade (6 lignes par code) et macroeconomics.trade (2 lignes)
+const SHARED_NC8 = ['01012100', '02013000', '02013090'];
+
+/** Row of compareFacts as read by these tests. */
+interface ComparedRow {
+  key: string;
+  valueA: number;
+  valueB: number;
+  delta: number;
+  deltaPercent: number | null;
+}
+
+/**
+ * Runs compareFacts between the two trade schemas.
+ *
+ * @param args - Extra GraphQL arguments (joinFields, measure, sort, page…).
+ * @returns The result, or the errors.
+ */
+async function compareTrade(args: string) {
+  return execute(server, {
+    query: `query {
+      compareFacts(
+        catalogA: "default", schemaA: "trade",
+        catalogB: "macroeconomics", schemaB: "trade",
+        ${args}
+      ) { total hasNextPage measure aggregation data { key valueA valueB delta deltaPercent } }
+    }`,
+  });
+}
+
+describeCrossDB('compareFacts : agrégation par clé avant la jointure', () => {
+  test('une ligne par nc8 malgré des clés non uniques, valeurs = référence DuckDB', async () => {
+    const result = await compareTrade('joinFields: ["nc8"], limit: 100');
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareFacts as {
+      total: number;
+      measure: string;
+      aggregation: string;
+      data: ComparedRow[];
+    };
+
+    // value par défaut, agrégée selon son defaultAggregation (SUM)
+    expect(r.measure).toBe('value');
+    expect(r.aggregation).toBe('SUM');
+    expect(r.total).toBe(3);
+    expect(r.data.map((row) => row.key)).toEqual(SHARED_NC8);
+
+    const reference = await referenceByNc8('SUM(value)');
+    for (const row of r.data) {
+      const [a, b] = reference.get(row.key)!;
+      expect(row.valueA).toBeCloseTo(a, 6);
+      expect(row.valueB).toBeCloseTo(b, 6);
+      expect(row.delta).toBeCloseTo(b - a, 6);
+      expect(row.deltaPercent).toBeCloseTo(((b - a) / a) * 100, 6);
+    }
+  });
+
+  test('une mesure autre que value est comparable (weight_kg, AVG explicite)', async () => {
+    const result = await compareTrade(
+      'joinFields: ["nc8"], measure: "weight_kg", aggregation: AVG, limit: 100',
+    );
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareFacts as {
+      measure: string;
+      aggregation: string;
+      data: ComparedRow[];
+    };
+    expect(r.measure).toBe('weight_kg');
+    expect(r.aggregation).toBe('AVG');
+
+    const reference = await referenceByNc8('AVG(weight_kg)');
+    expect(r.data).toHaveLength(reference.size);
+    for (const row of r.data) {
+      const [a, b] = reference.get(row.key)!;
+      expect(row.valueA).toBeCloseTo(a, 6);
+      expect(row.valueB).toBeCloseTo(b, 6);
+    }
+  });
+
+  test('plusieurs champs de jointure : une ligne par couple, total exact', async () => {
+    const result = await compareTrade('joinFields: ["nc8", "partner_code"], limit: 100');
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareFacts as { total: number; data: ComparedRow[] };
+
+    // 3 codes communs × 2 partenaires communs (macroeconomics n'en a que 2)
+    expect(r.total).toBe(6);
+    expect(new Set(r.data.map((row) => row.key)).size).toBe(6);
+  });
+
+  test('pagination déterministe : pages disjointes qui recouvrent tout, malgré des égalités de tri', async () => {
+    // deltaPercent identique pour les couples d'un même code : le départage par les clés fixe l'ordre
+    const args =
+      'joinFields: ["nc8", "partner_code"], sort: [{ field: "deltaPercent", order: DESC }]';
+    const pages: string[] = [];
+    for (let offset = 0; offset < 6; offset += 2) {
+      const result = await compareTrade(`${args}, limit: 2, offset: ${offset}`);
+      expect(result.errors).toBeUndefined();
+      pages.push(...(result.data!.compareFacts as { data: ComparedRow[] }).data.map((r) => r.key));
+    }
+    expect(new Set(pages).size).toBe(6);
+
+    const whole = await compareTrade(`${args}, limit: 6`);
+    expect((whole.data!.compareFacts as { data: ComparedRow[] }).data.map((r) => r.key)).toEqual(
+      pages,
+    );
+  });
+
+  test('offset au-delà de MAX_OFFSET → BAD_USER_INPUT', async () => {
+    const result = await compareTrade('joinFields: ["nc8"], offset: 10001');
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(result.errors![0].message).toMatch(/Offset cannot exceed/);
+  });
+
+  test('sans measure ni colonne value → BAD_USER_INPUT', async () => {
+    const result = await execute(server, {
+      query: `query {
+        compareFacts(
+          catalogA: "default", schemaA: "geography",
+          catalogB: "default", schemaB: "geography",
+          joinFields: ["region"]
+        ) { total }
+      }`,
+    });
+    expect(result.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(result.errors![0].message).toMatch(/no column value .*pass measure/);
+  });
+
+  test('mesure à agrégat non numérique → BAD_USER_INPUT', async () => {
+    // Texte sans defaultAggregation : aucune agrégation implicite
+    const implicit = await compareTrade('joinFields: ["nc8"], measure: "partner_libelle"');
+    expect(implicit.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+
+    const mode = await compareTrade(
+      'joinFields: ["nc8"], measure: "partner_libelle", aggregation: MODE',
+    );
+    expect(mode.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+    expect(mode.errors![0].message).toMatch(/is not numeric/);
+  });
+});
+
+describeCrossDB('compareAggregatedFacts : plusieurs agrégats, forme de getAggregates', () => {
+  /**
+   * Runs compareAggregatedFacts between the two trade schemas.
+   *
+   * @param args - GraphQL arguments besides the datasets.
+   * @returns The result, or the errors.
+   */
+  async function compareAggregatesTrade(args: string) {
+    return execute(server, {
+      query: `query {
+        compareAggregatedFacts(
+          catalogA: "default", schemaA: "trade",
+          catalogB: "macroeconomics", schemaB: "trade",
+          ${args}
+        ) {
+          groupBy { name labelColumn }
+          aggregates { alias measure aggregation sqlType unit displayFormat extent }
+          columns data total hasNextPage
+        }
+      }`,
+    });
+  }
+
+  test('colonnes _a/_b/_delta/_delta_pct égales à la référence DuckDB', async () => {
+    const result = await compareAggregatesTrade(`
+      groupBy: [{ field: "nc8" }]
+      aggregates: [
+        { measure: "value" }
+        { measure: "value", aggregation: AVG, alias: "moyenne" }
+        { measure: "weight_kg" }
+      ]
+    `);
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareAggregatedFacts as {
+      aggregates: Array<{ alias: string; unit: string | null; extent: [number, number] | null }>;
+      columns: string[];
+      data: Array<Record<string, number | string | null>>;
+      total: number;
+      hasNextPage: boolean;
+    };
+
+    expect(r.total).toBe(3);
+    expect(r.hasNextPage).toBe(false);
+    const aliases = ['value_sum', 'moyenne', 'weight_kg_sum'];
+    expect(r.aggregates.map((a) => a.alias)).toEqual(aliases);
+    expect(r.aggregates.map((a) => a.unit)).toEqual(['€', '€', 'kg']);
+    expect(r.columns).toEqual([
+      'nc8',
+      'nc8__label',
+      ...aliases.flatMap((alias) => [
+        `${alias}_a`,
+        `${alias}_b`,
+        `${alias}_delta`,
+        `${alias}_delta_pct`,
+      ]),
+    ]);
+    expect(r.data.map((row) => row.nc8)).toEqual(SHARED_NC8);
+
+    const references: Array<[string, string]> = [
+      ['value_sum', 'SUM(value)'],
+      ['moyenne', 'AVG(value)'],
+      ['weight_kg_sum', 'SUM(weight_kg)'],
+    ];
+    for (const [alias, aggregate] of references) {
+      const reference = await referenceByNc8(aggregate);
+      for (const row of r.data) {
+        const [a, b] = reference.get(row.nc8 as string)!;
+        expect(row[`${alias}_a`]).toBeCloseTo(a, 6);
+        expect(row[`${alias}_b`]).toBeCloseTo(b, 6);
+        expect(row[`${alias}_delta`]).toBeCloseTo(b - a, 6);
+        expect(row[`${alias}_delta_pct`]).toBeCloseTo(((b - a) / a) * 100, 6);
+      }
+      // Étendue commune aux deux côtés (axe partagé)
+      const extent = r.aggregates.find((agg) => agg.alias === alias)!.extent!;
+      const values = [...reference.values()].flat();
+      expect(extent[0]).toBeCloseTo(Math.min(...values), 6);
+      expect(extent[1]).toBeCloseTo(Math.max(...values), 6);
+    }
+  });
+
+  test('tri sur un écart, départagé par les groupes, et pagination', async () => {
+    const result = await compareAggregatesTrade(`
+      groupBy: [{ field: "nc8" }, { field: "partner_code" }]
+      aggregates: [{ measure: "value" }]
+      sort: [{ by: "value_sum_delta", order: DESC }]
+      limit: 4
+    `);
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareAggregatedFacts as {
+      data: Array<Record<string, number>>;
+      total: number;
+      hasNextPage: boolean;
+    };
+    expect(r.total).toBe(6);
+    expect(r.hasNextPage).toBe(true);
+    const deltas = r.data.map((row) => row.value_sum_delta);
+    expect(deltas).toEqual([...deltas].sort((x, y) => y - x));
+  });
+
+  test('sans groupe : une seule ligne globale', async () => {
+    const result = await compareAggregatesTrade('aggregates: [{ measure: "value" }]');
+    expect(result.errors).toBeUndefined();
+    const r = result.data!.compareAggregatedFacts as {
+      data: Array<Record<string, number>>;
+      total: number;
+    };
+    expect(r.total).toBe(1);
+    expect(r.data).toHaveLength(1);
+    const [reference] = await referenceRows(
+      `SELECT (SELECT SUM(value) FROM "macroeconomics"."trade"."fact_table") -
+              (SELECT SUM(value) FROM "default"."trade"."fact_table") AS d`,
+    );
+    expect(r.data[0].value_sum_delta).toBeCloseTo(Number(reference.d), 6);
+  });
+
+  test('collision de colonne, agrégat non numérique, tri inconnu → BAD_USER_INPUT', async () => {
+    const collision = await compareAggregatesTrade(`
+      groupBy: [{ field: "nc8" }]
+      aggregates: [{ measure: "value", alias: "nc8" }]
+    `);
+    expect(collision.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+
+    const text = await compareAggregatesTrade(
+      'aggregates: [{ measure: "partner_libelle", aggregation: MODE }]',
+    );
+    expect(text.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
+
+    const sort = await compareAggregatesTrade(
+      'aggregates: [{ measure: "value" }], sort: [{ by: "value_sum" }]',
+    );
+    expect(sort.errors![0].extensions?.code).toBe('BAD_USER_INPUT');
   });
 });
