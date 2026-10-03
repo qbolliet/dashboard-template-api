@@ -33,6 +33,13 @@ SECURITY:
     MAX_BURST_REQUESTS: 10
     BURST_WINDOW_MS: 60000
 
+  # Accès à /metrics : clé admin (en-tête x-admin-key) OU adresse de la liste. Aucune
+  # liste par défaut : sans clé valide, 401. Liste YAML, chaîne JSON ('["10.0.0.0/8"]')
+  # ou liste à virgules, d'IPs ou de blocs CIDR ; req.ip suit TRUSTED_PROXIES. Une entrée
+  # invalide empêche le démarrage. Les IPs de la liste ne passent pas par le limiteur admin.
+  METRICS:
+    ALLOWED_IPS: ${METRICS_ALLOWED_IPS:-[]}
+
   # Configuration de la complexité — évaluée avant exécution (didResolveOperation).
   # Barème détaillé : docs-site/toolbox/docs/architecture/security.md
   COMPLEXITY:

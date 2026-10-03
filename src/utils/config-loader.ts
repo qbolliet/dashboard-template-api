@@ -55,6 +55,12 @@ interface AdminRateLimitConfig {
   BURST_WINDOW_MS?: number;
 }
 
+/** Access to the operational endpoints: /metrics (admin key or allowed IPs). */
+interface MetricsAccessConfig {
+  /** IPs or CIDR blocks allowed without key; YAML list, or JSON-array / comma-separated string. */
+  ALLOWED_IPS?: string[] | string;
+}
+
 /**
  * Query complexity analysis configuration (scoring rules in
  * docs-site/toolbox/docs/architecture/security.md).
@@ -103,6 +109,7 @@ interface SecurityConfig {
   MAX_QUERY_DEPTH: number;
   RATE_LIMIT: RateLimitConfig;
   ADMIN_RATE_LIMIT?: AdminRateLimitConfig;
+  METRICS?: MetricsAccessConfig;
   COMPLEXITY: ComplexityConfig;
   MONITORING: SecurityMonitoringConfig;
   FILTER_TREE?: FilterTreeConfig;
@@ -208,6 +215,16 @@ interface ExportConfig {
   TMP_DIR?: string;
   /** Free space, in MB, the tmp volume must keep for a csv/parquet export (0 disables). */
   TMP_MIN_FREE_MB?: number | string;
+}
+
+/** Graceful shutdown (SIGTERM / SIGINT). */
+interface ShutdownConfig {
+  /**
+   * Overall budget of the shutdown, in milliseconds: draining of the in-flight
+   * requests and exports, then closing of the pool and Redis. Must stay below
+   * the pod's terminationGracePeriodSeconds. May arrive as a string.
+   */
+  TIMEOUT_MS: number | string;
 }
 
 /** Redis configuration — reconnection back-off strategy. */
@@ -355,6 +372,7 @@ interface AppConfig {
     SELECT_OPTIONS?: SelectOptionsConfig;
     AGGREGATES?: AggregatesConfig;
     EXPORT?: ExportConfig;
+    SHUTDOWN?: ShutdownConfig;
   };
   DATABASE: {
     POOL: {
@@ -845,4 +863,6 @@ export type {
   CompressionConfig,
   GraphqlConfig,
   ExportConfig,
+  ShutdownConfig,
+  MetricsAccessConfig,
 };

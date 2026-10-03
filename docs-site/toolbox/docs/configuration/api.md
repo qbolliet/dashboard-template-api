@@ -129,6 +129,16 @@ API:
 | `TMP_DIR`               | Directory of the csv/parquet temporary files; empty = `<system tmp>/dashboard-api-export`.                                                 |
 | `TMP_MIN_FREE_MB`       | Free space the `TMP_DIR` volume must keep; below it a csv/parquet export is refused with `507`. `0` disables the check.                    |
 
+## Graceful shutdown
+
+```yaml
+API:
+  SHUTDOWN:
+    TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-25000}
+```
+
+Overall budget (ms) of the shutdown on `SIGTERM`/`SIGINT`: drain of the in-flight requests and exports, then closing of the pool and Redis. When it elapses the process exits with code `1`. Keep it **below** `terminationGracePeriodSeconds` (Helm: `terminationGracePeriodSeconds` and `config.SHUTDOWN_TIMEOUT_MS`, checked at render time). See [Architecture overview](../architecture/overview.md#graceful-shutdown).
+
 ## Timeouts (ms)
 
 Per-operation query timeouts:

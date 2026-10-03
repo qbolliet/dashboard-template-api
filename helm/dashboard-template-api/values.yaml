@@ -15,6 +15,11 @@ fullnameOverride: ''
 # -- Number of replicas (ignored when autoscaling.enabled)
 replicaCount: 2
 
+# -- Time (seconds) Kubernetes waits after SIGTERM before SIGKILL. The API drains
+# its in-flight requests and exports during that window, so it must exceed
+# config.SHUTDOWN_TIMEOUT_MS (checked at render time).
+terminationGracePeriodSeconds: 60
+
 # -- Service account
 serviceAccount:
   create: true
@@ -132,8 +137,19 @@ config:
   # Override REDIS_HOST when redis.enabled=false
   REDIS_PORT: '6379'
 
+  # Graceful shutdown: budget (ms) to finish the in-flight requests and exports
+  # after SIGTERM, then close the pool and Redis. Must stay below
+  # terminationGracePeriodSeconds * 1000 (the chart refuses to render otherwise).
+  # Exports still running past it are cut.
+  SHUTDOWN_TIMEOUT_MS: '50000'
+
   # Reverse-proxy / rate limiting
   TRUSTED_PROXIES: '["10.0.0.0/8"]'
+
+  # /metrics access without key: JSON-encoded list of IPs or CIDR blocks (e.g. the
+  # Prometheus pods). Any other caller needs the x-admin-key header
+  # (secrets.data.ADMIN_API_KEY); without either, /metrics answers 401.
+  # METRICS_ALLOWED_IPS: '["10.0.12.0/24"]'
 
   # CORS — JSON-encoded list of allowed cross-origin origins (one per frontend
   # that queries this API from the browser). Empty by default: no cross-origin

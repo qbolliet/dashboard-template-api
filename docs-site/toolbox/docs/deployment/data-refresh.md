@@ -247,7 +247,7 @@ lists what the last probe saw) or with `getCatalogs`.
 }
 ```
 
-`/metrics` is not yet behind the admin key (planned); the markers are timestamps, not data.
+`/metrics` requires the `x-admin-key` header (or a caller address listed in `METRICS_ALLOWED_IPS`), `401` otherwise.
 
 Key log messages (Winston, JSON):
 

@@ -109,6 +109,17 @@ kubectl --namespace dta port-forward svc/api 4000:80
 curl http://localhost:4000/ready
 ```
 
+## Rolling updates and shutdown
+
+On `SIGTERM` the API stops accepting requests, lets in-flight requests and exports finish, then closes the pool and Redis (see [graceful shutdown](../architecture/overview.md#graceful-shutdown)). Two values must stay consistent, and the chart refuses to render otherwise:
+
+| Value                           | Default | Role                                                              |
+| ------------------------------- | ------- | ----------------------------------------------------------------- |
+| `terminationGracePeriodSeconds` | `60`    | Delay before the kubelet's `SIGKILL`                              |
+| `config.SHUTDOWN_TIMEOUT_MS`    | `50000` | Budget of the API's shutdown; must be below the line above × 1000 |
+
+Raise both together to let longer exports finish during a rollout. `/metrics` needs `ADMIN_API_KEY` (header `x-admin-key`) or a caller listed in `config.METRICS_ALLOWED_IPS`.
+
 ## Upgrade & rollback
 
 ```bash

@@ -1,5 +1,7 @@
 // Importation des modules
+import http from 'node:http';
 import { ApolloServer } from '@apollo/server';
+import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
 import type {
   ApolloServerPlugin,
   GraphQLRequestContext,
@@ -26,6 +28,7 @@ import {
   createCorsMiddleware,
 } from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+import { createMetricsAccess } from './security/metrics-auth.js';
 import { createColumnCounter } from './security/column-counter.js';
 import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
@@ -34,6 +37,7 @@ import { createCatalogRoutes } from './db/catalog-routes.js';
 import { catalogFreshnessMonitor } from './db/catalog-freshness.js';
 import { createExportRoutes } from './export/export-routes.js';
 import { formatGraphQLError, logGraphQLError } from './utils/graphql-errors.js';
+import { createShutdown, drainBudgetMs } from './shutdown.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -86,6 +90,11 @@ type SecurityManagerInstance = ReturnType<typeof initializeSecurityManager>;
 interface ApolloServerOverrides {
   /** Forces introspection on or off instead of API.GRAPHQL.INTROSPECTION. */
   introspection?: boolean;
+  /**
+   * HTTP server to drain when Apollo stops: it stops accepting connections and
+   * waits for in-flight requests and exports, within the shutdown drain budget.
+   */
+  httpServer?: http.Server;
 }
 
 /**
@@ -199,6 +208,10 @@ function createApolloServer(
   return new ApolloServer<ServerContext>({
     // Schéma exécutable de l'API
     schema,
+    // Signaux gérés par la séquence d'arrêt (src/shutdown.ts) seule : le
+    // handler d'Apollo arrêterait le serveur de son côté puis relèverait le
+    // signal sur le processus, en plein drainage et avant la fermeture du pool
+    stopOnTerminationSignals: false,
     // Introspection : autorisée en développement seulement (NoIntrospection d'Apollo sinon)
     introspection: overrides.introspection ?? config.API.GRAPHQL.INTROSPECTION,
     // Formatage des erreurs : message conservé pour une erreur client, masqué
@@ -222,8 +235,19 @@ function createApolloServer(
         config.SECURITY?.MAX_QUERY_DEPTH ?? config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5,
       ),
     ],
-    // Plugins du cycle de vie des requêtes
-    plugins: [requestLifecyclePlugin],
+    // Plugins : cycle de vie des requêtes ; drainage du serveur HTTP à l'arrêt
+    // (requêtes et exports en cours menés à terme, connexions coupées au-delà)
+    plugins: [
+      requestLifecyclePlugin,
+      ...(overrides.httpServer
+        ? [
+            ApolloServerPluginDrainHttpServer({
+              httpServer: overrides.httpServer,
+              stopGracePeriodMillis: drainBudgetMs(),
+            }),
+          ]
+        : []),
+    ],
   });
 }
 
@@ -280,6 +304,18 @@ async function createContext({
  */
 async function startServer(): Promise<void> {
   const app = express();
+  // Serveur HTTP créé avant Apollo, qui le drainera à l'arrêt ; l'écoute ne
+  // commence qu'en fin de démarrage
+  const httpServer = http.createServer(app);
+
+  // Refus 503 de toute requête (sondes exceptées) une fois l'arrêt engagé,
+  // y compris sur les connexions persistantes encore ouvertes ; alimenté plus
+  // bas (le budget et les ressources à fermer dépendent du reste du démarrage)
+  let shutdown: ReturnType<typeof createShutdown> | null = null;
+  app.use((req: Request, res: Response, next: NextFunction): void => {
+    if (shutdown) shutdown.guard(req, res, next);
+    else next();
+  });
 
   // Proxys de confiance, réglés avant tout middleware : req.ip est l'adresse
   // la plus à droite de x-forwarded-for qui n'est pas un proxy de confiance
@@ -363,38 +399,43 @@ async function startServer(): Promise<void> {
     });
   });
 
-  // GET /ready — vérification des dépendances (pool DB + Redis)
+  // GET /ready — sonde de disponibilité (pool DB + Redis), publique : état
+  // minimal, sans détail de pool ni message d'erreur (journalisés à la place)
   app.get('/ready', async (_req: Request, res: Response): Promise<void> => {
-    const checks: Record<string, { status: string; pool?: unknown; message?: string }> = {};
+    // Arrêt engagé : retrait du routage, sans attendre l'échec des dépendances
+    if (shutdown?.isShuttingDown()) {
+      res.status(503).json({ status: 'shutting_down' });
+      return;
+    }
+
     let allOk = true;
 
     // Vérification du pool DuckDB
     try {
-      const stats = databaseManager.getStatistics() as { sharedPool: unknown };
-      checks['database'] = { status: 'ok', pool: stats.sharedPool };
+      databaseManager.getStatistics();
     } catch (err) {
-      checks['database'] = { status: 'error', message: (err as Error).message };
+      logger.error('Readiness check failed: database', err);
       allOk = false;
     }
 
     // Vérification de la connexion Redis
     try {
       await redis.ping();
-      checks['redis'] = { status: 'ok' };
     } catch (err) {
-      checks['redis'] = { status: 'error', message: (err as Error).message };
+      logger.error('Readiness check failed: redis', err);
       allOk = false;
     }
 
-    res.status(allOk ? 200 : 503).json({
-      status: allOk ? 'ready' : 'not_ready',
-      timestamp: new Date().toISOString(),
-      checks,
-    });
+    res.status(allOk ? 200 : 503).json({ status: allOk ? 'ready' : 'not_ready' });
   });
 
-  // GET /metrics — métriques opérationnelles légères
-  app.get('/metrics', (_req: Request, res: Response): void => {
+  // GET /metrics — métriques opérationnelles légères, réservées à l'exploitation :
+  // adresse de METRICS.ALLOWED_IPS, sinon clé admin (401 à défaut) derrière le
+  // limiteur strict des routes d'administration
+  const metricsAccess = createMetricsAccess({
+    rateLimit: securityManager.createAdminRateLimitMiddleware(),
+  });
+  app.get('/metrics', metricsAccess, (_req: Request, res: Response): void => {
     const times = metrics.responseTimes;
     const avg = times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
     const sorted = [...times].sort((a, b) => a - b);
@@ -422,7 +463,7 @@ async function startServer(): Promise<void> {
   });
 
   // Création du serveur Apollo
-  const server = createApolloServer(securityManager, metrics);
+  const server = createApolloServer(securityManager, metrics, { httpServer });
 
   // Réconciliation de la liste de schémas par catalogue avec ce que DuckLake
   // expose réellement (warn si un schéma configuré est absent à l'ATTACH).
@@ -479,46 +520,44 @@ async function startServer(): Promise<void> {
     });
   });
 
-  // Gestionnaire de fermeture gracieuse du serveur
-  const gracefulShutdown = async (signal: string): Promise<void> => {
-    logger.info(`Received ${signal} signal. Starting graceful shutdown...`);
-    // Arrêt du sondage des catalogues (aucun rechargement pendant l'arrêt)
-    catalogFreshnessMonitor.stop();
-    try {
-      await Promise.all([
-        // Fermeture du client Redis
-        redis.quit(),
-        // Fermeture de l'ensemble des connexions DuckDB
-        closeAllConnections(),
-        // Nettoyage des ressources du gestionnaire de sécurité
-        securityManager.cleanup(),
-        // Arrêt du serveur Apollo
-        server.stop(),
-      ]);
-      logger.info('Graceful shutdown completed');
-      process.exit(0);
-    } catch (error) {
-      logger.error('Error during graceful shutdown:', error);
-      process.exit(1);
-    }
-  };
+  // Arrêt gracieux : refus des nouvelles requêtes, drainage (requêtes et exports
+  // en cours, par le plugin Apollo), puis fermeture du pool, des limiteurs et de
+  // Redis — dans cet ordre, aucune requête ne tient plus de connexion — le tout
+  // borné par API.SHUTDOWN.TIMEOUT_MS
+  const currentShutdown = createShutdown({
+    // Aucun rechargement de catalogue pendant l'arrêt
+    beforeDrain: [() => catalogFreshnessMonitor.stop()],
+    drain: () => server.stop(),
+    steps: [
+      { name: 'database pool', close: () => closeAllConnections() },
+      { name: 'security manager', close: () => securityManager.cleanup() },
+      { name: 'redis', close: () => redis.quit() },
+    ],
+  });
+  shutdown = currentShutdown;
 
   // Abonnement aux signaux de fermeture du processus
   process.on('SIGTERM', () => {
-    void gracefulShutdown('SIGTERM');
+    void currentShutdown.run('SIGTERM');
   });
   // Abonnement au signal d'interruption (Ctrl+C en développement)
   process.on('SIGINT', () => {
-    void gracefulShutdown('SIGINT');
+    void currentShutdown.run('SIGINT');
   });
 
-  // Initialisation du port d'écoute
+  // Écoute sur le port ; une erreur (port occupé…) fait échouer le démarrage
   const port = process.env['PORT'] ?? 4000;
-  app.listen(port, () => {
-    logger.info(`Server ready at http://localhost:${port}/graphql`);
-    logger.info(`Environment: ${config.ENVIRONMENT}`);
-    logger.info(`GraphQL Playground: ${config.API.GRAPHQL.PLAYGROUND ? 'enabled' : 'disabled'}`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, () => {
+      httpServer.off('error', reject);
+      resolve();
+    });
   });
+  // Logging
+  logger.info(`Server ready at http://localhost:${port}/graphql`);
+  logger.info(`Environment: ${config.ENVIRONMENT}`);
+  logger.info(`GraphQL Playground: ${config.API.GRAPHQL.PLAYGROUND ? 'enabled' : 'disabled'}`);
 }
 
 export { startServer, createApolloServer, createContext };

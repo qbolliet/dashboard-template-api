@@ -79,6 +79,15 @@ API:
     # csv/parquet est refusé (507). 0 désactive le contrôle
     TMP_MIN_FREE_MB: ${EXPORT_TMP_MIN_FREE_MB:-1024}
 
+  # Arrêt gracieux (SIGTERM / SIGINT) : les requêtes et exports en cours sont
+  # menés à terme, puis le pool et Redis sont fermés
+  SHUTDOWN:
+    # Budget total (ms) de l'arrêt, au-delà duquel le processus sort de force
+    # (code 1, exports restants coupés). Doit rester INFÉRIEUR au
+    # terminationGracePeriodSeconds du pod (Helm), sans quoi kubelet tue le
+    # processus avant (SIGKILL) ; le chart le vérifie
+    TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-25000}
+
   # Query timeouts by operation type (ms)
   TIMEOUTS:
     FACT_SIMPLE: 10000

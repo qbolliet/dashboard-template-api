@@ -71,6 +71,20 @@ SECURITY:
 
 The 11th request from one IP within a minute gets a `429` with `Retry-After`. The nightly data update no longer calls the admin routes (each pod detects it, see [Data refresh](../deployment/data-refresh)); an occasional manual `/api/catalog/reload` fits well within this budget. Raise it if you script many per-catalog reloads in a row. The counters are per pod, as for the public limiter.
 
+## Operational endpoints
+
+- `/health` and `/ready` are public (kubelet probes). `/ready` answers `{"status":"ready"}` (`200`), `{"status":"not_ready"}` (`503`, a dependency is down) or `{"status":"shutting_down"}` (`503`); the cause (pool, Redis error) is logged, never returned.
+- `/metrics` is restricted. A caller passes when its address (`req.ip`, resolved through `TRUSTED_PROXIES`) is on `SECURITY.METRICS.ALLOWED_IPS`, or when it sends the `x-admin-key` header matching `ADMIN_API_KEY`. Anything else gets `401`, including when `ADMIN_API_KEY` is unset (the endpoint stays closed until the operator opens it).
+
+```yaml
+SECURITY:
+  METRICS:
+    # IPs or CIDR blocks allowed without key (YAML list, JSON string or comma-separated)
+    ALLOWED_IPS: ${METRICS_ALLOWED_IPS:-[]} # e.g. METRICS_ALLOWED_IPS='["10.0.12.0/24"]'
+```
+
+Callers who must prove themselves with the key go through the admin limiter described above (every attempt counts); listed addresses skip it, so a scraper is never throttled. An invalid entry stops the server at startup. A Prometheus scraper either sits on the list or sends `x-admin-key` (a `ServiceMonitor` with `authorization`/`headers` from a Secret).
+
 ## Query complexity
 
 ```yaml

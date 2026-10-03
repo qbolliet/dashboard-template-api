@@ -126,8 +126,9 @@ See [Caching](./caching).
 
 `SIGTERM` and `SIGINT` trigger a coordinated shutdown:
 
-1. Stop the catalog freshness probe and accept no new HTTP requests
-2. Wait for in-flight requests to complete
-3. Close all DuckDB connections in the pool
-4. Disconnect from Redis
-5. Flush and close log transports
+1. Stop the catalog freshness probe. From then on `/ready` answers `503` and every other request is refused with a `503` (`Connection: close`, `Retry-After`); `/health` keeps answering so the liveness probe does not restart the pod
+2. Stop accepting connections and **drain**: in-flight requests, REST exports included, run to completion (`ApolloServerPluginDrainHttpServer`). Connections still open after 80 % of the budget are cut
+3. Close all DuckDB connections in the pool, then the rate limiters, then Redis — nothing holds a connection any more at that point
+4. Exit `0` (or `1` if a step failed)
+
+The whole sequence is bounded by `API.SHUTDOWN.TIMEOUT_MS` (`SHUTDOWN_TIMEOUT_MS`, 25 s by default): a watchdog exits with `1` at that deadline whatever is still blocked. It must stay **below** the pod's `terminationGracePeriodSeconds`, otherwise the kubelet's `SIGKILL` cuts the drain; the Helm chart refuses to render when it is not. An export that outlasts the budget is cut (truncated file, no Arrow end-of-stream), so size both to the longest export you accept to finish during a rolling update. Apollo's own termination-signal handling is disabled (`stopOnTerminationSignals: false`): it would re-raise the signal on the process in the middle of the drain.
