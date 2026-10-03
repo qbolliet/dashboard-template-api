@@ -196,8 +196,7 @@ beforeAll(async () => {
 /**
  * Build the default catalog list used in most tests.
  *
- * Returns:
- *     Array with a single read-only 'main' catalog.
+ * @returns Array with a single read-only 'main' catalog.
  */
 const makeCatalogs = (): CatalogConfig[] => [
   { alias: 'main', path: '/abs/main.ducklake', dataPath: '/abs/data/main/', readOnly: true },
@@ -206,11 +205,9 @@ const makeCatalogs = (): CatalogConfig[] => [
 /**
  * Create a DuckDBPool instance with sensible defaults for testing.
  *
- * Args:
- *     overrides: Partial PoolConfig values to override the defaults.
+ * @param overrides - Partial PoolConfig values to override the defaults.
  *
- * Returns:
- *     A configured DuckDBPool instance ready for testing.
+ * @returns A configured DuckDBPool instance ready for testing.
  */
 const makePool = (overrides: Partial<PoolConfig> = {}): DuckDBPoolInstance =>
   new DuckDBPool({
@@ -228,12 +225,9 @@ const makePool = (overrides: Partial<PoolConfig> = {}): DuckDBPoolInstance =>
  * Lets a test tell the old instance apart from the rebuilt one across a reload
  * (the shared mockInstance cannot be distinguished from itself).
  *
- * Args:
- *     connectDelayMs: Delay before connect() resolves (0: next microtask), so
- *         concurrent acquisitions really overlap during the opening.
+ * @param connectDelayMs - Delay before connect() resolves (0: next microtask), so concurrent acquisitions really overlap during the opening.
  *
- * Returns:
- *     A standalone MockDuckInstance with its own closeSync spy.
+ * @returns A standalone MockDuckInstance with its own closeSync spy.
  */
 const makeFreshInstance = (connectDelayMs = 0): MockDuckInstance => {
   const makeConn = (): MockDuckConnection => ({
@@ -256,9 +250,8 @@ const makeFreshInstance = (connectDelayMs = 0): MockDuckInstance => {
 /**
  * Poll a predicate until it returns true or the timeout elapses.
  *
- * Args:
- *     predicate: Condition to wait for.
- *     timeoutMs: Maximum time to wait before throwing.
+ * @param predicate - Condition to wait for.
+ * @param timeoutMs - Maximum time to wait before throwing.
  */
 const waitFor = async (predicate: () => boolean, timeoutMs = 1000): Promise<void> => {
   const deadline = Date.now() + timeoutMs;

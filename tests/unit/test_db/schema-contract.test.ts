@@ -47,13 +47,15 @@ const WITHOUT_PRIMARY_KEY = new Set(['default.no_primary_key']);
 // Les trois tables d'un schéma — et rien d'autre (spec §2)
 const EXPECTED_TABLES = ['dataset_metadata', 'fact_table', 'metadata'];
 
-// Colonnes de `metadata` : [nom, type SQL, nullable] (spec §2.2)
+// Colonnes de `metadata` : [nom, type SQL, nullable] (spec §2.2), alignées sur
+// METADATA_COLUMNS du writer (dt_ducklake_manager/utils/types.py:30-37) : seules
+// name, label, sql_type et les deux booléens y sont NOT NULL
 const METADATA_CONTRACT: Array<[string, string, boolean]> = [
   ['name', 'VARCHAR', false],
   ['label', 'VARCHAR', false],
   ['sql_type', 'VARCHAR', false],
-  ['is_primary_key', 'BOOLEAN', false],
   ['is_categorical', 'BOOLEAN', false],
+  ['is_primary_key', 'BOOLEAN', false],
   ['parent_name', 'VARCHAR', true],
   ['label_for', 'VARCHAR', true],
   ['unit', 'VARCHAR', true],

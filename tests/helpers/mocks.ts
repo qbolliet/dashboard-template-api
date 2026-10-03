@@ -72,8 +72,7 @@ interface MockDatabaseManager {
 /**
  * Create a minimal loader configuration object with default timeout and batch values.
  *
- * Returns:
- *     A LoaderConfig object matching the shape expected by BaseLoader.
+ * @returns A LoaderConfig object matching the shape expected by BaseLoader.
  */
 export const makeLoaderConfig = (): LoaderConfig => ({
   API: {
@@ -102,8 +101,7 @@ export const makeLoaderConfig = (): LoaderConfig => ({
 /**
  * Create a mock pool exposing acquire and release as Jest mock functions.
  *
- * Returns:
- *     A MockPool with jest.fn() for acquire and release.
+ * @returns A MockPool with jest.fn() for acquire and release.
  */
 export const makePool = (): MockPool => ({
   acquire: jest.fn(),
@@ -113,8 +111,7 @@ export const makePool = (): MockPool => ({
 /**
  * Create a simple mock connection for loaders that only use the all() method.
  *
- * Returns:
- *     A MockConnection with jest.fn() for all.
+ * @returns A MockConnection with jest.fn() for all.
  */
 export const makeConnection = (): MockConnection => ({
   all: jest.fn(),
@@ -123,8 +120,7 @@ export const makeConnection = (): MockConnection => ({
 /**
  * Create an extended mock connection for loaders using getAsJsonArray or getWithMetadata.
  *
- * Returns:
- *     A MockExtendedConnection with jest.fn() for all, getAsJsonArray, and getWithMetadata.
+ * @returns A MockExtendedConnection with jest.fn() for all, getAsJsonArray, and getWithMetadata.
  */
 export const makeExtendedConnection = (): MockExtendedConnection => ({
   all: jest.fn(),
@@ -138,13 +134,9 @@ export const makeExtendedConnection = (): MockExtendedConnection => ({
  * Pass a pool to pre-wire getPool's return value; omit for index.test.ts where
  * getPool is reset in beforeEach with specific per-test return values.
  *
- * Args:
- *     pool: Optional MockPool to pre-wire as the return value of getPool.
+ * @param pool - Optional MockPool to pre-wire as the return value of getPool.
  *
- * Returns:
- *     A MockDatabaseManager with jest.fn() for the methods used by loaders
- *     and resolvers (pool access, default catalog/schema, schema allow-list,
- *     served data version).
+ * @returns A MockDatabaseManager with jest.fn() for the methods used by loaders and resolvers (pool access, default catalog/schema, schema allow-list, served data version).
  */
 export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseManager => ({
   getPool: pool ? jest.fn().mockReturnValue(pool) : jest.fn(),

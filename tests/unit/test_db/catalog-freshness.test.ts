@@ -130,10 +130,9 @@ beforeAll(async () => {
  * The schema lists are reconciled with the real pure function, under the
  * given policy (discovery by default, as without `SCHEMAS`).
  *
- * Args:
- *     served: catalog → schema → served version.
- *     onReload: new served versions after a reload (default: unchanged).
- *     policies: catalog → configured schema policy (default: no explicit list).
+ * @param served - catalog → schema → served version.
+ * @param onReload - new served versions after a reload (default: unchanged).
+ * @param policies - catalog → configured schema policy (default: no explicit list).
  */
 const makeTarget = (
   served: Record<string, Record<string, string>>,
@@ -179,9 +178,8 @@ const makeTarget = (
  * The schema list of a catalog is the list of its markers, unless `discovered`
  * gives it (an Error meaning the list could not be read).
  *
- * Args:
- *     markers: catalog → schema → version (null = unreadable), or an Error for the catalog.
- *     discovered: catalog → schema list read, or an Error.
+ * @param markers - catalog → schema → version (null = unreadable), or an Error for the catalog.
+ * @param discovered - catalog → schema list read, or an Error.
  */
 const makeReader = (
   markers: Record<string, Record<string, string | null> | Error>,

@@ -864,14 +864,16 @@ async function createSchema(
     await conn.run(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(alias)}.${quoteIdent(schema)}`);
   }
 
-  // Table metadata — contrat entre la base et l'interface (spec §2.2)
+  // Table metadata — contrat entre la base et l'interface (spec §2.2), colonnes et
+  // contraintes dans l'ordre de METADATA_COLUMNS du writer
+  // (dt_ducklake_manager/utils/types.py)
   await conn.run(`
     CREATE TABLE ${qualify('metadata')} (
       name                VARCHAR NOT NULL,
       label               VARCHAR NOT NULL,
       sql_type            VARCHAR NOT NULL,
-      is_primary_key      BOOLEAN NOT NULL,
-      is_categorical      BOOLEAN NOT NULL,
+      is_categorical      BOOLEAN NOT NULL DEFAULT FALSE,
+      is_primary_key      BOOLEAN NOT NULL DEFAULT FALSE,
       parent_name         VARCHAR,
       label_for           VARCHAR,
       unit                VARCHAR,

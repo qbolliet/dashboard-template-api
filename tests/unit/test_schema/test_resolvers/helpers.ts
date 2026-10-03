@@ -103,8 +103,7 @@ export const clearAggregatedCache = async (): Promise<void> => {
  * Singleton pattern — a single server is started once per test suite to
  * avoid repeated startup overhead across test files.
  *
- * Returns:
- *     Started ApolloServer instance.
+ * @returns Started ApolloServer instance.
  */
 export const getServer = async (): Promise<ApolloServer> => {
   // Initialisation du serveur au premier appel
@@ -121,12 +120,10 @@ export const getServer = async (): Promise<ApolloServer> => {
  * Mirrors the contextValue built by createContext in src/server.ts: catalog
  * and schema are resolved from GraphQL arguments only (no HTTP header).
  *
- * Args:
- *     server: Running ApolloServer instance.
- *     operation: GraphQL query string and optional variables.
+ * @param server - Running ApolloServer instance.
+ * @param operation - GraphQL query string and optional variables.
  *
- * Returns:
- *     Normalized { data, errors } result object.
+ * @returns Normalized { data, errors } result object.
  */
 export const execute = async (
   server: ApolloServer,

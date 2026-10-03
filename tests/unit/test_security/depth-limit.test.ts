@@ -28,14 +28,14 @@ interface MockValidationContext {
 
 /** Nœud Field minimal dans l'AST GraphQL. */
 interface MockFieldNode {
-  kind:         'Field';
-  name:         { value: string };
+  kind: 'Field';
+  name: { value: string };
   selectionSet: MockSelectionSet | null;
 }
 
 /** Nœud InlineFragment minimal dans l'AST GraphQL. */
 interface MockInlineFragmentNode {
-  kind:         'InlineFragment';
+  kind: 'InlineFragment';
   selectionSet: MockSelectionSet;
 }
 
@@ -52,16 +52,13 @@ interface MockSelectionSet {
 
 /** Définition d'opération GraphQL utilisée pour les tests de profondeur. */
 interface MockOperationDefinition {
-  kind:         'OperationDefinition';
+  kind: 'OperationDefinition';
   selectionSet: MockSelectionSet;
 }
 
 /** Document GraphQL contenant des définitions d'opérations et de fragments. */
 interface MockDocument {
-  definitions: Array<
-    MockOperationDefinition |
-    { kind: string; selectionSet: MockSelectionSet }
-  >;
+  definitions: Array<MockOperationDefinition | { kind: string; selectionSet: MockSelectionSet }>;
 }
 
 /** Visiteur retourné par la règle de profondeur avancée (parcours AST complet). */
@@ -78,25 +75,29 @@ interface SimpleDepthLimitVisitor {
 }
 
 /** Fabrique de règle de profondeur avancée. */
-type DepthLimitRuleFactory = (maxDepth: number) => (context: MockValidationContext) => DepthLimitVisitor;
+type DepthLimitRuleFactory = (
+  maxDepth: number,
+) => (context: MockValidationContext) => DepthLimitVisitor;
 
 /** Fabrique de règle de profondeur simple. */
-type SimpleDepthLimitRuleFactory = (maxDepth: number) => (context: MockValidationContext) => SimpleDepthLimitVisitor;
+type SimpleDepthLimitRuleFactory = (
+  maxDepth: number,
+) => (context: MockValidationContext) => SimpleDepthLimitVisitor;
 
 // ─── Configuration mockée ─────────────────────────────────────────────────────
 
 const mockConfig: MockConfig = {
   SECURITY: {
     SECURITY_LIMITS: {
-      DEFAULT_DEPTH_LIMIT: 5
-    }
-  }
+      DEFAULT_DEPTH_LIMIT: 5,
+    },
+  },
 };
 
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
-  config: mockConfig
+  config: mockConfig,
 }));
 
 // ─── Import dynamique ─────────────────────────────────────────────────────────
@@ -107,8 +108,8 @@ let createSimpleDepthLimitRule!: SimpleDepthLimitRuleFactory;
 
 beforeAll(async () => {
   ({ createDepthLimitRule, createSimpleDepthLimitRule } =
-    await import('../../../src/security/depth-limit.js') as {
-      createDepthLimitRule:       DepthLimitRuleFactory;
+    (await import('../../../src/security/depth-limit.js')) as {
+      createDepthLimitRule: DepthLimitRuleFactory;
       createSimpleDepthLimitRule: SimpleDepthLimitRuleFactory;
     });
 });
@@ -151,25 +152,23 @@ describe('createDepthLimitRule', () => {
     /**
      * Builds a synthetic operation AST node with the given nesting depth.
      *
-     * Args:
-     *     depth: Number of nested Field levels to create.
+     * @param depth - Number of nested Field levels to create.
      *
-     * Returns:
-     *     MockOperationDefinition with Field nodes nested to the requested depth.
+     * @returns MockOperationDefinition with Field nodes nested to the requested depth.
      */
     const makeOperation = (depth: number): MockOperationDefinition => {
       // Construction récursive de bas en haut — du nœud le plus profond vers la racine
       let node: MockFieldNode | null = null;
       for (let i = depth; i >= 1; i--) {
         node = {
-          kind:         'Field',
-          name:         { value: `level${i}` },
-          selectionSet: node ? { selections: [node] } : null
+          kind: 'Field',
+          name: { value: `level${i}` },
+          selectionSet: node ? { selections: [node] } : null,
         };
       }
       return {
-        kind:         'OperationDefinition',
-        selectionSet: { selections: node ? [node] : [] }
+        kind: 'OperationDefinition',
+        selectionSet: { selections: node ? [node] : [] },
       };
     };
 
@@ -202,7 +201,7 @@ describe('createDepthLimitRule', () => {
       const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
       const visitor = rule(mockContext);
       const doc: MockDocument = {
-        definitions: [{ kind: 'FragmentDefinition', selectionSet: { selections: [] } }]
+        definitions: [{ kind: 'FragmentDefinition', selectionSet: { selections: [] } }],
       };
       visitor.Document(doc);
       expect(mockContext.reportError).not.toHaveBeenCalled();
@@ -226,17 +225,21 @@ describe('createDepthLimitRule', () => {
       const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
       const visitor = rule(mockContext);
       const doc: MockDocument = {
-        definitions: [{
-          kind: 'OperationDefinition',
-          selectionSet: {
-            selections: [{
-              kind: 'InlineFragment',
-              selectionSet: {
-                selections: [{ kind: 'Field', name: { value: 'a' }, selectionSet: null }]
-              }
-            }]
-          }
-        }]
+        definitions: [
+          {
+            kind: 'OperationDefinition',
+            selectionSet: {
+              selections: [
+                {
+                  kind: 'InlineFragment',
+                  selectionSet: {
+                    selections: [{ kind: 'Field', name: { value: 'a' }, selectionSet: null }],
+                  },
+                },
+              ],
+            },
+          },
+        ],
       };
       visitor.Document(doc);
       expect(mockContext.reportError).not.toHaveBeenCalled();
@@ -251,25 +254,29 @@ describe('createDepthLimitRule', () => {
         selectionSet: {
           selections: [
             {
-              kind: 'Field', name: { value: 'deep' }, selectionSet: {
-                selections: [{ kind: 'Field', name: { value: 'deeper' }, selectionSet: null }]
-              }
-            }
-          ]
-        }
+              kind: 'Field',
+              name: { value: 'deep' },
+              selectionSet: {
+                selections: [{ kind: 'Field', name: { value: 'deeper' }, selectionSet: null }],
+              },
+            },
+          ],
+        },
       };
       const mockContext: MockValidationContext = {
         reportError: jest.fn(),
-        getFragment:  jest.fn().mockReturnValue(fragment)
+        getFragment: jest.fn().mockReturnValue(fragment),
       };
       const visitor = rule(mockContext);
       const doc: MockDocument = {
-        definitions: [{
-          kind: 'OperationDefinition',
-          selectionSet: {
-            selections: [{ kind: 'FragmentSpread', name: { value: 'MyFragment' } }]
-          }
-        }]
+        definitions: [
+          {
+            kind: 'OperationDefinition',
+            selectionSet: {
+              selections: [{ kind: 'FragmentSpread', name: { value: 'MyFragment' } }],
+            },
+          },
+        ],
       };
       visitor.Document(doc);
       expect(mockContext.reportError).toHaveBeenCalled();
@@ -280,16 +287,18 @@ describe('createDepthLimitRule', () => {
       const rule = createDepthLimitRule(5);
       const mockContext: MockValidationContext = {
         reportError: jest.fn(),
-        getFragment:  jest.fn().mockReturnValue(null)
+        getFragment: jest.fn().mockReturnValue(null),
       };
       const visitor = rule(mockContext);
       const doc: MockDocument = {
-        definitions: [{
-          kind: 'OperationDefinition',
-          selectionSet: {
-            selections: [{ kind: 'FragmentSpread', name: { value: 'UnknownFragment' } }]
-          }
-        }]
+        definitions: [
+          {
+            kind: 'OperationDefinition',
+            selectionSet: {
+              selections: [{ kind: 'FragmentSpread', name: { value: 'UnknownFragment' } }],
+            },
+          },
+        ],
       };
       expect(() => visitor.Document(doc)).not.toThrow();
       expect(mockContext.reportError).not.toHaveBeenCalled();
@@ -362,7 +371,7 @@ describe('createSimpleDepthLimitRule', () => {
 
       visitor.Field.enter(node); // profondeur 1
       visitor.Field.enter(node); // profondeur 2
-      visitor.Field.leave();     // retour à 1
+      visitor.Field.leave(); // retour à 1
       visitor.Field.enter(node); // profondeur 2 à nouveau — dans la limite
       expect(mockContext.reportError).not.toHaveBeenCalled();
     });

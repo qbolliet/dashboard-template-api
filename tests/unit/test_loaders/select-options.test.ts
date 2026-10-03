@@ -400,6 +400,15 @@ describe('SelectOptionsTreeLoader', () => {
     expect(sql).toContain('SELECT DISTINCT "a", "b", "c"');
   });
 
+  test('un champ racine, sans parente, donne une chaîne à un seul niveau', async () => {
+    mockHierarchy(GEOGRAPHY);
+
+    await loadTree({ fieldName: 'region' });
+
+    const [sql] = distinctCall();
+    expect(sql).toContain('SELECT DISTINCT "region" FROM');
+  });
+
   test('une parente non déclarée arrête la remontée', async () => {
     mockHierarchy({ commune: 'ghost' });
 

@@ -8,11 +8,11 @@
 
 // Initialisation de l'environnement de test — exécution avant l'injection des globals Jest.
 
-// Forçage de l'environnement de développement (config-loader traite "test" comme "development")
+// Branche « development » de la configuration (ENVIRONMENT: ${NODE_ENV:-development} dans
+// config/main.yaml) : une valeur « test » ne correspondrait à aucune branche d'environnement
 process.env.NODE_ENV = 'development';
 
-// Configuration de la base de données de test — pointage vers les fichiers DuckLake de test
-process.env.DB_PATH = 'test-data/test-database.db';
+// Catalogue default de test — fichiers DuckLake générés par tests/setup/setup-test-data.ts
 process.env.DEFAULT_CATALOG_PATH = 'data/test-default.ducklake';
 process.env.DEFAULT_DATA_PATH = 'data/test-default_data/';
 process.env.DEFAULT_READ_ONLY = 'true';
@@ -48,18 +48,6 @@ process.env.REDIS_KEY_PREFIX = 'test:api:';
 if (!process.env.DEBUG) {
   process.env.LOG_LEVEL = 'error';
 }
-
-// Surcharges de configuration spécifiques aux tests
-process.env.TEST_MODE = 'true';
-process.env.CACHE_TTL = '1000'; // TTL court pour les tests
-process.env.MAX_QUERY_COMPLEXITY = '1000';
-process.env.RATE_LIMIT_MAX = '1000'; // Limites élevées pour les tests
-// Timeouts élevés pour absorber la latence de démarrage à froid de DuckDB en environnement de test
-process.env.METADATA_TIMEOUT = '15000';
-process.env.SELECT_OPTIONS_TIMEOUT = '15000';
-
-// Désactivation des services externes
-process.env.DISABLE_EXTERNAL_SERVICES = 'true';
 
 // Substitution de la console globale pour réduire le bruit pendant les tests
 if (!process.env.DEBUG) {

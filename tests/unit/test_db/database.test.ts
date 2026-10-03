@@ -169,11 +169,9 @@ const fsStat: jest.Mock = jest.fn().mockReturnValue({ size: 1024, mtime: new Dat
 /**
  * Create a mock DuckDBPool instance reflecting the given configuration.
  *
- * Args:
- *     cfg: Pool constructor configuration.
+ * @param cfg - Pool constructor configuration.
  *
- * Returns:
- *     A MockPool with jest mock methods.
+ * @returns A MockPool with jest mock methods.
  */
 const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig): MockPool => {
   const aliases = (cfg.catalogs ?? []).map((c) => c.alias);
@@ -817,8 +815,7 @@ describe('DatabaseManager', () => {
     /**
      * Makes the pool connection answer the dataset_metadata probe per schema.
      *
-     * Args:
-     *     markers: "catalog.schema" → row returned (undefined = table missing).
+     * @param markers - "catalog.schema" → row returned (undefined = table missing).
      */
     const answerProbe = (markers: Record<string, Record<string, unknown> | undefined>): void => {
       const all = jest.fn(async (sql: string) => {
