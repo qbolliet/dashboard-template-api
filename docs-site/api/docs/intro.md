@@ -36,7 +36,7 @@ The API is intentionally unauthenticated. Access is protected at the network lev
 - **Cross-database comparisons** — compare facts across two catalogs with delta and percentage values
 - **Select options** — dynamic dropdown lists for any categorical field, with optional full-text search
 - **Redis cache** — automatic result caching with per-type TTL and on-demand invalidation
-- **Security layers** — query depth and complexity limits, XSS/SQL input sanitization, per-IP rate limiting
+- **Security layers** — query depth and complexity limits, identifier validation (filter values are bound parameters), per-IP rate limiting
 - **Observability** — structured JSON logging (Winston), per-request metrics, `/health`, `/ready`, `/metrics` endpoints
 
 ## Quick start

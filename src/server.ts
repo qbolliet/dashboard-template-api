@@ -21,6 +21,7 @@ import { createLoaders } from './loaders/index.js';
 import type { LoadersCollection } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeAllConnections, databaseManager } from './db/index.js';
+import type { DatabaseManager } from './db/database-manager.js';
 import { redis } from './cache/index.js';
 import {
   initializeSecurityManager,
@@ -56,8 +57,7 @@ interface ServerMetrics {
 interface ServerContext {
   requestId: string;
   loaders: LoadersCollection;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  databaseManager: any;
+  databaseManager: DatabaseManager;
   /**
    * Returns loaders bound to the given catalog/schema (GraphQL arguments
    * only — see `contextScope`), or null to reuse `loaders`.
@@ -87,7 +87,7 @@ interface MutableSingleResult {
 type SecurityManagerInstance = ReturnType<typeof initializeSecurityManager>;
 
 /** Options overriding the configuration when building the Apollo server. */
-interface ApolloServerOverrides {
+export interface ApolloServerOverrides {
   /** Forces introspection on or off instead of API.GRAPHQL.INTROSPECTION. */
   introspection?: boolean;
   /**
@@ -356,17 +356,6 @@ async function startServer(): Promise<void> {
       }),
     );
   }
-
-  // Contrôle du cache HTTP selon le chemin de la requête
-  app.use((req: Request, res: Response, next: NextFunction): void => {
-    if (config.CACHE.HTTP_CACHE.PUBLIC_PATHS.some((path) => req.path.startsWith(path))) {
-      res.set('Cache-Control', `public, max-age=${config.CACHE.TTL.DEFAULT}`);
-      res.set('Vary', config.CACHE.HTTP_CACHE.VARY_BY_HEADERS.join(', '));
-    } else {
-      res.set('Cache-Control', 'no-store');
-    }
-    next();
-  });
 
   // Création du gestionnaire de sécurité
   const securityManager = initializeSecurityManager(config.SECURITY);

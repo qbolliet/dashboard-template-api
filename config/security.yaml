@@ -13,8 +13,6 @@ SECURITY:
     MAX_BURST_REQUESTS: 20
     # Durée de la fenêtre de rafale (1 minute)
     BURST_WINDOW_MS: 60000
-    # Ignorer les requêtes échouées dans le comptage
-    SKIP_FAILED_REQUESTS: false
     # Activation de la limitation (false = passe-plat, réservé aux tests)
     ENABLED: ${RATE_LIMIT_ENABLED:-true}
     # Proxys de confiance (réglage Express « trust proxy ») : IPs, blocs CIDR ou plages
@@ -127,15 +125,6 @@ SECURITY:
     SLOW_QUERY_THRESHOLD: ${SLOW_QUERY_THRESHOLD:-1000}
     # Logger toutes les métriques (debug) — surchargeable via LOG_ALL_SECURITY_METRICS
     LOG_ALL_METRICS: ${LOG_ALL_SECURITY_METRICS:-false}
-
-# Configuration des timeouts basés sur la complexité
-TIMEOUTS:
-  # Timeout de base en millisecondes
-  BASE_TIMEOUT: 5000
-  # Timeout additionnel par point de complexité
-  TIMEOUT_PER_COMPLEXITY: 100
-  # Timeout maximum en millisecondes
-  MAX_TIMEOUT: 30000
 
 # Configuration des seuils de sécurité
 SECURITY_LIMITS:

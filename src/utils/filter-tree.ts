@@ -261,7 +261,7 @@ const VALUELESS_SQL: Partial<Record<FilterOperation, string>> = {
   IS_NOT_FALSE: 'IS NOT FALSE',
 };
 
-// Correspondance des opérations de comparaison vers les opérateurs SQL
+/** SQL operator of each comparison operation (`EQ` → `=`, `GT` → `>`, …). */
 const COMPARISON_SQL: Partial<Record<FilterOperation, string>> = {
   EQ: '=',
   NEQ: '<>',
@@ -361,7 +361,7 @@ const isDecimalType = (normalized: string): boolean => {
  * INTERVAL, BLOB, nested types, an empty or malformed name — belongs to the
  * `other` family, so no caller needs a try/catch. The numeric, date, text and
  * boolean families are a strict allow-list, hence safe to interpolate in a CAST
- * expression (see {@link castTypeOf}); `other` is never interpolated anywhere,
+ * expression (see `castTypeOf`); `other` is never interpolated anywhere,
  * since only the value-less IS_NULL / IS_NOT_NULL apply to it.
  *
  * @param sqlType - SQL type name as stored in metadata.sqlType.

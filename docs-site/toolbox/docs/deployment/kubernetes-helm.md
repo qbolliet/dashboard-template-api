@@ -133,6 +133,19 @@ helm history api -n dta
 helm rollback api <revision> -n dta
 ```
 
+### After a code deployment, flush the cache
+
+Redis keys are versioned by the data each pod serves, not by the code. A release that changes the content of a response for the same arguments would keep being served from Redis until the TTL expires. Once the rollout has finished, flush the cache:
+
+```bash
+kubectl rollout status deployment/api -n dta
+
+# from inside the cluster (Service DNS), with the admin key
+curl -X POST -H "x-admin-key: $ADMIN_API_KEY" http://api:80/api/cache/invalidate-all
+```
+
+Call it after `kubectl rollout status` returns, not during the rollout: the old pods are still running and would write their entries again. See [Caching](../architecture/caching#after-a-code-deployment).
+
 A `checksum/config` and `checksum/secret` annotation on the pod template ensures pods restart whenever the ConfigMap or chart-managed Secret changes — no manual restart needed.
 
 ## Multiple catalogs

@@ -13,7 +13,7 @@ All configuration files live in `config/` and are loaded and deep-merged by `src
 | ------------------------------------ | ----------------------------------------------------- |
 | [`config/api.yaml`](./api)           | Port, CORS, pagination limits, timeouts, data loaders |
 | [`config/database.yaml`](./database) | DuckLake catalog paths, connection pool, S3           |
-| [`config/security.yaml`](./security) | Rate limiting, complexity, depth limits, sanitization |
+| [`config/security.yaml`](./security) | Rate limiting, complexity, depth limits               |
 | [`config/cache.yaml`](./cache)       | Redis connection, TTL values, cache invalidation      |
 | [`config/logging.yaml`](./logging)   | Log levels, transports, sampling, sanitized fields    |
 

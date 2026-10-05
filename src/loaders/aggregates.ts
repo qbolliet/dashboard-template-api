@@ -29,7 +29,7 @@ interface AggregatePage {
  * query — and, as a separate variant with its own cache entry, the group count
  * of buildGroupCountQuery, so that paging through the groups never recounts
  * them. The cache prefix `aggregated-facts` keeps the entries under the
- * existing invalidation pattern.
+ * patterns of the manual flush.
  */
 class AggregatesLoader extends FactQueryLoader {
   /**

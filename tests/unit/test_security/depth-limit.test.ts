@@ -1,5 +1,5 @@
 /**
- * Unit tests for createDepthLimitRule and createSimpleDepthLimitRule
+ * Unit tests for createDepthLimitRule
  * (src/security/depth-limit.ts).
  *
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
@@ -66,23 +66,10 @@ interface DepthLimitVisitor {
   Document: (doc: MockDocument) => void;
 }
 
-/** Visiteur retourné par la règle de profondeur simple (compteur de pile). */
-interface SimpleDepthLimitVisitor {
-  Field: {
-    enter: (node: { name: { value: string } }) => void;
-    leave: () => void;
-  };
-}
-
 /** Fabrique de règle de profondeur avancée. */
 type DepthLimitRuleFactory = (
   maxDepth: number,
 ) => (context: MockValidationContext) => DepthLimitVisitor;
-
-/** Fabrique de règle de profondeur simple. */
-type SimpleDepthLimitRuleFactory = (
-  maxDepth: number,
-) => (context: MockValidationContext) => SimpleDepthLimitVisitor;
 
 // ─── Configuration mockée ─────────────────────────────────────────────────────
 
@@ -104,14 +91,11 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 
 // Assertions d'assignation définitive — assignés dans beforeAll avant tout test.
 let createDepthLimitRule!: DepthLimitRuleFactory;
-let createSimpleDepthLimitRule!: SimpleDepthLimitRuleFactory;
 
 beforeAll(async () => {
-  ({ createDepthLimitRule, createSimpleDepthLimitRule } =
-    (await import('../../../src/security/depth-limit.js')) as {
-      createDepthLimitRule: DepthLimitRuleFactory;
-      createSimpleDepthLimitRule: SimpleDepthLimitRuleFactory;
-    });
+  ({ createDepthLimitRule } = (await import('../../../src/security/depth-limit.js')) as {
+    createDepthLimitRule: DepthLimitRuleFactory;
+  });
 });
 
 // ─── createDepthLimitRule ─────────────────────────────────────────────────────
@@ -302,92 +286,6 @@ describe('createDepthLimitRule', () => {
       };
       expect(() => visitor.Document(doc)).not.toThrow();
       expect(mockContext.reportError).not.toHaveBeenCalled();
-    });
-  });
-});
-
-// ─── createSimpleDepthLimitRule ───────────────────────────────────────────────
-
-describe('createSimpleDepthLimitRule', () => {
-  describe('parameter validation', () => {
-    test('throws when maxDepth is less than 1', () => {
-      expect(() => createSimpleDepthLimitRule(0)).toThrow('maxDepth must be a positive integer');
-    });
-
-    test('throws when maxDepth is a float', () => {
-      expect(() => createSimpleDepthLimitRule(2.5)).toThrow('maxDepth must be a positive integer');
-    });
-
-    test('accepts a valid positive integer', () => {
-      expect(() => createSimpleDepthLimitRule(3)).not.toThrow();
-    });
-  });
-
-  describe('rule factory', () => {
-    test('returns a function', () => {
-      expect(typeof createSimpleDepthLimitRule(3)).toBe('function');
-    });
-
-    test('the factory returns a visitor with Field enter/leave', () => {
-      const rule = createSimpleDepthLimitRule(3);
-      const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
-      const visitor = rule(mockContext);
-      expect(typeof visitor.Field.enter).toBe('function');
-      expect(typeof visitor.Field.leave).toBe('function');
-    });
-  });
-
-  describe('depth enforcement via stack', () => {
-    test('does not report error when nesting stays within maxDepth', () => {
-      const rule = createSimpleDepthLimitRule(3);
-      const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
-      const visitor = rule(mockContext);
-      const node = { name: { value: 'x' } };
-
-      visitor.Field.enter(node); // profondeur 1
-      visitor.Field.enter(node); // profondeur 2
-      visitor.Field.enter(node); // profondeur 3
-      expect(mockContext.reportError).not.toHaveBeenCalled();
-    });
-
-    test('reports error when nesting exceeds maxDepth', () => {
-      const rule = createSimpleDepthLimitRule(2);
-      const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
-      const visitor = rule(mockContext);
-      const node = { name: { value: 'x' } };
-
-      visitor.Field.enter(node); // profondeur 1
-      visitor.Field.enter(node); // profondeur 2
-      visitor.Field.enter(node); // profondeur 3 → dépassement de 2
-      expect(mockContext.reportError).toHaveBeenCalledWith(expect.any(GraphQLError));
-    });
-
-    test('leave pops from the stack', () => {
-      // Dépilage via leave — la profondeur doit revenir à 1 après leave
-      const rule = createSimpleDepthLimitRule(2);
-      const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
-      const visitor = rule(mockContext);
-      const node = { name: { value: 'x' } };
-
-      visitor.Field.enter(node); // profondeur 1
-      visitor.Field.enter(node); // profondeur 2
-      visitor.Field.leave(); // retour à 1
-      visitor.Field.enter(node); // profondeur 2 à nouveau — dans la limite
-      expect(mockContext.reportError).not.toHaveBeenCalled();
-    });
-
-    test('reports error with DEPTH_LIMIT_EXCEEDED extension code and maxDepth', () => {
-      const rule = createSimpleDepthLimitRule(1);
-      const mockContext: MockValidationContext = { reportError: jest.fn(), getFragment: jest.fn() };
-      const visitor = rule(mockContext);
-      const node = { name: { value: 'x' } };
-
-      visitor.Field.enter(node); // profondeur 1
-      visitor.Field.enter(node); // profondeur 2 → dépassement de 1
-      // Extraction de l'erreur rapportée pour vérification des extensions
-      const err = mockContext.reportError.mock.calls[0][0] as GraphQLError;
-      expect(err.extensions.code).toBe('DEPTH_LIMIT_EXCEEDED');
-      expect(err.extensions.maxDepth).toBe(1);
     });
   });
 });

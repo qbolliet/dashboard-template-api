@@ -3,7 +3,6 @@ import { GraphQLError } from 'graphql';
 import type { DocumentNode, FragmentDefinitionNode, OperationDefinitionNode } from 'graphql';
 import type { RequestHandler } from 'express';
 import { createContextLogger } from '../utils/logger.js';
-import { previewValue } from '../utils/preview-value.js';
 import { RateLimiter } from './rate-limiter.js';
 import { QueryComplexityAnalyzer } from './complexity-analyzer.js';
 import { createRateLimitMiddleware } from './rate-limit-middleware.js';
@@ -253,43 +252,20 @@ class SecurityManager {
   /**
    * Validates a GraphQL operation before execution begins.
    *
-   * Checks disallowed operation names and non-query operation types
-   * (mutations and subscriptions are blocked). The text of the query is not
+   * Rejects non-query operation types (mutations and subscriptions are
+   * blocked). The text of the query is not
    * pattern-matched: see the note at the top of this module.
    *
    * @param operation - Parsed GraphQL operation definition.
    * @throws {GraphQLError} When the operation fails any validation check.
    */
   validateRequest(operation: GraphQLOperation): void {
-    // 1. Validation du nom de l'opération
-    const operationName = operation?.name?.value;
-    if (operationName && !this.isOperationAllowed(operationName)) {
-      throw new GraphQLError(`Operation ${previewValue(operationName)} is not allowed`, {
-        extensions: { code: 'OPERATION_NOT_ALLOWED', http: { status: 400 } },
-      });
-    }
-
-    // 2. Restriction aux requêtes (mutations et subscriptions interdites)
+    // Restriction aux requêtes (mutations et subscriptions interdites)
     if (operation?.operation && operation.operation !== 'query') {
       throw new GraphQLError(`Only queries are allowed, got ${operation.operation}`, {
         extensions: { code: 'OPERATION_TYPE_NOT_ALLOWED', http: { status: 400 } },
       });
     }
-  }
-
-  /**
-   * Determines whether a named operation is permitted to execute.
-   *
-   * @param operationName - Name of the GraphQL operation.
-   * @returns True when the operation may proceed.
-   */
-  private isOperationAllowed(operationName: string): boolean {
-    // Autorisation de l'introspection en dehors de la production
-    if (process.env['NODE_ENV'] !== 'production' && operationName === 'IntrospectionQuery') {
-      return true;
-    }
-    // Toutes les opérations nommées sont autorisées par défaut
-    return true;
   }
 
   /**
@@ -321,18 +297,5 @@ const initializeSecurityManager = (securityConfig: SecurityConfig): SecurityMana
   return securityManagerInstance;
 };
 
-/**
- * Returns the global SecurityManager singleton, initializing with defaults if needed.
- *
- * @returns The active SecurityManager instance.
- */
-const getSecurityManager = (): SecurityManager => {
-  if (!securityManagerInstance) {
-    // Initialisation avec la configuration YAML par défaut
-    securityManagerInstance = new SecurityManager();
-  }
-  return securityManagerInstance;
-};
-
-export { SecurityManager, initializeSecurityManager, getSecurityManager };
+export { SecurityManager, initializeSecurityManager };
 export type { GraphQLContext, GraphQLOperation };

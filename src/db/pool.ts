@@ -385,7 +385,11 @@ class DuckDBPool {
   private readonly acquireCounters: Omit<AcquireStats, 'waitMs'>;
   private readonly waitSamples: number[];
 
-  // Initialisation
+  /**
+   * Creates a pool; the DuckDB instance is created lazily, by the first `acquire()`.
+   *
+   * @param poolConfig - Pool size, timeouts and the catalogs to attach.
+   */
   constructor(poolConfig: PoolConfig) {
     // Stockage de la configuration du pool
     this.poolConfig = poolConfig;
@@ -557,7 +561,7 @@ class DuckDBPool {
    *
    * Runs a single query against `information_schema.schemata` on the live shared
    * instance, filtering out the engine's internal schemas. The result is the
-   * authoritative inventory of what DuckLake reports; the {@link DatabaseManager}
+   * authoritative inventory of what DuckLake reports; the `DatabaseManager`
    * then reconciles it with the configured allow-list (intersection + warn for
    * configured-but-missing schemas).
    *
@@ -584,7 +588,7 @@ class DuckDBPool {
    * Unlike {@link reload}, this does not rebuild the whole instance: it runs a
    * `DETACH` followed by the catalog's ATTACH statements on the current instance,
    * so one catalog can be refreshed without touching the others. Calls are
-   * serialized per alias via {@link reloadOnePromises} to dedupe concurrent
+   * serialized per alias via `reloadOnePromises` to dedupe concurrent
    * reattachments of the same catalog.
    *
    * Caveat (shared single instance): a query already running against this catalog

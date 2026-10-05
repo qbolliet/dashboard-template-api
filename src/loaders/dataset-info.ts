@@ -12,7 +12,7 @@ import type { CatalogSchemaKey } from './catalog.js';
 /**
  * The single row of the `dataset_metadata` table of a schema.
  *
- * Mirrors specification-bdd.md §2.3: `updatedAt` and `schemaVersion` are always
+ * Mirrors dashboard-template-database/docs/schema.md, section `dataset_metadata`: `updatedAt` and `schemaVersion` are always
  * populated by the writer, the three descriptive fields are optional, and
  * `clusterBy` is the decoded form of the JSON `cluster_by` column.
  */
@@ -66,8 +66,8 @@ function decodeClusterBy(raw: unknown): string[] {
  * Loader for the dataset_metadata table of a catalog/schema.
  *
  * Shares the cache lifetime of the catalog metadata loader: both describe the
- * contract of a schema and are invalidated together by the catalog/schema
- * prefix (see cache/cache-invalidation.ts).
+ * contract of a schema, and their keys move together with the data version
+ * of the schema (see cache/cache-keys.ts).
  */
 class DatasetInfoLoader extends BaseQueryLoader {
   // Initialisation sans identifiant de base (le catalogue arrive par la clé)

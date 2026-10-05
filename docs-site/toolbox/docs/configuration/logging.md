@@ -98,9 +98,6 @@ Values for these fields are redacted from all log output. Add fields to this lis
 LOGGING:
   PERFORMANCE:
     SLOW_QUERY_THRESHOLD: ${SLOW_QUERY_THRESHOLD:-1000}
-    LOG_SLOW_QUERIES:
-      development: true
-      production: ${LOG_SLOW_QUERIES_PROD:-false}
 ```
 
-Slow query logging writes a warning entry with the full query context and execution time. Enabled in development by default, opt-in in production.
+A query slower than `SLOW_QUERY_THRESHOLD` milliseconds is logged as a warning with its execution time.

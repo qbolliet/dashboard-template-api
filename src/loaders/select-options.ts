@@ -121,7 +121,7 @@ function toOptionNode(node: BuildNode): SelectOptionNode {
  * Builds a nested option tree from the distinct rows of a column chain.
  *
  * Rows must come ordered by the chain columns: siblings keep that order.
- * A branch stops at its first NULL level (specification-bdd.md §2.5), so an
+ * A branch stops at its first NULL level (dashboard-template-database/docs/schema.md, section Column hierarchies and the `NULL` convention), so an
  * irregular branch ends on a shallower leaf and no empty node is produced.
  * A level with a label column reads its label from the `_label_<i>` alias of
  * the row, falling back to the code when the label is NULL.
@@ -176,7 +176,7 @@ function buildOptionTree(
  *
  * The fact table stores labels directly (no dim_* table exists): a DISTINCT
  * scan of the column, with `label = value` — except for a code column with a
- * label column (specification-bdd.md §2.6), read from the same fact table
+ * label column (dashboard-template-database/docs/schema.md, section Codes and value labels), read from the same fact table
  * row: `value` = code, `label` = label.
  */
 class SelectOptionsLoader extends BaseQueryLoader {
@@ -469,8 +469,8 @@ const createSelectOptionsLoader = (
 /**
  * Creates a DataLoader for select option trees of column hierarchies.
  *
- * Shares the `select-options` cache prefix (so the existing invalidation
- * patterns cover it) under a dedicated `tree` variant.
+ * Shares the `select-options` cache prefix under a dedicated `tree` variant,
+ * so a manual flush of the schema covers it.
  *
  * @param catalogId - Catalog alias to query; null uses the default catalog.
  * @param schema - DuckLake schema within the catalog; null uses the catalog default.

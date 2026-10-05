@@ -20,7 +20,7 @@ Express (HTTP middleware)
    Apollo Server (GraphQL)
   ├─ Depth limit validation rule
   ├─ Complexity analysis
-  ├─ Input sanitization
+  ├─ Identifier validation
   └─ Field-level security middleware
         │
         ▼
@@ -80,7 +80,7 @@ on any replica, without any call from the updater. See [Data refresh](../deploym
 
 ### Data loaders (`src/loaders/`)
 
-DataLoaders batch and deduplicate DB calls within a single GraphQL request. Each loader has a per-type TTL in the DataLoader cache (in-memory, request-scoped) that complements the Redis cache.
+DataLoaders batch and deduplicate DB calls within a single GraphQL request. Each loader also writes its results to Redis with a per-type TTL (`API.LOADERS` in `config/api.yaml`).
 
 | Loader                | Batches                  |
 | --------------------- | ------------------------ |
@@ -108,7 +108,6 @@ See [Caching](./caching).
 | `cache.ts`          | Redis cache helpers (get, set, invalidate)                                |
 | `timeout.ts`        | Complexity-based query timeout computation                                |
 | `fact-partition.ts` | Splits a fact row into its keys and its measures                          |
-| `utils.ts`          | Shared utility functions                                                  |
 
 ## Request lifecycle
 
@@ -117,7 +116,7 @@ See [Caching](./caching).
 3. **Apollo** — parses and validates the GraphQL query
 4. **Depth check** — rejects queries deeper than the configured limit
 5. **Complexity check** — computes a weighted complexity score; rejects if over threshold
-6. **Input sanitization** — strips XSS/SQL patterns from all string arguments
+6. **Identifier validation** — column and schema names are checked against the `metadata` table; filter values are bound parameters
 7. **Execution** — resolvers fire; DataLoaders batch concurrent DB calls
 8. **Redis cache** — resolver results are cached before returning to the client
 9. **Response** — Apollo serialises the result; Express adds cache headers

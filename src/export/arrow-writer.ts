@@ -55,7 +55,7 @@ import type {
  */
 
 /** How the values of one column are packed into an Arrow buffer. */
-type ColumnKind =
+export type ColumnKind =
   | 'int'
   | 'bigint'
   | 'float'

@@ -71,7 +71,7 @@ const TIME_ZONE_TYPES = new Set(['TIMESTAMP WITH TIME ZONE', 'TIMESTAMPTZ']);
  * How a grained column is truncated: a DATE is cast back to DATE (date_trunc
  * returns a TIMESTAMP), a time-zoned timestamp is truncated in UTC.
  */
-type Truncation = 'date' | 'timestamp' | 'timestamptz';
+export type Truncation = 'date' | 'timestamp' | 'timestamptz';
 
 /** A group column, resolved against the metadata. */
 interface ResolvedGroup {

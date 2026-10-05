@@ -26,7 +26,6 @@ Every YAML value supports the `${VAR:-default}` syntax:
 ```yaml
 API:
   PORT: ${PORT:-4000} # uses $PORT env var, falls back to 4000
-  DOMAIN: ${API_DOMAIN:-https://your-production-domain.com}
 ```
 
 Set variables in your `.env` file (loaded via `dotenv`) or inject them from your deployment environment.

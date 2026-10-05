@@ -5,7 +5,7 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from '../utils/config-loader.js';
 
 /** Address matcher built from a METRICS.ALLOWED_IPS list. */
-type IpMatcher = (ip: string | undefined) => boolean;
+export type IpMatcher = (ip: string | undefined) => boolean;
 
 // Préfixe d'une IPv4 reçue sur une socket double pile (::ffff:10.0.0.1)
 const IPV4_MAPPED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i;

@@ -27,7 +27,7 @@ Every client IP is subject to two sliding-window limits configured in `config/se
 
 When a limit is hit the server returns HTTP `429 Too Many Requests`.
 
-Failed requests are not counted by default (`SKIP_FAILED_REQUESTS: false` means failed requests ARE counted — set to `true` to only count successful ones).
+Every request counts toward the limits, whatever its outcome.
 
 Limits apply per client IP. If you deploy behind a reverse proxy, configure `TRUSTED_PROXIES` (IPs or CIDR blocks, e.g. `'["10.0.0.0/8"]'`) so that the real client IP is read from the `x-forwarded-for` header.
 
@@ -57,11 +57,4 @@ Cross-catalog queries (`compareFacts`, `compareAggregatedFacts`) accept two expl
 
 ## HTTP cache headers
 
-Responses from `/graphql` include `Cache-Control` headers optimised for CDN and browser caching:
-
-```
-Cache-Control: public, max-age=<TTL>
-Vary: accept-encoding, accept
-```
-
-TTL values per data type are set in `config/cache.yaml`.
+Responses from `/graphql` carry `Cache-Control: no-store`: they are cached server-side in Redis only, never by a CDN or a browser.

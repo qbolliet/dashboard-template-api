@@ -1,6 +1,5 @@
 API:
   PORT: ${PORT:-4000}
-  DOMAIN: ${API_DOMAIN:-https://your-production-domain.com}
 
   CORS:
     # Aucun cookie n'est utilisé par l'API : pas de credentials cross-origin
@@ -102,13 +101,11 @@ API:
   SECURITY_THRESHOLDS:
     HSTS_MAX_AGE: 31536000
     VALIDATION_MAX_LENGTH: 500
-    ERROR_TRUNCATION_LENGTH: 50
     QUERY_SNIPPET_LENGTH: 100
 
   # Data loader configuration
   LOADERS:
     BATCH_SIZE: 10
-    MAX_BATCH_SIZE: 50
     DEFAULT_CACHE_TIMEOUT: 300
     FACT_CACHE_TIMEOUT: 300
     METADATA_CACHE_TIMEOUT: 600

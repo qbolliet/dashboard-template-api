@@ -19,7 +19,6 @@ interface RateLimiterConfig {
   windowMs: number;
   maxBurstRequests: number;
   burstWindowMs: number;
-  skipFailedRequests: boolean;
   keyGenerator: (req: HttpRequest) => string;
   skip: (req: HttpRequest) => boolean;
 }
@@ -97,7 +96,6 @@ class RateLimiter {
       windowMs: (rateLimitConfig['WINDOW_MS'] as number) ?? 15 * 60 * 1000,
       maxBurstRequests: (rateLimitConfig['MAX_BURST_REQUESTS'] as number) ?? 20,
       burstWindowMs: (rateLimitConfig['BURST_WINDOW_MS'] as number) ?? 60 * 1000,
-      skipFailedRequests: (rateLimitConfig['SKIP_FAILED_REQUESTS'] as boolean) ?? false,
       keyGenerator:
         (rateLimitConfig['KEY_GENERATOR'] as (req: HttpRequest) => string) ??
         this.defaultKeyGenerator.bind(this),

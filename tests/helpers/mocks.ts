@@ -20,7 +20,6 @@ interface LoaderConfig {
       METADATA_CACHE_TIMEOUT: number;
       FACT_CACHE_TIMEOUT: number;
       SELECT_OPTIONS_CACHE_TIMEOUT: number;
-      MAX_BATCH_SIZE: number;
     };
     PAGINATION: {
       MAX_LIMIT: number;
@@ -82,7 +81,6 @@ export const makeLoaderConfig = (): LoaderConfig => ({
       METADATA_CACHE_TIMEOUT: 600000,
       FACT_CACHE_TIMEOUT: 300000,
       SELECT_OPTIONS_CACHE_TIMEOUT: 600000,
-      MAX_BATCH_SIZE: 50,
     },
     PAGINATION: { MAX_LIMIT: 1000, MAX_OFFSET: 10000 },
     // Échéances des lots (queryTimeout des loaders)

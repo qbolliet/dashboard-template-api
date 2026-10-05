@@ -22,7 +22,7 @@ export interface Loaders {
 export type Fact = Record<string, unknown>;
 
 /** Result of the partition: a fact carrying its coordinates and its measures. */
-type PartitionedFact = Fact & {
+export type PartitionedFact = Fact & {
   keys: FieldValueEntry[];
   measures: FieldValueEntry[];
 };

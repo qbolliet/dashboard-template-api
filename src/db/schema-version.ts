@@ -9,7 +9,7 @@ import { createContextLogger } from '../utils/logger.js';
  * Schema version guard for DuckLake catalogs.
  *
  * The database declares its format through `dataset_metadata.schema_version`
- * (specification-bdd.md §2.3). A catalog written in an older format — one
+ * (dashboard-template-database/docs/schema.md, section `dataset_metadata`). A catalog written in an older format — one
  * without a `dataset_metadata` table at all — or in a version this API does not
  * support must not be read as if it were conformant.
  *
@@ -187,21 +187,9 @@ function isSchemaSupported(catalog: string, schema: string): boolean {
   return statuses.get(statusKey(catalog, schema))?.supported ?? true;
 }
 
-/**
- * Returns the recorded verdict of a catalog/schema, for diagnostics.
- *
- * @param catalog - Catalog alias.
- * @param schema - Schema name within the catalog.
- * @returns The recorded status, or undefined when the pair was never probed.
- */
-function getSchemaVersionStatus(catalog: string, schema: string): SchemaVersionStatus | undefined {
-  return statuses.get(statusKey(catalog, schema));
-}
-
 export {
   assertSchemaSupported,
   evaluateSchemaVersion,
-  getSchemaVersionStatus,
   getSupportedVersions,
   isSchemaSupported,
   recordSchemaVersion,

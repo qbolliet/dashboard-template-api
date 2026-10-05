@@ -12,13 +12,11 @@ Controls the HTTP server and GraphQL runtime behaviour.
 ```yaml
 API:
   PORT: ${PORT:-4000}
-  DOMAIN: ${API_DOMAIN:-https://your-production-domain.com}
 ```
 
-| Key      | Env var      | Default | Description                    |
-| -------- | ------------ | ------- | ------------------------------ |
-| `PORT`   | `PORT`       | `4000`  | TCP port the server listens on |
-| `DOMAIN` | `API_DOMAIN` | —       | Public domain, used for HSTS   |
+| Key    | Env var | Default | Description                    |
+| ------ | ------- | ------- | ------------------------------ |
+| `PORT` | `PORT`  | `4000`  | TCP port the server listens on |
 
 ## CORS
 
@@ -160,11 +158,10 @@ Override via the corresponding env vars (`FACT_SIMPLE_TIMEOUT`, `FACT_COMPLEX_TI
 API:
   LOADERS:
     BATCH_SIZE: ${LOADER_BATCH_SIZE:-10}
-    MAX_BATCH_SIZE: ${MAX_LOADER_BATCH_SIZE:-50}
     DEFAULT_CACHE_TIMEOUT: ${LOADER_CACHE_TIMEOUT:-300}
     FACT_CACHE_TIMEOUT: ${FACT_LOADER_CACHE_TIMEOUT:-300}
     METADATA_CACHE_TIMEOUT: ${METADATA_LOADER_CACHE_TIMEOUT:-600}
     SELECT_OPTIONS_CACHE_TIMEOUT: ${SELECT_OPTIONS_LOADER_CACHE_TIMEOUT:-600}
 ```
 
-Loader cache timeouts (in seconds) control how long DataLoader caches keys in memory within a request. This is separate from the Redis cache.
+The `*_CACHE_TIMEOUT` values (in seconds) are the TTLs of the Redis entries written by each loader (see [Caching](../architecture/caching)). The DataLoader cache itself is request-scoped and has no TTL.

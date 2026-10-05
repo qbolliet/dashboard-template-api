@@ -2,7 +2,7 @@
  * Tests for the schema version guard (src/db/schema-version.ts).
  *
  * The database declares its format through `dataset_metadata.schema_version`
- * (specification-bdd.md §2.3). A schema announcing an unsupported version, or
+ * (dashboard-template-database/docs/schema.md, section `dataset_metadata`). A schema announcing an unsupported version, or
  * missing the `dataset_metadata` table entirely (a catalog written in the
  * legacy format), must be refused — there is no compatibility path.
  *
@@ -14,7 +14,7 @@
 
 import { ApolloServer } from '@apollo/server';
 import { ensureSetup, getServer, execute } from '../test_schema/test_resolvers/helpers.js';
-import { getSchemaVersionStatus, getSupportedVersions } from '../../../src/db/schema-version.js';
+import { getSupportedVersions, isSchemaSupported } from '../../../src/db/schema-version.js';
 
 let server: ApolloServer;
 
@@ -30,23 +30,16 @@ describe('sondage des versions à l’attach', () => {
     expect(getSupportedVersions()).toEqual([1]);
   });
 
-  test('un schéma conforme est marqué supporté avec sa version', () => {
-    const status = getSchemaVersionStatus('default', 'main');
-    expect(status).toBeDefined();
-    expect(status!.supported).toBe(true);
-    expect(status!.version).toBe(1);
+  test('un schéma conforme est marqué supporté', () => {
+    expect(isSchemaSupported('default', 'main')).toBe(true);
   });
 
   test('un schéma en version hors liste est marqué non supporté', () => {
-    const status = getSchemaVersionStatus('default', 'unsupported_version');
-    expect(status!.supported).toBe(false);
-    expect(status!.version).toBe(99);
+    expect(isSchemaSupported('default', 'unsupported_version')).toBe(false);
   });
 
-  test('un schéma sans dataset_metadata est marqué non supporté, sans version', () => {
-    const status = getSchemaVersionStatus('default', 'missing_dataset_metadata');
-    expect(status!.supported).toBe(false);
-    expect(status!.version).toBeNull();
+  test('un schéma sans dataset_metadata est marqué non supporté', () => {
+    expect(isSchemaSupported('default', 'missing_dataset_metadata')).toBe(false);
   });
 });
 

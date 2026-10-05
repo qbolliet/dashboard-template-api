@@ -16,7 +16,6 @@ SECURITY:
     WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000} # 15 minutes
     MAX_BURST_REQUESTS: ${RATE_LIMIT_BURST:-20}
     BURST_WINDOW_MS: ${RATE_LIMIT_BURST_WINDOW:-60000} # 1 minute
-    SKIP_FAILED_REQUESTS: false
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
 ```
 
@@ -131,21 +130,6 @@ The maximum nesting depth of a GraphQL selection set. Deeply nested queries are 
 ## No input sanitization
 
 There is no `SANITIZATION` section and no pattern file: filter values are bound parameters and identifiers are checked against the `metadata` table, so escaping values would only corrupt legitimate labels (« Côte-d'Or »), and patterns applied to the query text would reject legitimate queries (`__typename`, a search for "ecosystem") while the same value passes through variables. See [Security architecture](../architecture/security.md#no-text-patterns-no-value-sanitization).
-
-## Timeouts (complexity-based)
-
-```yaml
-TIMEOUTS:
-  BASE_TIMEOUT: ${BASE_TIMEOUT:-5000}
-  TIMEOUT_PER_COMPLEXITY: ${TIMEOUT_PER_COMPLEXITY:-100}
-  MAX_TIMEOUT: ${MAX_TIMEOUT:-30000}
-```
-
-The execution timeout for a query scales linearly with its complexity score:
-
-```
-timeout = min(BASE_TIMEOUT + complexity × TIMEOUT_PER_COMPLEXITY, MAX_TIMEOUT)
-```
 
 ## Monitoring
 

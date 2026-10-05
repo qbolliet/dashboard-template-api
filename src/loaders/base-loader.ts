@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import DataLoader from 'dataloader';
 import { GraphQLError } from 'graphql';
 import { databaseManager } from '../db/index.js';
+import type { ConnectionWrapper as DuckDBConnection, DuckDBPool } from '../db/pool.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { withCache } from '../utils/cache.js';
 import { buildCacheKey } from '../cache/cache-keys.js';
@@ -35,25 +36,6 @@ interface D3QueryResult {
   metadata: D3Metadata;
 }
 
-/** Interface of a DuckDB connection wrapped by the connection pool. */
-interface DuckDBConnection {
-  all: (query: string, params?: unknown[]) => Promise<Record<string, unknown>[]>;
-  getAsJsonArray: (query: string, params?: unknown[]) => Promise<unknown[][]>;
-  getWithMetadata: (query: string, params?: unknown[]) => Promise<D3QueryResult>;
-  exec: (query: string) => Promise<void>;
-  close: () => Promise<void>;
-  inUse: boolean;
-  /** Raw DuckDB connection; only its interrupt is used here (query timeout). */
-  conn: { interrupt: () => void };
-}
-
-/** Interface of a DuckDB connection pool. */
-interface DuckDBPool {
-  acquire: (signal?: AbortSignal) => Promise<DuckDBConnection>;
-  release: (connection: DuckDBConnection) => void;
-  close: () => Promise<void>;
-}
-
 // ─── Interfaces de configuration des loaders ─────────────────────────────────
 
 /** Initialization configuration for a base loader. */
@@ -84,7 +66,7 @@ interface BaseLoaderConfig {
  * Runs a step on the batch's connection, acquired on first use and
  * interrupted when the batch deadline expires.
  */
-type RunOnConnection = <T>(step: (connection: DuckDBConnection) => Promise<T>) => Promise<T>;
+export type RunOnConnection = <T>(step: (connection: DuckDBConnection) => Promise<T>) => Promise<T>;
 
 /** Sort criterion for SQL ORDER BY clauses. */
 interface SortItem {
@@ -201,9 +183,7 @@ class BaseQueryLoader {
           assertSchemaSupported(this.catalogId, this.resolvedSchema());
         }
         // Récupération du pool associé à l'identifiant de catalogue
-        pool = (
-          databaseManager as unknown as { getPool: (id: string | null) => DuckDBPool }
-        ).getPool(this.catalogId);
+        pool = databaseManager.getPool(this.catalogId);
         acquisition = pool.acquire(controller.signal);
       }
       return acquisition;
@@ -528,7 +508,7 @@ class FactQueryLoader extends BaseQueryLoader {
    * metadata table, or against the output aliases of the query) and the
    * direction is restricted to ASC / DESC before interpolation.
    *
-   * The lone {@link ALL_COLUMNS_SORT} item is rendered as `ORDER BY ALL`.
+   * The lone `ALL_COLUMNS_SORT` item is rendered as `ORDER BY ALL`.
    *
    * @param sort - Array of sort items, each with a field name and direction.
    * @returns ORDER BY clause string, or empty string when sort is empty or null.

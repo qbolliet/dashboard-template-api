@@ -41,7 +41,6 @@ interface RateLimitConfig {
   WINDOW_MS: number;
   MAX_BURST_REQUESTS: number;
   BURST_WINDOW_MS: number;
-  SKIP_FAILED_REQUESTS: boolean;
   /** YAML list, or JSON-array / comma-separated string from an env override. */
   TRUSTED_PROXIES: string[] | string;
 }
@@ -97,7 +96,7 @@ interface SecurityMonitoringConfig {
 }
 
 /** Anti-abuse bounds of the structured filter tree. */
-interface FilterTreeConfig {
+export interface FilterTreeConfig {
   MAX_DEPTH: number;
   MAX_CRITERIA: number;
   MAX_IN_VALUES?: number;
@@ -124,7 +123,6 @@ interface SecurityLimitsConfig {
 interface SecurityThresholdsConfig {
   HSTS_MAX_AGE: number;
   VALIDATION_MAX_LENGTH: number;
-  ERROR_TRUNCATION_LENGTH: number;
   QUERY_SNIPPET_LENGTH: number;
 }
 
@@ -165,7 +163,6 @@ interface GraphqlConfig {
 /** DataLoader configuration (batch size and cache timeouts). */
 interface LoadersConfig {
   BATCH_SIZE: number;
-  MAX_BATCH_SIZE: number;
   DEFAULT_CACHE_TIMEOUT: number;
   FACT_CACHE_TIMEOUT: number;
   METADATA_CACHE_TIMEOUT: number;
@@ -181,13 +178,13 @@ interface PaginationConfig {
 }
 
 /** Bounds of the select options trees (getSelectOptionsTree). */
-interface SelectOptionsConfig {
+export interface SelectOptionsConfig {
   /** Hard bound on the node count of a tree; exceeding it is a BAD_USER_INPUT. */
   TREE_MAX_NODES: number;
 }
 
 /** Bounds of the aggregate query (getAggregates). */
-interface AggregatesConfig {
+export interface AggregatesConfig {
   /** Maximum number of aggregates of one query; exceeding it is a BAD_USER_INPUT. */
   MAX_AGGREGATES: number;
   /** Maximum number of group columns of one query; exceeding it is a BAD_USER_INPUT. */
@@ -264,36 +261,9 @@ interface CacheRedisConfig {
   CLUSTER?: CacheClusterConfig;
 }
 
-/** Redis entry TTLs per data type (in seconds). */
-interface CacheTTLConfig {
-  DEFAULT: number;
-  METADATA: number;
-  FACTS: number;
-  AGGREGATED_FACTS: number;
-  SELECT_OPTIONS: number;
-  COUNT_QUERIES: number;
-}
-
-/** Automatic cache invalidation parameters. */
-interface CacheInvalidationConfig {
-  GRACE_PERIOD: number;
-  AUTO_INVALIDATE: boolean;
-  BATCH_SIZE: number;
-  TIMEOUT: number;
-}
-
-/** HTTP cache configuration (control headers). */
-interface CacheHttpConfig {
-  PUBLIC_PATHS: string[];
-  VARY_BY_HEADERS: string[];
-}
-
-/** Complete Redis and HTTP cache configuration. */
+/** Complete Redis cache configuration. */
 interface CacheConfig {
   REDIS: CacheRedisConfig;
-  TTL: CacheTTLConfig;
-  INVALIDATION: CacheInvalidationConfig;
-  HTTP_CACHE: CacheHttpConfig;
 }
 
 /** Source type of a DuckLake catalog: a static `.ducklake` file or a Postgres catalog. */
@@ -352,7 +322,6 @@ interface AppConfig {
   ENVIRONMENT: string;
   API: {
     PORT: number;
-    DOMAIN?: string;
     CORS: CorsConfig;
     REQUEST_LIMITS: RequestLimitsConfig;
     GRAPHQL: GraphqlConfig;
@@ -848,9 +817,6 @@ export type {
   CacheRetryStrategyConfig,
   CacheClusterConfig,
   CacheClusterNodeConfig,
-  CacheTTLConfig,
-  CacheInvalidationConfig,
-  CacheHttpConfig,
   SecurityConfig,
   SecurityLimitsConfig,
   SecurityThresholdsConfig,

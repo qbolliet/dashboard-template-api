@@ -279,7 +279,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
   /**
    * Resolves every (catalog, schema) target carried by a key, whichever of
    * the three param shapes it has (compareFacts, compareAggregatedFacts, or
-   * crossDatabaseSelectOptions). Each pair goes through {@link resolveSchema},
+   * crossDatabaseSelectOptions). Each pair goes through `resolveSchema`,
    * which applies the schema-version guard.
    *
    * @param key - DataLoader key (one of the three cross-database param shapes).
@@ -306,7 +306,7 @@ class CrossDatabaseLoader extends FactQueryLoader {
   /**
    * Applies the schema version guard to every catalog/schema carried by the
    * key. Unlike `catalog.ts`/`dataset-info.ts`, this loader's query methods
-   * already call {@link resolveSchema} (which guards); this override exists
+   * already call `resolveSchema` (which guards); this override exists
    * so the guard also runs on a cache HIT, before a warm entry for a schema
    * withdrawn since can be served.
    *

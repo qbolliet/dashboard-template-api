@@ -1,3 +1,2 @@
 # Configuration principale qui importe les autres
-APP_NAME: 'GraphQL DuckDB API'
 ENVIRONMENT: ${NODE_ENV:-development}

@@ -2,7 +2,7 @@
  * Contract tests for the test DuckLake catalogs.
  *
  * Locks the test fixtures onto the database specification
- * (../dashboard-template-database/specification-bdd.md §2): every schema holds
+ * (dashboard-template-database/docs/schema.md, section The three tables): every schema holds
  * EXACTLY the three tables fact_table, metadata and dataset_metadata — no dim_*
  * table — `metadata` carries the twelve specified columns with their nullability,
  * `dataset_metadata` carries the six specified columns on a single row, and the

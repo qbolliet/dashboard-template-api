@@ -28,6 +28,12 @@ const dbLogger = createContextLogger({
 // Détection des URI distantes (s3://, gs://, az://, http(s)://, …) : ces chemins
 // ne doivent pas passer par resolve()/fs.existsSync (réservés au système de fichiers local).
 const REMOTE_URI_PATTERN = /^[a-z0-9]+:\/\//i;
+/**
+ * Tells whether a path is a remote URI (`s3://`, `https://`, …) rather than a local file.
+ *
+ * @param p - Catalog or data path.
+ * @returns True for a path with a URI scheme.
+ */
 const isRemoteUri = (p: string): boolean => REMOTE_URI_PATTERN.test(p);
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
@@ -146,6 +152,9 @@ class DatabaseManager {
   private readonly options: DatabaseManagerOptions | null;
 
   /**
+   * Builds the catalog registry (entries, default, allow-lists) without attaching anything;
+   * the pool attaches them later.
+   *
    * @param options - Explicit settings replacing the configuration; omit to read
    *   `config.CATALOGS` / `config.CATALOG_ROUTING` (the application singleton).
    */

@@ -4,7 +4,7 @@
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  * Mocks config-loader and logger; imports from the security index barrel.
  * Covers constructor, createRateLimitMiddleware, validateRequest,
- * validateComplexity (score and root-field ceilings), isOperationAllowed, and
+ * validateComplexity (score and root-field ceilings), and
  * integration scenarios.
  */
 
@@ -22,7 +22,6 @@ interface MockConfig {
       WINDOW_MS: number;
       MAX_BURST_REQUESTS: number;
       BURST_WINDOW_MS: number;
-      SKIP_FAILED_REQUESTS: boolean;
       TRUSTED_PROXIES: string[];
     };
     COMPLEXITY: {
@@ -90,7 +89,6 @@ interface SecurityManagerTest {
     context?: MockContext,
     options?: Record<string, unknown>,
   ) => Promise<void>;
-  isOperationAllowed: (name: string) => boolean;
   cleanup: () => Promise<void>;
 }
 
@@ -113,7 +111,6 @@ const mockConfig: MockConfig = {
       WINDOW_MS: 60000,
       MAX_BURST_REQUESTS: 20,
       BURST_WINDOW_MS: 60000,
-      SKIP_FAILED_REQUESTS: false,
       TRUSTED_PROXIES: [],
     },
     COMPLEXITY: {
@@ -376,19 +373,6 @@ describe('SecurityManager', () => {
       // « mutation », « system » : plus aucun motif appliqué au texte de la requête
       const operation: MockOperation = { operation: 'query', name: { value: 'MutationSystem' } };
       expect(() => securityManager.validateRequest(operation)).not.toThrow();
-    });
-  });
-
-  describe('isOperationAllowed', () => {
-    test('returns true for arbitrary operation names by default', () => {
-      expect(securityManager.isOperationAllowed('AnyOperation')).toBe(true);
-    });
-
-    test('returns true for IntrospectionQuery in non-production', () => {
-      const original = process.env.NODE_ENV;
-      process.env.NODE_ENV = 'development';
-      expect(securityManager.isOperationAllowed('IntrospectionQuery')).toBe(true);
-      process.env.NODE_ENV = original;
     });
   });
 });

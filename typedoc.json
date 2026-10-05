@@ -13,5 +13,6 @@
   "flattenOutputFiles": false,
   "entryFileName": "README",
   "excludeReferences": true,
-  "cleanOutputDir": true
+  "cleanOutputDir": true,
+  "validation": { "notExported": false }
 }

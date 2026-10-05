@@ -47,7 +47,7 @@ interface ExportSettings {
   tmpMinFreeMb: number;
 }
 
-// Valeurs par défaut, identiques à config/api.yaml
+/** Default export guards, identical to the `API.EXPORT` section of config/api.yaml. */
 const DEFAULT_SETTINGS: Omit<ExportSettings, 'tmpDir'> = {
   maxRows: 5_000_000,
   maxConcurrentPerIp: 2,

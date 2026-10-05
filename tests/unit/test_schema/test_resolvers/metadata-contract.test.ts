@@ -2,7 +2,7 @@
  * Integration tests for the metadata contract exposed to the interface.
  *
  * Covers the three surfaces introduced with the camelCase Metadata type: the
- * eleven columns of specification-bdd.md §2.2 rendered by getCatalogSchema,
+ * eleven columns of dashboard-template-database/docs/schema.md, section `metadata` rendered by getCatalogSchema,
  * the `family` filter of getFields, and the DatasetInfo of §2.3 reachable both
  * as the lazy `info` field of CatalogSchemaInfo and as the getDatasetInfo query.
  */

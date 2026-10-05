@@ -42,24 +42,6 @@ import type DataLoader from 'dataloader';
 /** DataLoader alias with a string cache key, used by all loaders in this module. */
 export type Loader<K, V> = DataLoader<K, V, string>;
 
-// ─── Interfaces des données d'amorçage ───────────────────────────────────────
-
-/** Generic key/value pair for priming a DataLoader. */
-interface KeyValuePair<K, V> {
-  key: K;
-  value: V;
-}
-
-/** Optional initial data for priming the full set of loaders. */
-interface PrimeData {
-  metadata?: KeyValuePair<string, FieldMetadata | null>[];
-  facts?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  factsWithCount?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  factsWithMetadata?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  aggregates?: KeyValuePair<AggregatePageParams, AggregatePage>[];
-  selectOptions?: KeyValuePair<SelectOptionsParams, SelectOption[]>[];
-}
-
 // ─── Interface de la collection de loaders ───────────────────────────────────
 
 /** Complete collection of loaders available for a single GraphQL request. */
@@ -78,8 +60,6 @@ interface LoadersCollection {
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
   compareAggregatedFacts: Loader<CompareAggregatedFactsParams, AggregateComparisonPage>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
-  clearAll: () => void;
-  prime: (initialData?: PrimeData) => Promise<void>;
 }
 
 // Fonction de création de l'ensemble des loaders pour un identifiant de base de données
@@ -94,7 +74,7 @@ interface LoadersCollection {
  * @param schema - DuckLake schema within the catalog. Null uses the catalog's
  *   configured default schema. Validated against the catalog's allow-list
  *   (anti-injection: the schema is interpolated into qualified table names).
- * @returns LoadersCollection with all loaders plus clearAll and prime helpers.
+ * @returns LoadersCollection with all the loaders of one request.
  */
 const createLoaders = (
   catalogId: string | null = null,
@@ -151,76 +131,8 @@ const createLoaders = (
     compareFacts: compareFactsLoader,
     compareAggregatedFacts: compareAggregatedFactsLoader,
     crossDatabaseSelectOptions: crossDatabaseSelectOptionsLoader,
-
-    // Méthode de nettoyage du cache de l'ensemble des loaders
-    clearAll: () => {
-      metadataLoader.clearAll();
-      factLoader.clearAll();
-      factWithCountLoader.clearAll();
-      factWithMetadataLoader.clearAll();
-      aggregatesLoader.clearAll();
-      aggregateGroupCountLoader.clearAll();
-      selectOptionsLoader.clearAll();
-      selectOptionsTreeLoader.clearAll();
-      fieldStatsLoader.clearAll();
-      catalogMetadataLoader.clearAll();
-      datasetInfoLoader.clearAll();
-      compareFactsLoader.clearAll();
-      compareAggregatedFactsLoader.clearAll();
-      crossDatabaseSelectOptionsLoader.clearAll();
-    },
-
-    // Méthode d'amorçage de tous les loaders avec leurs données initiales
-    prime: async (initialData: PrimeData = {}) => {
-      const {
-        metadata = [],
-        facts = [],
-        factsWithCount = [],
-        factsWithMetadata = [],
-        aggregates = [],
-        selectOptions = [],
-      } = initialData;
-
-      // Amorçage de chaque loader avec ses données initiales
-      metadata.forEach(({ key, value }) => {
-        metadataLoader.prime(key, value);
-      });
-      facts.forEach(({ key, value }) => {
-        factLoader.prime(key, value);
-      });
-      factsWithCount.forEach(({ key, value }) => {
-        factWithCountLoader.prime(key, value);
-      });
-      factsWithMetadata.forEach(({ key, value }) => {
-        factWithMetadataLoader.prime(key, value);
-      });
-      aggregates.forEach(({ key, value }) => {
-        aggregatesLoader.prime(key, value);
-      });
-      selectOptions.forEach(({ key, value }) => {
-        selectOptionsLoader.prime(key, value);
-      });
-    },
   };
 };
 
-// Fonction pour créer de nouveaux loaders pour chaque requête entrante
-/**
- * Creates a fresh set of data loaders for a single GraphQL request.
- *
- * Ensures per-request DataLoader instances to prevent data leaking
- * between concurrent requests while sharing the Redis cache layer.
- *
- * @param catalogId - Catalog alias to use; null uses the default catalog.
- * @param schema - DuckLake schema within the catalog; null uses the catalog default.
- * @returns New LoadersCollection for the current request.
- */
-const createLoadersForRequest = (
-  catalogId: string | null = null,
-  schema: string | null = null,
-): LoadersCollection => {
-  return createLoaders(catalogId, schema);
-};
-
-export { createLoaders, createLoadersForRequest };
-export type { LoadersCollection, PrimeData, KeyValuePair };
+export { createLoaders };
+export type { LoadersCollection };

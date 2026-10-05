@@ -50,11 +50,11 @@ interface FieldStats {
  * max are still computed — in lexical order for text, false < true for
  * booleans — and carry no calibration meaning for a slider.
  *
- * Cache: the unfiltered variant only changes with the nightly refresh (which
- * invalidates the cache), so it gets the long select options TTL; a filtered
+ * Cache: the unfiltered variant only changes with a data update (which moves
+ * the version carried by the key), so it gets the long select options TTL; a filtered
  * variant is one of many combinations and gets the short fact TTL. The filter
- * is part of the key, so the two never share an entry, and the key layout
- * `field-stats:<catalog>:<schema>@<version>:…` is covered by the invalidation by prefix.
+ * is part of the key, so the two never share an entry, under the key layout
+ * `field-stats:<catalog>:<schema>@<version>:…`.
  */
 class FieldStatsLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux statistiques

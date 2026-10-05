@@ -21,26 +21,17 @@ Each incoming GraphQL request receives a fresh set of DataLoader instances (crea
 
 The DataLoader cache lives only for the duration of the request. It prevents N+1 queries within a single operation but does not persist across requests.
 
-Loader cache timeouts (in-memory, not Redis) are configured per data type in `config/api.yaml`:
-
-| Loader         | Default in-memory TTL |
-| -------------- | --------------------- |
-| Facts          | 300 s                 |
-| Metadata       | 600 s                 |
-| Select options | 600 s                 |
-
 ## Redis cache (cross-request)
 
 Resolver results are cached in Redis with keys derived from the query parameters. On cache hit, the resolver returns the cached value without touching DuckDB.
 
-TTL values per data type (`config/cache.yaml`):
+TTL values per data type (`API.LOADERS` in `config/api.yaml`, see [cache.yaml](../configuration/cache#ttl-values-seconds)):
 
-| Type             | Default TTL |
-| ---------------- | ----------- |
-| Facts            | 300 s       |
-| Aggregated facts | 300 s       |
-| Metadata         | 600 s       |
-| Select options   | 600 s       |
+| Type                           | Default TTL |
+| ------------------------------ | ----------- |
+| Facts, aggregates, comparisons | 300 s       |
+| Metadata                       | 600 s       |
+| Select options, field stats    | 600 s       |
 
 All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) to allow coexistence with other apps in the same Redis instance.
 
@@ -88,13 +79,10 @@ for a manual flush (`POST /api/cache/invalidate-all`, `POST /api/cache/invalidat
 See the [Data refresh deployment guide](../deployment/data-refresh) for the refresh model,
 the endpoint reference, monitoring and troubleshooting.
 
+### After a code deployment
+
+Redis keys are versioned by the data, not by the code. A deployment that changes the content of a response for the same arguments would keep serving the old entries until their TTL. Once the rollout is complete, flush with `POST /api/cache/invalidate-all` (`x-admin-key` header); the exact step is in [Kubernetes & Helm](../deployment/kubernetes-helm#after-a-code-deployment-flush-the-cache). Calling it during the rollout is not enough: old pods would write their entries again.
+
 ## HTTP cache headers
 
-Express adds `Cache-Control: public` headers for responses from `/graphql`, enabling CDN and browser caching:
-
-```
-Cache-Control: public, max-age=300
-Vary: accept-encoding, accept
-```
-
-`max-age` mirrors the Redis TTL for the queried data type. CDN layers (Cloudflare, Fastly, etc.) can cache responses without any additional configuration. These copies live outside the API: after a data update, a CDN or browser may still serve a response for up to `max-age`.
+Apollo answers `/graphql` with `Cache-Control: no-store`: no CDN or browser caches a GraphQL response, so a data update is visible as soon as Redis serves it.

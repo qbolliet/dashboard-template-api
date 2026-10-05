@@ -2,7 +2,7 @@
  * Test DuckLake catalog creation script.
  *
  * Creates (or resets) the test DuckLake catalogs used by the Jest test suite,
- * reproducing the DDL of the database specification (specification-bdd.md §2):
+ * reproducing the DDL of the database specification (dashboard-template-database/docs/schema.md, section The three tables):
  * every schema holds EXACTLY three tables — fact_table, metadata,
  * dataset_metadata — categorical columns store their labels directly, and no
  * dim_* table exists. A business code and its label are two fact_table
@@ -36,7 +36,7 @@ const qualifiedTable = (catalog: string, schema: string, table: string): string 
 
 /**
  * One row of the `metadata` table, in the column order of the specification
- * (specification-bdd.md §2.2). `python_type` does not exist.
+ * (dashboard-template-database/docs/schema.md, section `metadata`). `python_type` does not exist.
  */
 interface MetadataRow {
   name: string;

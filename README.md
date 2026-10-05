@@ -23,7 +23,7 @@ A production-ready **GraphQL API template** that connects to one or more [DuckLa
 
 Whole datasets are exported over REST rather than paginated through GraphQL: `GET /api/export?catalog=…&schema=…&format=arrow|csv|parquet` streams the fact table with its types preserved. It uses the same filter tree as GraphQL (sent as a JSON body with `POST /api/export` when it is too long for a URL) and has its own row ceiling, beyond which the response is refused or explicitly truncated with a resume cursor, per-IP concurrency limit and timeout. See the [bulk export guide](https://qbolliet.github.io/dashboard-template-api/api-guide/export).
 
-The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query complexity analysis, and input sanitization protect against abuse.
+The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query depth and complexity limits, and identifier validation protect against abuse (filter values are bound parameters).
 
 ---
 

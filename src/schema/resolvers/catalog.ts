@@ -162,8 +162,8 @@ const catalogResolvers = {
       return databaseManager.getAvailableCatalogs().map((id) => ({
         id,
         defaultSchema: databaseManager.getDefaultSchema(id),
-        // Source objects carry catalogId so CatalogSchemaInfo's field
-        // resolvers can scope their DataLoader keys to the right schema.
+        // Les objets source portent catalogId : les resolvers de champs de
+        // CatalogSchemaInfo bornent ainsi leurs clés DataLoader au bon schéma.
         schemas: databaseManager.getSupportedSchemas(id).map((name) => ({ catalogId: id, name })),
       }));
     },

@@ -2,7 +2,7 @@
  * Tests for the metadata GraphQL type definitions.
  *
  * Validates the Metadata object type — the full eleven-column contract of
- * specification-bdd.md §2.2, in camelCase, with the NOT NULL columns
+ * dashboard-template-database/docs/schema.md, section `metadata`, in camelCase, with the NOT NULL columns
  * non-nullable — and the getMetaData query field with its required name
  * argument.
  */
