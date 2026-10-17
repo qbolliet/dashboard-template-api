@@ -19,14 +19,22 @@ interface LoaderConfig {
       BATCH_SIZE: number;
       METADATA_CACHE_TIMEOUT: number;
       FACT_CACHE_TIMEOUT: number;
-      DIMENSION_CACHE_TIMEOUT: number;
       SELECT_OPTIONS_CACHE_TIMEOUT: number;
-      MAX_BATCH_SIZE: number;
     };
     PAGINATION: {
       MAX_LIMIT: number;
       MAX_OFFSET: number;
     };
+    TIMEOUTS: Record<
+      | 'FACT_SIMPLE'
+      | 'FACT_COMPLEX'
+      | 'AGGREGATED_SIMPLE'
+      | 'AGGREGATED_COMPLEX'
+      | 'METADATA'
+      | 'SELECT_OPTIONS'
+      | 'CACHE_DEFAULT',
+      number
+    >;
   };
 }
 
@@ -55,6 +63,7 @@ interface MockDatabaseManager {
   getDefaultSchema: jest.Mock;
   getSchemas: jest.Mock;
   isValidSchema: jest.Mock;
+  getDataVersion: jest.Mock;
 }
 
 // ─── Fabriques ─────────────────────────────────────────────────────────────────
@@ -62,8 +71,7 @@ interface MockDatabaseManager {
 /**
  * Create a minimal loader configuration object with default timeout and batch values.
  *
- * Returns:
- *     A LoaderConfig object matching the shape expected by BaseLoader.
+ * @returns A LoaderConfig object matching the shape expected by BaseLoader.
  */
 export const makeLoaderConfig = (): LoaderConfig => ({
   API: {
@@ -72,19 +80,26 @@ export const makeLoaderConfig = (): LoaderConfig => ({
       BATCH_SIZE: 10,
       METADATA_CACHE_TIMEOUT: 600000,
       FACT_CACHE_TIMEOUT: 300000,
-      DIMENSION_CACHE_TIMEOUT: 600000,
       SELECT_OPTIONS_CACHE_TIMEOUT: 600000,
-      MAX_BATCH_SIZE: 50,
     },
     PAGINATION: { MAX_LIMIT: 1000, MAX_OFFSET: 10000 },
+    // Échéances des lots (queryTimeout des loaders)
+    TIMEOUTS: {
+      FACT_SIMPLE: 10000,
+      FACT_COMPLEX: 15000,
+      AGGREGATED_SIMPLE: 10000,
+      AGGREGATED_COMPLEX: 15000,
+      METADATA: 5000,
+      SELECT_OPTIONS: 5000,
+      CACHE_DEFAULT: 300,
+    },
   },
 });
 
 /**
  * Create a mock pool exposing acquire and release as Jest mock functions.
  *
- * Returns:
- *     A MockPool with jest.fn() for acquire and release.
+ * @returns A MockPool with jest.fn() for acquire and release.
  */
 export const makePool = (): MockPool => ({
   acquire: jest.fn(),
@@ -94,8 +109,7 @@ export const makePool = (): MockPool => ({
 /**
  * Create a simple mock connection for loaders that only use the all() method.
  *
- * Returns:
- *     A MockConnection with jest.fn() for all.
+ * @returns A MockConnection with jest.fn() for all.
  */
 export const makeConnection = (): MockConnection => ({
   all: jest.fn(),
@@ -104,8 +118,7 @@ export const makeConnection = (): MockConnection => ({
 /**
  * Create an extended mock connection for loaders using getAsJsonArray or getWithMetadata.
  *
- * Returns:
- *     A MockExtendedConnection with jest.fn() for all, getAsJsonArray, and getWithMetadata.
+ * @returns A MockExtendedConnection with jest.fn() for all, getAsJsonArray, and getWithMetadata.
  */
 export const makeExtendedConnection = (): MockExtendedConnection => ({
   all: jest.fn(),
@@ -119,12 +132,9 @@ export const makeExtendedConnection = (): MockExtendedConnection => ({
  * Pass a pool to pre-wire getPool's return value; omit for index.test.ts where
  * getPool is reset in beforeEach with specific per-test return values.
  *
- * Args:
- *     pool: Optional MockPool to pre-wire as the return value of getPool.
+ * @param pool - Optional MockPool to pre-wire as the return value of getPool.
  *
- * Returns:
- *     A MockDatabaseManager with jest.fn() for the methods used by loaders
- *     and resolvers (pool access, default catalog/schema, schema allow-list).
+ * @returns A MockDatabaseManager with jest.fn() for the methods used by loaders and resolvers (pool access, default catalog/schema, schema allow-list, served data version).
  */
 export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseManager => ({
   getPool: pool ? jest.fn().mockReturnValue(pool) : jest.fn(),
@@ -132,4 +142,6 @@ export const makeDatabaseManager = (pool: MockPool | null = null): MockDatabaseM
   getDefaultSchema: jest.fn().mockReturnValue('main'),
   getSchemas: jest.fn().mockReturnValue(['main']),
   isValidSchema: jest.fn().mockReturnValue(true),
+  // Version des données servie : segment `@v1` des clés de cache
+  getDataVersion: jest.fn().mockReturnValue('v1'),
 });

@@ -57,7 +57,9 @@ interface MockPool {
   release: jest.Mock;
   reload: jest.Mock;
   reloadOne: jest.Mock;
+  awaitDrain: jest.Mock;
   discoverCatalogSchemas: jest.Mock;
+  getStats: jest.Mock;
 }
 
 /** Configuration passée au constructeur DuckDBPool lors de l'initialisation. */
@@ -87,7 +89,13 @@ interface SharedPoolStats {
 
 /** Module database-manager.js après import dynamique. */
 interface DatabaseManagerModule {
-  DatabaseManager: new () => DatabaseManagerInstance;
+  DatabaseManager: new (options?: unknown) => DatabaseManagerInstance;
+}
+
+/** Version des données servie pour un (catalogue, schéma). */
+interface DataVersion {
+  version: string;
+  updatedAt: string | null;
 }
 
 /** Instance de DatabaseManager avec les membres accessibles dans les tests. */
@@ -108,6 +116,10 @@ interface DatabaseManagerInstance {
   getStatistics: () => ManagerStatistics;
   reloadCatalogs: () => Promise<void>;
   reloadCatalog: (catalogId: string) => Promise<void>;
+  initSchemas: () => Promise<void>;
+  getDataVersion: (catalogId: string, schema: string) => string;
+  getDataVersions: () => Record<string, Record<string, DataVersion>>;
+  getCatalogEntries: () => { alias: string }[];
   close: () => Promise<void>;
 }
 
@@ -157,11 +169,9 @@ const fsStat: jest.Mock = jest.fn().mockReturnValue({ size: 1024, mtime: new Dat
 /**
  * Create a mock DuckDBPool instance reflecting the given configuration.
  *
- * Args:
- *     cfg: Pool constructor configuration.
+ * @param cfg - Pool constructor configuration.
  *
- * Returns:
- *     A MockPool with jest mock methods.
+ * @returns A MockPool with jest mock methods.
  */
 const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig): MockPool => {
   const aliases = (cfg.catalogs ?? []).map((c) => c.alias);
@@ -179,7 +189,25 @@ const makeMockPool = (cfg: PoolConstructorConfig = {} as PoolConstructorConfig):
     release: jest.fn(),
     reload: jest.fn().mockResolvedValue(undefined),
     reloadOne: jest.fn().mockResolvedValue(undefined),
+    awaitDrain: jest.fn().mockResolvedValue(undefined),
     discoverCatalogSchemas: jest.fn().mockResolvedValue(defaultDiscovery),
+    // Statistiques du pool (forme de DuckDBPool.getStats), pool vide
+    getStats: jest.fn().mockReturnValue({
+      available: 0,
+      using: 0,
+      total: 0,
+      creating: 0,
+      waiting: 0,
+      maxConnections: cfg.maxConnections ?? 5,
+      attachedCatalogs: aliases,
+      acquire: {
+        total: 0,
+        queued: 0,
+        timeouts: 0,
+        aborted: 0,
+        waitMs: { avg: 0, p95: 0, max: 0, samples: 0 },
+      },
+    }),
   };
 };
 
@@ -203,7 +231,7 @@ jest.unstable_mockModule('fs', () => ({
 
 // ─── Import dynamique ─────────────────────────────────────────────────────────
 
-let DatabaseManager: new () => DatabaseManagerInstance;
+let DatabaseManager: new (options?: unknown) => DatabaseManagerInstance;
 
 beforeAll(async () => {
   ({ DatabaseManager } =
@@ -398,6 +426,107 @@ describe('DatabaseManager', () => {
       const schemas = manager.getSchemas('main');
       schemas.push('extra');
       expect(manager.getSchemas('main')).not.toContain('extra');
+    });
+  });
+
+  // ── Schémas servis : garde de version, défaut, ordre de découverte ─────────
+
+  describe('supported schemas (version guard)', () => {
+    /**
+     * Fakes the connection of the version probe.
+     *
+     * @param versions - `catalog.schema` → schema_version (absent = table missing).
+     */
+    // Connexion factice : dataset_metadata lue par schéma, absente si non listée
+    const probeWith = (versions: Record<string, number>): void => {
+      const connection = {
+        all: jest.fn(async (sql: string) => {
+          const found = Object.entries(versions).find(([key]) => {
+            const [catalog, schema] = key.split('.');
+            return sql.includes(`"${catalog}"."${schema}"."dataset_metadata"`);
+          });
+          if (!found) throw new Error('Table dataset_metadata does not exist');
+          return [{ schema_version: found[1], data_version: '1', updated_at_iso: null }];
+        }),
+      };
+      manager.sharedPool!.acquire.mockResolvedValue(connection);
+    };
+
+    test('orders a discovered list: main first, the others alphabetically', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['zeta', 'trade', 'main', 'alpha'],
+        analytics: ['main'],
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getSchemas('test')).toEqual(['main', 'alpha', 'trade', 'zeta']);
+      // Une liste configurée garde l'ordre de la config (le premier est le défaut)
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+    });
+
+    test('getSupportedSchemas leaves out the schemas the guard refuses', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['main', 'legacy', 'v99', 'trade'],
+        analytics: ['main'],
+      });
+      probeWith({
+        'main.main': 1,
+        'main.staging': 1,
+        'test.main': 1,
+        'test.v99': 99,
+        'test.trade': 1,
+        'analytics.main': 1,
+        // test.legacy : pas de table dataset_metadata
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getSupportedSchemas('test')).toEqual(['main', 'trade']);
+      // getSchemas garde tout : un schéma refusé reste adressable (erreur explicite)
+      expect(manager.getSchemas('test')).toEqual(['main', 'legacy', 'trade', 'v99']);
+      expect(manager.isValidSchema('test', 'v99')).toBe(true);
+      expect(manager.getSupportedSchemas('analytics')).toEqual(['main']);
+    });
+
+    test('the default schema is the first one that passes the guard', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'], // config : ['main', 'staging']
+        test: ['main'],
+        analytics: ['main'],
+      });
+      probeWith({ 'main.main': 99, 'main.staging': 1, 'test.main': 1, 'analytics.main': 1 });
+
+      await manager.initSchemas();
+
+      expect(manager.getSchemas('main')).toEqual(['main', 'staging']);
+      expect(manager.getDefaultSchema('main')).toBe('staging');
+      expect(manager.getSupportedSchemas('main')).toEqual(['staging']);
+    });
+
+    test('with no supported schema, the default is the first of the list and none is listed', async () => {
+      manager.sharedPool!.discoverCatalogSchemas.mockResolvedValueOnce({
+        main: ['main', 'staging'],
+        test: ['legacy', 'other'],
+        analytics: ['main'],
+      });
+      probeWith({ 'main.main': 1, 'main.staging': 1, 'analytics.main': 1 });
+
+      await manager.initSchemas();
+
+      expect(manager.getSupportedSchemas('test')).toEqual([]);
+      expect(manager.getDefaultSchema('test')).toBe('legacy');
+    });
+
+    test('before the first probe, every schema counts as supported', () => {
+      expect(manager.getSupportedSchemas('main')).toEqual(['main', 'staging']);
+      expect(manager.getDefaultSchema('main')).toBe('main');
+    });
+
+    test('an unknown catalog falls back on the default catalog list', () => {
+      expect(manager.getSupportedSchemas('unknown')).toEqual(manager.getSchemas('main'));
     });
   });
 
@@ -597,6 +726,13 @@ describe('DatabaseManager', () => {
       expect(sharedPool).toHaveProperty('maxConnections');
     });
 
+    test('sharedPool stats come from the pool (queue and acquisition waits)', () => {
+      const { sharedPool } = manager.getStatistics();
+      expect(manager.sharedPool!.getStats).toHaveBeenCalled();
+      expect(sharedPool).toHaveProperty('waiting', 0);
+      expect(sharedPool).toHaveProperty('acquire.waitMs.p95', 0);
+    });
+
     test('returns null sharedPool when pool is not initialized', () => {
       manager.sharedPool = null;
       expect(manager.getStatistics().sharedPool).toBeNull();
@@ -650,6 +786,109 @@ describe('DatabaseManager', () => {
     test('throws when the shared pool is not initialized', async () => {
       manager.sharedPool = null;
       await expect(manager.reloadCatalogs()).rejects.toThrow('Shared pool is not initialized');
+    });
+
+    test('waits for the retired instance to drain before re-reading the versions', async () => {
+      const pool = manager.sharedPool!;
+      const order: string[] = [];
+      pool.reload.mockImplementationOnce(async () => {
+        order.push('reload');
+      });
+      pool.awaitDrain.mockImplementationOnce(async () => {
+        order.push('drain');
+      });
+      pool.discoverCatalogSchemas.mockImplementationOnce(async () => {
+        order.push('versions');
+        return { main: ['main'], test: ['main'], analytics: ['main'] };
+      });
+
+      await manager.reloadCatalogs();
+
+      // Montée de version seulement après la fermeture de l'ancienne instance
+      expect(order).toEqual(['reload', 'drain', 'versions']);
+    });
+  });
+
+  // ── Versions des données servies ──────────────────────────────────────────
+
+  describe('data versions', () => {
+    /**
+     * Makes the pool connection answer the dataset_metadata probe per schema.
+     *
+     * @param markers - "catalog.schema" → row returned (undefined = table missing).
+     */
+    const answerProbe = (markers: Record<string, Record<string, unknown> | undefined>): void => {
+      const all = jest.fn(async (sql: string) => {
+        const match = /FROM "([^"]+)"\."([^"]+)"\."dataset_metadata"/.exec(sql);
+        const key = match ? `${match[1]}.${match[2]}` : '';
+        if (!(key in markers)) throw new Error('Catalog Error: table does not exist');
+        return markers[key] ? [markers[key]] : [];
+      });
+      manager.sharedPool!.acquire.mockResolvedValue({ all });
+    };
+
+    test('reads schema_version and the updated_at marker in a single query', async () => {
+      answerProbe({
+        'main.main': {
+          schema_version: 1,
+          data_version: '1767225600123456',
+          updated_at_iso: '2026-01-01T00:00:00.123456Z',
+        },
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getDataVersion('main', 'main')).toBe('1767225600123456');
+      expect(manager.getDataVersions()['main']['main']).toEqual({
+        version: '1767225600123456',
+        updatedAt: '2026-01-01T00:00:00.123456Z',
+      });
+    });
+
+    test('a missing table or a NULL updated_at is served as "none"', async () => {
+      answerProbe({
+        'main.main': { schema_version: 1, data_version: null, updated_at_iso: null },
+      });
+
+      await manager.initSchemas();
+
+      expect(manager.getDataVersion('main', 'main')).toBe('none');
+      // Table absente (lecture en erreur)
+      expect(manager.getDataVersion('test', 'main')).toBe('none');
+      // Schéma jamais lu
+      expect(manager.getDataVersion('main', 'unknown')).toBe('none');
+    });
+
+    test('a reload replaces the served versions', async () => {
+      answerProbe({ 'main.main': { schema_version: 1, data_version: '1' } });
+      await manager.initSchemas();
+      expect(manager.getDataVersion('main', 'main')).toBe('1');
+
+      answerProbe({ 'main.main': { schema_version: 1, data_version: '2' } });
+      await manager.reloadCatalogs();
+      expect(manager.getDataVersion('main', 'main')).toBe('2');
+    });
+  });
+
+  // ── Réglages explicites (plusieurs instances dans un processus) ───────────
+
+  describe('explicit options', () => {
+    test('uses the given catalogs instead of the configuration', () => {
+      MockDuckDBPool.mockClear();
+      const custom = new DatabaseManager({
+        catalogs: [{ alias: 'lake', type: 'file', path: 'sqlite:/tmp/x.sqlite', readOnly: true }],
+        schemas: { lake: ['s1', 's2'] },
+      });
+
+      expect(custom.getDefaultCatalog()).toBe('lake');
+      expect(custom.getAvailableCatalogs()).toEqual(['lake']);
+      expect(custom.getSchemas('lake')).toEqual(['s1', 's2']);
+      const [poolCfg] = MockDuckDBPool.mock.calls[0] as [PoolConstructorConfig];
+      // Chemin transmis tel quel (aucune résolution de chemin local)
+      expect(poolCfg.catalogs).toEqual([
+        { alias: 'lake', type: 'file', path: 'sqlite:/tmp/x.sqlite', readOnly: true },
+      ]);
+      expect(custom.getCatalogEntries().map((c) => c.alias)).toEqual(['lake']);
     });
   });
 });

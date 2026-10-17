@@ -1,0 +1,302 @@
+/**
+ * Tests of the export parameter parsing (src/export/export-params.ts).
+ *
+ * Pure functions, no database: format whitelist, identifier validation of
+ * fields/sort/catalog/schema, filters JSON shape, limit ceiling, unknown
+ * parameters, and the coercion of the EXPORT configuration section.
+ */
+
+import { describe, test, expect } from '@jest/globals';
+import {
+  ExportHttpError,
+  loadExportSettings,
+  parseExportParams,
+} from '../../../src/export/export-params.js';
+import type { ExportSettings } from '../../../src/export/export-params.js';
+
+// Réglages de référence des tests
+const settings: ExportSettings = {
+  maxRows: 1000,
+  maxConcurrentPerIp: 2,
+  maxConcurrentTotal: 2,
+  timeoutMs: 1000,
+  transferTimeoutMs: 5000,
+  tmpDir: '/tmp/x',
+  tmpMinFreeMb: 0,
+};
+
+/**
+ * Parses a query and returns the raised export error.
+ *
+ * @param query - Query string parameters.
+ * @returns The ExportHttpError thrown by the parser.
+ */
+const failure = (query: Record<string, unknown>): ExportHttpError => {
+  try {
+    parseExportParams(query, settings);
+  } catch (error) {
+    if (error instanceof ExportHttpError) return error;
+    throw error;
+  }
+  throw new Error('parseExportParams did not throw');
+};
+
+describe('parseExportParams', () => {
+  test('defaults: arrow, every column, cluster_by order, MAX_ROWS', () => {
+    expect(parseExportParams({}, settings)).toEqual({
+      catalog: null,
+      schema: null,
+      fields: null,
+      filters: null,
+      sort: null,
+      groupBy: null,
+      aggregates: null,
+      format: 'arrow',
+      limit: 1000,
+      explicitLimit: false,
+      after: null,
+      bom: false,
+      compression: 'snappy',
+    });
+  });
+
+  test('parses every parameter', () => {
+    const params = parseExportParams(
+      {
+        catalog: 'default',
+        schema: 'geography',
+        fields: 'region, population',
+        filters: '{"children":[{"criterion":{"variable":"region","operation":"EQ","value":"A"}}]}',
+        sort: 'population:DESC,region',
+        format: 'CSV',
+        limit: '10',
+        after: 'abc',
+      },
+      settings,
+    );
+
+    expect(params).toEqual({
+      catalog: 'default',
+      schema: 'geography',
+      fields: ['region', 'population'],
+      filters: { children: [{ criterion: { variable: 'region', operation: 'EQ', value: 'A' } }] },
+      sort: [
+        { field: 'population', order: 'DESC' },
+        { field: 'region', order: 'ASC' },
+      ],
+      groupBy: null,
+      aggregates: null,
+      format: 'csv',
+      limit: 10,
+      explicitLimit: true,
+      after: 'abc',
+      bom: false,
+      compression: 'snappy',
+    });
+  });
+
+  test('bom applies to csv only, in every accepted spelling', () => {
+    expect(parseExportParams({ format: 'csv', bom: '1' }, settings).bom).toBe(true);
+    expect(parseExportParams({ format: 'csv', bom: 'TRUE' }, settings).bom).toBe(true);
+    expect(parseExportParams({ format: 'csv', bom: '0' }, settings).bom).toBe(false);
+    expect(parseExportParams({ format: 'csv', bom: true }, settings, 'body').bom).toBe(true);
+    // Absent ou à zéro, il est sans effet sur les autres formats
+    expect(parseExportParams({ format: 'parquet', bom: '0' }, settings).bom).toBe(false);
+
+    expect(failure({ format: 'csv', bom: 'yes' }).detail).toMatch(/must be 1, 0, true or false/);
+    expect(failure({ format: 'parquet', bom: '1' }).detail).toMatch(/only applies to format=csv/);
+    expect(failure({ bom: '1' }).detail).toMatch(/only applies to format=csv/);
+  });
+
+  test('compression is a whitelist that applies to parquet only', () => {
+    const parquet = (compression: string) =>
+      parseExportParams({ format: 'parquet', compression }, settings).compression;
+    expect(parquet('zstd')).toBe('zstd');
+    expect(parquet('GZIP')).toBe('gzip');
+    expect(parquet('snappy')).toBe('snappy');
+
+    expect(failure({ format: 'parquet', compression: 'lz4' }).detail).toMatch(
+      /Unknown compression "lz4".*snappy, zstd, gzip/,
+    );
+    expect(failure({ format: 'csv', compression: 'zstd' }).detail).toMatch(
+      /only applies to format=parquet/,
+    );
+  });
+
+  test('limit is capped by MAX_ROWS and stays explicit', () => {
+    const params = parseExportParams({ limit: '999999' }, settings);
+    expect(params.limit).toBe(1000);
+    expect(params.explicitLimit).toBe(true);
+  });
+
+  test('a JSON body accepts native forms on top of the query string ones', () => {
+    const filters = { children: [{ criterion: { variable: 'a,b', operation: 'IN', value: [1] } }] };
+    const params = parseExportParams(
+      {
+        fields: ['a,b', ' c '],
+        sort: ['a,b:desc', 'c'],
+        filters,
+        limit: 25,
+        format: 'parquet',
+      },
+      settings,
+      'body',
+    );
+
+    // Tableaux : une virgule reste dans le nom de colonne
+    expect(params.fields).toEqual(['a,b', 'c']);
+    expect(params.sort).toEqual([
+      { field: 'a,b', order: 'DESC' },
+      { field: 'c', order: 'ASC' },
+    ]);
+    expect(params.filters).toEqual(filters);
+    expect(params.limit).toBe(25);
+    expect(params.explicitLimit).toBe(true);
+
+    // Les formes texte du GET restent valides dans un corps
+    const asText = parseExportParams(
+      { fields: 'x,y', filters: JSON.stringify(filters), limit: '3' },
+      settings,
+      'body',
+    );
+    expect(asText.fields).toEqual(['x', 'y']);
+    expect(asText.filters).toEqual(filters);
+    expect(asText.limit).toBe(3);
+  });
+
+  test.each([
+    [{ fields: ['a', 1] }, 'array of strings'],
+    [{ fields: { a: 1 } }, 'given once'],
+    [{ filters: [1] }, 'JSON object of a FilterNode'],
+    [{ filters: 3 }, 'JSON object of a FilterNode'],
+    [{ limit: 2.5 }, 'positive integer'],
+    [{ limit: -1 }, 'positive integer'],
+    [{ after: 12 }, 'given once'],
+    [{ where: {} }, 'Unknown parameter(s): where'],
+  ])('400 for the body %j', (body, message) => {
+    let error: unknown;
+    try {
+      parseExportParams(body, settings, 'body');
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ExportHttpError);
+    expect((error as ExportHttpError).detail).toContain(message);
+  });
+
+  test('query strings keep refusing structured values', () => {
+    expect(failure({ fields: ['a', 'b'] }).detail).toContain('given once');
+  });
+
+  test('any column name is accepted here; existence is checked against metadata later', () => {
+    const params = parseExportParams(
+      { fields: "taux chômage, zone d'emploi", sort: 'Année:desc', catalog: 'a"b', schema: 'x y' },
+      settings,
+    );
+    expect(params.fields).toEqual(['taux chômage', "zone d'emploi"]);
+    expect(params.sort).toEqual([{ field: 'Année', order: 'DESC' }]);
+    // Catalogue et schéma : contrôlés contre leurs allow-lists par resolveExportTarget
+    expect(params.catalog).toBe('a"b');
+    expect(params.schema).toBe('x y');
+  });
+
+  test.each([
+    [{ format: 'json' }, 'Unknown format'],
+    [{ fields: 'a,,b' }, 'Empty field name'],
+    [{ fields: 'a,a' }, 'given twice'],
+    [{ sort: 'a:up' }, 'Invalid sort direction'],
+    [{ sort: 'a:asc:x' }, 'Invalid sort item'],
+    [{ sort: 'a,a:desc' }, 'given twice'],
+    [{ sort: ':asc' }, 'Invalid sort item'],
+    [{ filters: '[1,2]' }, 'JSON object of a FilterNode'],
+    [{ filters: '{oops' }, 'not valid JSON'],
+    [{ limit: '0' }, 'positive integer'],
+    [{ limit: '1e3' }, 'positive integer'],
+    [{ format: ['csv', 'arrow'] }, 'given once'],
+    [{ where: 'x' }, 'Unknown parameter(s): where'],
+    [{ groupBy: 'nc8' }, '"groupBy" requires "aggregates"'],
+    [{ aggregates: 'value', fields: 'nc8' }, '"fields" does not apply'],
+    [{ aggregates: 'value:total' }, 'Unknown aggregation "total"'],
+    [{ aggregates: 'value:sum:a:b' }, 'Invalid aggregates item'],
+    [{ aggregates: ':sum' }, 'Invalid aggregates item'],
+    [{ aggregates: 'value', groupBy: 'date:decade' }, 'Unknown grain "decade"'],
+    [{ aggregates: 'value', groupBy: 'date:month:x' }, 'Invalid groupBy item'],
+  ])('400 for %j', (query, message) => {
+    const error = failure(query);
+    expect(error.status).toBe(400);
+    expect(error.error).toBe('Invalid export parameter');
+    expect(error.detail).toContain(message);
+  });
+});
+
+describe('parseExportParams — export agrégé', () => {
+  test('groupBy « col[:grain] » et aggregates « measure[:aggregation[:alias]] »', () => {
+    const params = parseExportParams(
+      {
+        groupBy: 'nc8, date:Month',
+        aggregates: 'value:sum,value:avg:moyenne,weight_kg,value::total',
+        sort: 'moyenne:desc',
+      },
+      settings,
+    );
+
+    expect(params.groupBy).toEqual([{ field: 'nc8' }, { field: 'date', grain: 'MONTH' }]);
+    expect(params.aggregates).toEqual([
+      { measure: 'value', aggregation: 'SUM' },
+      { measure: 'value', aggregation: 'AVG', alias: 'moyenne' },
+      { measure: 'weight_kg' },
+      { measure: 'value', alias: 'total' },
+    ]);
+    expect(params.sort).toEqual([{ field: 'moyenne', order: 'DESC' }]);
+  });
+
+  test('aggregates sans groupBy : agrégat global ; le corps POST prend des tableaux', () => {
+    expect(parseExportParams({ aggregates: 'value' }, settings).groupBy).toEqual([]);
+
+    const body = parseExportParams(
+      { groupBy: ['nc8'], aggregates: ['value:max', 'value:count:n'] },
+      settings,
+      'body',
+    );
+    expect(body.groupBy).toEqual([{ field: 'nc8' }]);
+    expect(body.aggregates).toEqual([
+      { measure: 'value', aggregation: 'MAX' },
+      { measure: 'value', aggregation: 'COUNT', alias: 'n' },
+    ]);
+  });
+});
+
+describe('loadExportSettings', () => {
+  test('coerces environment strings and falls back on invalid values', () => {
+    const loaded = loadExportSettings({
+      MAX_ROWS: '42',
+      MAX_CONCURRENT_PER_IP: 'x',
+      MAX_CONCURRENT_TOTAL: -1,
+      TIMEOUT_MS: 5000,
+      TRANSFER_TIMEOUT_MS: 'x',
+      TMP_DIR: '',
+      TMP_MIN_FREE_MB: '',
+    });
+
+    expect(loaded.maxRows).toBe(42);
+    expect(loaded.maxConcurrentPerIp).toBe(2);
+    expect(loaded.maxConcurrentTotal).toBe(2);
+    expect(loaded.timeoutMs).toBe(5000);
+    expect(loaded.transferTimeoutMs).toBe(600_000);
+    expect(loaded.tmpMinFreeMb).toBe(1024);
+    expect(loaded.tmpDir).toMatch(/dashboard-api-export$/);
+  });
+
+  test('reads the EXPORT section of config/api.yaml', () => {
+    const loaded = loadExportSettings();
+    expect(loaded.maxRows).toBe(5_000_000);
+    expect(loaded.timeoutMs).toBe(120_000);
+    expect(loaded.transferTimeoutMs).toBe(600_000);
+    expect(loaded.tmpMinFreeMb).toBe(1024);
+  });
+
+  test('a free-space threshold of 0 is valid and disables the check', () => {
+    expect(loadExportSettings({ TMP_MIN_FREE_MB: 0 } as never).tmpMinFreeMb).toBe(0);
+    expect(loadExportSettings({ TMP_MIN_FREE_MB: '0' } as never).tmpMinFreeMb).toBe(0);
+  });
+});

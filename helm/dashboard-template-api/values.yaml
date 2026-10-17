@@ -15,6 +15,11 @@ fullnameOverride: ''
 # -- Number of replicas (ignored when autoscaling.enabled)
 replicaCount: 2
 
+# -- Time (seconds) Kubernetes waits after SIGTERM before SIGKILL. The API drains
+# its in-flight requests and exports during that window, so it must exceed
+# config.SHUTDOWN_TIMEOUT_MS (checked at render time).
+terminationGracePeriodSeconds: 60
+
 # -- Service account
 serviceAccount:
   create: true
@@ -112,8 +117,17 @@ config:
 
   # DuckLake catalog routing
   DEFAULT_CATALOG: default
-  ALLOWED_CATALOGS: '["default"]'
+  # Unset: every catalog declared under `catalogs:` is allowed. Set a
+  # JSON-encoded list to narrow it.
+  # ALLOWED_CATALOGS: '["default"]'
   ALLOW_CROSS_CATALOG_QUERIES: 'false'
+
+  # Catalog freshness: every pod re-reads dataset_metadata.updated_at on a fresh
+  # ATTACH at this interval and reloads itself when it changed — the updater
+  # needs no reload/invalidation call. Data is fresh on every pod within one
+  # interval (plus the reload time).
+  CATALOG_FRESHNESS_ENABLED: 'true'
+  CATALOG_FRESHNESS_INTERVAL_MS: '60000'
 
   # S3 backend
   S3_ENABLED: 'true'
@@ -123,8 +137,24 @@ config:
   # Override REDIS_HOST when redis.enabled=false
   REDIS_PORT: '6379'
 
+  # Graceful shutdown: budget (ms) to finish the in-flight requests and exports
+  # after SIGTERM, then close the pool and Redis. Must stay below
+  # terminationGracePeriodSeconds * 1000 (the chart refuses to render otherwise).
+  # Exports still running past it are cut.
+  SHUTDOWN_TIMEOUT_MS: '50000'
+
   # Reverse-proxy / rate limiting
   TRUSTED_PROXIES: '["10.0.0.0/8"]'
+
+  # /metrics access without key: JSON-encoded list of IPs or CIDR blocks (e.g. the
+  # Prometheus pods). Any other caller needs the x-admin-key header
+  # (secrets.data.ADMIN_API_KEY); without either, /metrics answers 401.
+  # METRICS_ALLOWED_IPS: '["10.0.12.0/24"]'
+
+  # CORS — JSON-encoded list of allowed cross-origin origins (one per frontend
+  # that queries this API from the browser). Empty by default: no cross-origin
+  # request is allowed until set.
+  # CORS_ORIGINS: '["https://qbolliet.github.io"]'
 
   # Logging — stdout only (compatible with readOnlyRootFilesystem)
   LOG_TO_FILE: 'false'
@@ -145,9 +175,11 @@ catalogs:
     path: s3://my-bucket/default.ducklake
     dataPath: s3://my-bucket/default_data/
     readOnly: true
-    # JSON-encoded list of schemas hosted by the catalog. The first element is
-    # the default schema when a request omits the `schema` argument.
-    schemas: '["main"]'
+    # Optional JSON-encoded allow-list of schemas. Unset: the API serves every
+    # conformant schema of the catalog, discovered at attach and at reload
+    # ("main" first). When set, the first element is the default schema when a
+    # request omits the `schema` argument.
+    # schemas: '["main"]'
     # Postgres connection details (used only when type=postgres).
     # Credentials go in secrets.postgresCatalogs.<name> below.
     # postgres:

@@ -1,17 +1,27 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
+import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
-import type { DuckDBConnection } from './base-loader.js';
+import { qualifiedTable } from '../utils/identifiers.js';
+import { createContextLogger } from '../utils/logger.js';
+import {
+  METADATA_SELECT,
+  sortByColumnPosition,
+  toFieldMetadata,
+  withLabelFields,
+} from '../utils/metadata-mapping.js';
+import type { CacheNamespace, DuckDBConnection } from './base-loader.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
+
+const catalogLogger = createContextLogger({ component: 'loaders', module: 'catalog' });
+
+// Position (1, 2, …) de chaque colonne de la table des faits d'un schéma
+const COLUMN_POSITIONS_SQL =
+  'SELECT column_name, column_index FROM duckdb_columns() ' +
+  "WHERE database_name = ? AND schema_name = ? AND table_name = 'fact_table'";
 
 // ─── Interfaces des résultats catalog ────────────────────────────────────────
-
-/** Row of the metadata table of a DuckLake catalog. */
-interface CatalogMetadataRow {
-  name: string;
-  is_categorical: boolean;
-  [key: string]: unknown;
-}
 
 /** Catalog + schema pair used as the DataLoader key for catalog-level queries. */
 interface CatalogSchemaKey {
@@ -24,8 +34,10 @@ interface CatalogSchemaKey {
 /**
  * Loader for catalog-level metadata queries.
  *
- * Loads all metadata rows for a given catalog alias, converting the
- * is_categorical column from integer to boolean.
+ * Loads every metadata row of a given catalog/schema, in the order of the
+ * columns of `fact_table`. Rows are returned in camelCase: the snake_case →
+ * camelCase mapping lives in utils/metadata-mapping.ts. `labelFields` is
+ * derived from the same rows.
  */
 class CatalogMetadataLoader extends BaseQueryLoader {
   // Initialisation sans identifiant de base de données (requêtes cross-catalog)
@@ -40,73 +52,78 @@ class CatalogMetadataLoader extends BaseQueryLoader {
       cachePrefix: 'catalog-metadata',
       cache: true,
       cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.METADATA,
       catalogId: null,
     });
+  }
+
+  // Garde de version appliquée à la clé, avant toute consultation du cache
+  /**
+   * Applies the schema version guard to the catalog/schema carried by the key.
+   *
+   * @param key - DataLoader key naming the catalog and schema to read.
+   */
+  override assertKeyAllowed(key: unknown): void {
+    const { catalog, schema } = key as CatalogSchemaKey;
+    assertSchemaSupported(catalog, schema || databaseManager.getDefaultSchema(catalog));
+  }
+
+  // Segments (catalog, schema) portés par la clé — le loader n'est lié à aucun catalogue
+  /**
+   * Returns the (catalog, schema) carried by the key, resolved.
+   *
+   * Overrides the base implementation: this loader has `catalogId: null`, so
+   * without this override every cache entry would collapse under the literal
+   * 'default'/'_' placeholders regardless of the catalog actually queried,
+   * and per-catalog invalidation would never find them.
+   *
+   * @param key - DataLoader key naming the catalog and schema to read.
+   * @returns The resolved catalog and schema.
+   */
+  override cacheNamespace(key: unknown): CacheNamespace {
+    const { catalog, schema } = key as CatalogSchemaKey;
+    return { catalog, schema: schema || databaseManager.getDefaultSchema(catalog) };
   }
 
   // Méthode de chargement de toutes les méta-données d'un catalogue
   /**
-   * Loads all metadata rows for a given catalog/schema.
+   * Loads all metadata rows for a given catalog/schema, in table order.
+   *
+   * The `metadata` table is stored alphabetically, so the rows are ordered by
+   * the position of their column in `fact_table` — read in the same load, hence
+   * in the same cache entry. A row whose column is missing from the table is
+   * placed last and warned about.
    *
    * @param connection - Active DuckDB connection from the pool.
    * @param key - Catalog alias and optional schema to query.
-   * @returns Array of CatalogMetadataRow with boolean is_categorical values.
+   * @returns Array of metadata rows in camelCase, `labelFields` filled.
    */
   async loadAllMetadata(
     connection: DuckDBConnection,
     { catalog, schema }: CatalogSchemaKey,
-  ): Promise<CatalogMetadataRow[]> {
+  ): Promise<FieldMetadata[]> {
     const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
-    const query = `SELECT * FROM "${catalog}".${resolvedSchema}.metadata`;
+    const query = `SELECT ${METADATA_SELECT} FROM ${qualifiedTable(catalog, resolvedSchema, 'metadata')}`;
     const rows = await connection.all(query);
-    // Conversion du flag catégoriel stocké en entier vers boolean
-    return rows.map((row) => ({
-      ...row,
-      is_categorical: Boolean(row.is_categorical),
-    })) as CatalogMetadataRow[];
-  }
-}
 
-// Classe de chargement des noms de dimensions d'un catalogue
-/**
- * Loader for catalog-level dimension name queries.
- *
- * Returns the list of field names that are marked as categorical in the
- * metadata table of a given catalog.
- */
-class CatalogDimensionNamesLoader extends BaseQueryLoader {
-  // Initialisation sans identifiant de base de données (requêtes cross-catalog)
-  /**
-   * Creates a CatalogDimensionNamesLoader with no specific database binding.
-   *
-   * The catalog to query is passed as the DataLoader key at load time.
-   */
-  constructor() {
-    super({
-      batchSize: 1,
-      cachePrefix: 'catalog-dimension-names',
-      cache: true,
-      cacheTimeout: config.API.LOADERS.DEFAULT_CACHE_TIMEOUT,
-      catalogId: null,
-    });
-  }
+    // Position de chaque colonne de la table des faits, lue sur la même connexion
+    const columns = await connection.all(COLUMN_POSITIONS_SQL, [catalog, resolvedSchema]);
+    const positions = new Map(columns.map((c) => [String(c.column_name), Number(c.column_index)]));
 
-  // Méthode de chargement des noms de dimensions d'un catalogue
-  /**
-   * Loads the names of all categorical fields for a given catalog/schema.
-   *
-   * @param connection - Active DuckDB connection from the pool.
-   * @param key - Catalog alias and optional schema to query.
-   * @returns Array of field names where is_categorical is true.
-   */
-  async loadDimensionNames(
-    connection: DuckDBConnection,
-    { catalog, schema }: CatalogSchemaKey,
-  ): Promise<string[]> {
-    const resolvedSchema = schema || databaseManager.getDefaultSchema(catalog);
-    const query = `SELECT name FROM "${catalog}".${resolvedSchema}.metadata WHERE is_categorical = true`;
-    const results = await connection.all(query);
-    return results.map((r) => r.name as string);
+    const { fields, unplaced } = sortByColumnPosition(
+      rows.map((row) => toFieldMetadata(row)),
+      positions,
+    );
+    if (unplaced.length > 0) {
+      catalogLogger.warn(
+        `Metadata rows without a column in ${catalog}.${resolvedSchema}.fact_table; listed last`,
+        { catalog, schema: resolvedSchema, columns: unplaced },
+      );
+    }
+
+    // Inverse de label_for calculé sur les lignes lues, sans requête de plus
+    return withLabelFields(fields);
   }
 }
 
@@ -114,32 +131,14 @@ class CatalogDimensionNamesLoader extends BaseQueryLoader {
 /**
  * Creates a DataLoader for catalog metadata queries.
  *
- * @returns DataLoader keyed by {catalog, schema}, returning CatalogMetadataRow arrays.
+ * @returns DataLoader keyed by {catalog, schema}, returning FieldMetadata arrays.
  */
 const createCatalogMetadataLoader = () => {
   const loader = new CatalogMetadataLoader();
-  return loader.createLoader<CatalogSchemaKey, CatalogMetadataRow[]>((connection, key) =>
+  return loader.createLoader<CatalogSchemaKey, FieldMetadata[]>((connection, key) =>
     loader.loadAllMetadata(connection, key),
   );
 };
 
-// Fonction de création d'un loader pour les noms de dimensions d'un catalogue
-/**
- * Creates a DataLoader for catalog dimension name queries.
- *
- * @returns DataLoader keyed by {catalog, schema}, returning string arrays of dimension names.
- */
-const createCatalogDimensionNamesLoader = () => {
-  const loader = new CatalogDimensionNamesLoader();
-  return loader.createLoader<CatalogSchemaKey, string[]>((connection, key) =>
-    loader.loadDimensionNames(connection, key),
-  );
-};
-
-export {
-  createCatalogMetadataLoader,
-  createCatalogDimensionNamesLoader,
-  CatalogMetadataLoader,
-  CatalogDimensionNamesLoader,
-};
-export type { CatalogMetadataRow, CatalogSchemaKey };
+export { createCatalogMetadataLoader, CatalogMetadataLoader };
+export type { CatalogSchemaKey };

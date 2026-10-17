@@ -9,9 +9,11 @@ CATALOGS:
     PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
     DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
     READ_ONLY: ${DEFAULT_READ_ONLY:-true}
-    # Liste complète des schémas hébergés par le catalogue (JSON dans une variable d'env).
-    # Le premier élément sert de schéma par défaut quand la requête n'en spécifie aucun.
-    SCHEMAS: ${DEFAULT_SCHEMAS:-["main"]}
+    # Liste blanche des schémas servis (JSON dans une variable d'env). Vide ou absente :
+    # tous les schémas du catalogue sont servis, découverts à l'attach et à chaque
+    # rechargement (« main » d'abord, puis l'ordre alphabétique). Fournie : seuls ces
+    # schémas sont servis, le premier étant le défaut quand la requête n'en précise aucun.
+    SCHEMAS: ${DEFAULT_SCHEMAS:-}
     # Utilisé uniquement quand TYPE=postgres
     POSTGRES:
       HOST: ${DEFAULT_PG_HOST:-}
@@ -26,13 +28,13 @@ CATALOGS:
     PATH: ${MACROECONOMICS_CATALOG_PATH:-../dashboard-template-database/outputs/macroeconomics.ducklake}
     DATA_PATH: ${MACROECONOMICS_DATA_PATH:-../dashboard-template-database/outputs/macroeconomics_data/}
     READ_ONLY: ${MACROECONOMICS_READ_ONLY:-true}
-    SCHEMAS: ${MACROECONOMICS_SCHEMAS:-["main"]}
+    SCHEMAS: ${MACROECONOMICS_SCHEMAS:-}
   public_finance:
     TYPE: ${PUBLIC_FINANCE_CATALOG_TYPE:-file}
     PATH: ${PUBLIC_FINANCE_CATALOG_PATH:-../dashboard-template-database/outputs/public_finance.ducklake}
     DATA_PATH: ${PUBLIC_FINANCE_DATA_PATH:-../dashboard-template-database/outputs/public_finance_data/}
     READ_ONLY: ${PUBLIC_FINANCE_READ_ONLY:-true}
-    SCHEMAS: ${PUBLIC_FINANCE_SCHEMAS:-["main"]}
+    SCHEMAS: ${PUBLIC_FINANCE_SCHEMAS:-}
 
 DATABASE:
   POOL:
@@ -40,9 +42,25 @@ DATABASE:
     ACQUIRE_TIMEOUT: 60000
     POOL_RETRY_DELAY: 500
 
+# Versions du schéma de base (dataset_metadata.schema_version) lisibles par cette
+# API. Un schéma dont la version n'y figure pas, ou dépourvu de table
+# dataset_metadata, est signalé à l'attach et refusé à la requête
+# (SCHEMA_VERSION_UNSUPPORTED). Aucun chemin de compatibilité.
+SUPPORTED_SCHEMA_VERSIONS: ${SUPPORTED_SCHEMA_VERSIONS:-[1]}
+
+# Détection des mises à jour de données sur chaque réplica. Toutes les
+# INTERVAL_MS, le pod relit dataset_metadata.updated_at de chaque schéma sur un
+# ATTACH neuf ; si un marqueur a changé, il recharge ses catalogues et bascule
+# ses clés de cache Redis sur la nouvelle version. L'updater n'a plus rien à
+# appeler : la fraîcheur est garantie en un intervalle (plus la durée du reload).
+CATALOG_FRESHNESS:
+  ENABLED: ${CATALOG_FRESHNESS_ENABLED:-true}
+  INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
+
 CATALOG_ROUTING:
   DEFAULT_CATALOG: ${DEFAULT_CATALOG:-default}
-  ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-["default", "macroeconomics", "public_finance"]}
+  # Vide : tous les catalogues de CATALOGS sont autorisés. Fournie (JSON) : seuls ceux-là.
+  ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-}
   ALLOW_CROSS_CATALOG_QUERIES: ${ALLOW_CROSS_CATALOG_QUERIES:-false}
 
 S3:

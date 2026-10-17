@@ -1,5 +1,4 @@
-// Importation des modules Node.js et GraphQL
-import { GraphQLError } from 'graphql';
+// Importation des modules Node.js
 import crypto from 'crypto';
 import { createContextLogger } from '../utils/logger.js';
 import type { ContextLogger } from '../utils/logger.js';
@@ -8,8 +7,8 @@ import type { ContextLogger } from '../utils/logger.js';
 
 /** Minimal representation of an HTTP request required by the rate limiter. */
 interface HttpRequest {
+  /** Client IP computed by Express from the socket and the `trust proxy` setting. */
   ip?: string;
-  connection?: { remoteAddress?: string };
   socket?: { remoteAddress?: string };
   headers: Record<string, string | string[] | undefined>;
 }
@@ -20,10 +19,8 @@ interface RateLimiterConfig {
   windowMs: number;
   maxBurstRequests: number;
   burstWindowMs: number;
-  skipFailedRequests: boolean;
   keyGenerator: (req: HttpRequest) => string;
   skip: (req: HttpRequest) => boolean;
-  trustedProxies: Set<string>;
 }
 
 /** Tracking data associated with a client entry in the store. */
@@ -45,14 +42,41 @@ interface RateLimitInfo {
   skip?: boolean;
 }
 
+/** Outcome of a rate-limit check for a single request. */
+interface RateLimitDecision {
+  /** Whether the request may proceed. */
+  allowed: boolean;
+  /** Milliseconds to wait before retrying; 0 when the request is allowed. */
+  retryAfterMs: number;
+  /** Current counters and reset timestamps for the client. */
+  info: RateLimitInfo;
+}
+
+// ─── Identification du client ────────────────────────────────────────────────
+
+/**
+ * Returns the IP address identifying the client of a request.
+ *
+ * Relies on `req.ip`, computed by Express from the `trust proxy` setting
+ * (SECURITY.RATE_LIMIT.TRUSTED_PROXIES): x-forwarded-for is only read through
+ * trusted hops and the rightmost untrusted address is kept, so a forged header
+ * sent straight to the API is ignored. Shared by the rate limiter and the
+ * export concurrency gate, so both identify a client the same way.
+ *
+ * @param req - Incoming HTTP request.
+ * @returns The client IP, or 'unknown' when the socket exposes none.
+ */
+// Adresse IP du client telle que résolue par Express (trust proxy)
+const clientIp = (req: HttpRequest): string => req.ip ?? req.socket?.remoteAddress ?? 'unknown';
+
 // ─── Classe de limitation de taux ───────────────────────────────────────────
 
 /**
  * Implements a sliding-window rate limiter for GraphQL requests.
  *
- * Tracks requests per client in memory using a key derived from the
- * client's IP address and User-Agent header. Enforces both a sustained
- * request limit over a long window and a burst limit over a short window.
+ * Tracks requests per client IP in memory (per process: counters are not
+ * shared between pods). Enforces both a sustained request limit over a long
+ * window and a burst limit over a short window.
  */
 class RateLimiter {
   private config: RateLimiterConfig;
@@ -72,13 +96,10 @@ class RateLimiter {
       windowMs: (rateLimitConfig['WINDOW_MS'] as number) ?? 15 * 60 * 1000,
       maxBurstRequests: (rateLimitConfig['MAX_BURST_REQUESTS'] as number) ?? 20,
       burstWindowMs: (rateLimitConfig['BURST_WINDOW_MS'] as number) ?? 60 * 1000,
-      skipFailedRequests: (rateLimitConfig['SKIP_FAILED_REQUESTS'] as boolean) ?? false,
       keyGenerator:
         (rateLimitConfig['KEY_GENERATOR'] as (req: HttpRequest) => string) ??
         this.defaultKeyGenerator.bind(this),
       skip: (rateLimitConfig['SKIP'] as (req: HttpRequest) => boolean) ?? (() => false),
-      // Ensemble des IPs de proxy autorisées à transmettre x-forwarded-for
-      trustedProxies: new Set<string>((rateLimitConfig['TRUSTED_PROXIES'] as string[]) ?? []),
     };
 
     // Initialisation du store en mémoire
@@ -87,19 +108,23 @@ class RateLimiter {
     this.logger = createContextLogger({ component: 'security', module: 'rate-limiter' });
     // Démarrage du nettoyage périodique des entrées expirées
     this.cleanupInterval = setInterval(() => this._removeExpiredEntries(), this.config.windowMs);
+    // Timer non bloquant pour l'event loop — il ne doit pas retenir le processus
+    this.cleanupInterval.unref?.();
   }
 
   /**
    * Checks and updates rate-limit counters for a given HTTP request.
    *
+   * Never throws on limit exhaustion: the caller decides how to reject the
+   * request (HTTP 429 for the Express middleware).
+   *
    * @param req - Incoming HTTP request to evaluate.
-   * @returns RateLimitInfo with current counters and ISO reset timestamps.
-   * @throws {GraphQLError} When the sustained or burst limit is exceeded.
+   * @returns Decision carrying the allowance, the retry delay and the counters.
    */
-  async checkLimit(req: HttpRequest): Promise<RateLimitInfo> {
+  async checkLimit(req: HttpRequest): Promise<RateLimitDecision> {
     // Court-circuit si la requête doit être ignorée
     if (this.config.skip(req)) {
-      return { skip: true } as RateLimitInfo;
+      return { allowed: true, retryAfterMs: 0, info: { skip: true } as RateLimitInfo };
     }
 
     const key = this.config.keyGenerator(req);
@@ -158,57 +183,36 @@ class RateLimiter {
         violations: clientData.violations,
       });
 
-      // Calcul du délai avant nouvelle tentative autorisée
-      const oldestRequest = clientData.requests[0] ?? now;
-      const retryAfter = Math.ceil(
-        Math.min(
-          this.config.windowMs - (now - oldestRequest),
-          this.config.burstWindowMs - (now - clientData.lastBurstReset),
-        ) / 1000,
-      );
+      // Délai avant nouvelle tentative : attente de la plus contraignante des
+      // limites effectivement dépassées (fenêtre longue et/ou rafale).
+      const delays: number[] = [];
+      if (totalRequests >= this.config.maxRequests) {
+        const oldestRequest = clientData.requests[0] ?? now;
+        delays.push(this.config.windowMs - (now - oldestRequest));
+      }
+      if (clientData.burstCount >= this.config.maxBurstRequests) {
+        delays.push(this.config.burstWindowMs - (now - clientData.lastBurstReset));
+      }
+      const retryAfterMs = Math.max(0, ...delays);
 
-      throw new GraphQLError('Too many requests', {
-        extensions: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          retryAfter,
-          ...rateLimitInfo,
-        },
-      });
+      return { allowed: false, retryAfterMs, info: rateLimitInfo };
     }
 
     // Enregistrement de la requête courante dans la fenêtre
     clientData.requests.push(now);
     clientData.burstCount++;
 
-    return rateLimitInfo;
+    return { allowed: true, retryAfterMs: 0, info: rateLimitInfo };
   }
 
   /**
-   * Generates a rate-limit store key from the client's IP and User-Agent.
-   *
-   * Trusts x-forwarded-for only when the connecting IP is listed in
-   * trustedProxies, preventing IP spoofing by arbitrary clients.
+   * Generates a rate-limit store key from the client's IP alone.
    *
    * @param req - Incoming HTTP request.
-   * @returns SHA-256 hex hash of "{ip}:{user-agent}".
+   * @returns SHA-256 hex hash of the client IP (masked in the logs).
    */
   private defaultKeyGenerator(req: HttpRequest): string {
-    const remoteIp = req.connection?.remoteAddress ?? req.socket?.remoteAddress ?? 'unknown';
-    let ip = req.ip ?? remoteIp;
-
-    // Lecture de x-forwarded-for uniquement depuis un proxy de confiance
-    const trustedProxies = this.config.trustedProxies;
-    if (trustedProxies.has(remoteIp) || trustedProxies.has('*')) {
-      const forwarded = req.headers['x-forwarded-for'];
-      if (forwarded) {
-        const raw = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-        ip = raw.split(',')[0].trim();
-      }
-    }
-
-    const userAgent = (req.headers['user-agent'] as string | undefined) ?? 'no-user-agent';
-
-    return crypto.createHash('sha256').update(`${ip}:${userAgent}`).digest('hex');
+    return crypto.createHash('sha256').update(clientIp(req)).digest('hex');
   }
 
   /**
@@ -251,5 +255,5 @@ class RateLimiter {
   }
 }
 
-export { RateLimiter };
-export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo };
+export { RateLimiter, clientIp };
+export type { HttpRequest, RateLimiterConfig, ClientData, RateLimitInfo, RateLimitDecision };

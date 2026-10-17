@@ -25,7 +25,10 @@ data:
   {{- end }}
   {{ $upper }}_DATA_PATH: {{ required (printf "catalogs.%s.dataPath is required" $name) $catalog.dataPath | quote }}
   {{ $upper }}_READ_ONLY: {{ default true $catalog.readOnly | quote }}
-  {{ $upper }}_SCHEMAS: {{ default "[\"main\"]" $catalog.schemas | quote }}
+  {{- /* Unset: the API discovers every schema of the catalog */}}
+  {{- if $catalog.schemas }}
+  {{ $upper }}_SCHEMAS: {{ $catalog.schemas | quote }}
+  {{- end }}
   {{- if eq (default "file" $catalog.type) "postgres" }}
   {{- with $catalog.postgres }}
   {{ $upper }}_PG_HOST: {{ .host | quote }}

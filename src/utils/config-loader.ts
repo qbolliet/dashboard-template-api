@@ -33,41 +33,60 @@ export interface ErrorTransportConfig {
   filename: string;
 }
 
-/** Raw entry for a security pattern (block-list). */
-interface SecurityPatternEntry {
-  pattern: string;
-  message: string;
-  flags?: string;
-}
-
 /** Rate limiter configuration. */
 interface RateLimitConfig {
+  /** Set to false to disable enforcement entirely (test configurations). */
+  ENABLED?: boolean;
   MAX_REQUESTS: number;
   WINDOW_MS: number;
   MAX_BURST_REQUESTS: number;
   BURST_WINDOW_MS: number;
-  SKIP_FAILED_REQUESTS: boolean;
-  TRUSTED_PROXIES: string[];
+  /** YAML list, or JSON-array / comma-separated string from an env override. */
+  TRUSTED_PROXIES: string[] | string;
 }
 
-/** Query complexity analysis configuration. */
+/** Strict rate limiter of the admin endpoints (/api/cache/*, /api/catalog/*). */
+interface AdminRateLimitConfig {
+  ENABLED?: boolean;
+  MAX_REQUESTS?: number;
+  WINDOW_MS?: number;
+  MAX_BURST_REQUESTS?: number;
+  BURST_WINDOW_MS?: number;
+}
+
+/** Access to the operational endpoints: /metrics (admin key or allowed IPs). */
+interface MetricsAccessConfig {
+  /** IPs or CIDR blocks allowed without key; YAML list, or JSON-array / comma-separated string. */
+  ALLOWED_IPS?: string[] | string;
+}
+
+/**
+ * Query complexity analysis configuration (scoring rules in
+ * docs-site/toolbox/docs/architecture/security.md).
+ */
 interface ComplexityConfig {
+  /** Maximum score of one operation. */
   MAX_ALLOWED: number;
+  /** Maximum number of root fields (aliases included) of one operation. */
+  MAX_ROOT_FIELDS: number;
   SCALAR_COST: number;
   OBJECT_COST: number;
-  LIST_FACTOR: number;
   DEPTH_FACTOR: number;
   INTROSPECTION_COST: number;
-  CUSTOM_SCORES: Record<string, number>;
-}
-
-/** User input sanitization configuration. */
-interface SanitizationConfig {
-  ENABLE_XSS: boolean;
-  ENABLE_SQL: boolean;
-  MAX_STRING_LENGTH: number;
-  ALLOWED_TAGS: string[];
-  CUSTOM_SANITIZERS: Record<string, (value: unknown) => unknown>;
+  /** Cost of one row requested by `limit` (bounded by API.PAGINATION.MAX_LIMIT). */
+  ROW_COST: number;
+  /** Cost of `Metadata.stats` per column of the enclosing list. */
+  STATS_COST_PER_COLUMN: number;
+  /** getAggregates: cost of each aggregate. */
+  AGGREGATE_COST?: number;
+  /** getAggregates: extra cost of each explicit MEDIAN or MODE. */
+  HOLISTIC_AGGREGATE_COST?: number;
+  /** getAggregates: cost of each group column. */
+  GROUP_COLUMN_COST?: number;
+  /** Score of a root field missing from ROOT_FIELD_SCORES. */
+  DEFAULT_ROOT_FIELD_SCORE: number;
+  /** Base score of each root field of the Query type. */
+  ROOT_FIELD_SCORES: Record<string, number>;
 }
 
 /** Security monitoring configuration. */
@@ -76,35 +95,34 @@ interface SecurityMonitoringConfig {
   LOG_ALL_METRICS: boolean;
 }
 
+/** Anti-abuse bounds of the structured filter tree. */
+export interface FilterTreeConfig {
+  MAX_DEPTH: number;
+  MAX_CRITERIA: number;
+  MAX_IN_VALUES?: number;
+  MAX_PATTERN_LENGTH?: number;
+}
+
 /** Full security configuration (SECURITY section of the YAML). */
 interface SecurityConfig {
   MAX_QUERY_DEPTH: number;
   RATE_LIMIT: RateLimitConfig;
+  ADMIN_RATE_LIMIT?: AdminRateLimitConfig;
+  METRICS?: MetricsAccessConfig;
   COMPLEXITY: ComplexityConfig;
-  SANITIZATION: SanitizationConfig;
   MONITORING: SecurityMonitoringConfig;
+  FILTER_TREE?: FilterTreeConfig;
 }
 
 /** Global security limits (SECURITY_LIMITS section of the YAML). */
 interface SecurityLimitsConfig {
   DEFAULT_DEPTH_LIMIT: number;
-  MAX_INPUT_LENGTH: number;
-  COMPLEXITY_LIST_FACTOR: number;
-  COMPLEXITY_DEPTH_FACTOR: number;
-  COMPLEXITY_CALCULATION_FACTOR: number;
-}
-
-/** Request validation patterns (SECURITY_PATTERNS section of the YAML). */
-interface SecurityPatternsConfig {
-  blocked: SecurityPatternEntry[];
-  allowed: string[];
 }
 
 /** Security thresholds exposed in the API section of the YAML. */
 interface SecurityThresholdsConfig {
   HSTS_MAX_AGE: number;
   VALIDATION_MAX_LENGTH: number;
-  ERROR_TRUNCATION_LENGTH: number;
   QUERY_SNIPPET_LENGTH: number;
 }
 
@@ -113,14 +131,20 @@ interface CorsConfig {
   CREDENTIALS: boolean;
   METHODS: string[];
   HEADERS: string[];
-  ORIGINS: string[];
+  /** Preflight cache duration, in seconds (Access-Control-Max-Age). */
+  MAX_AGE: number;
+  /**
+   * Allowed cross-origin origins. A YAML list in development; a JSON-array
+   * string (or comma-separated string) in production, from the CORS_ORIGINS
+   * environment variable — see `parseCorsOrigins` in src/security/cors.ts.
+   */
+  ORIGINS: string[] | string;
 }
 
 /** Size limits for incoming HTTP requests. */
 interface RequestLimitsConfig {
   MAX_REQUEST_SIZE: string;
-  MAX_FIELD_SIZE: number;
-  MAX_FIELDS: number;
+  MAX_QUERY_SIZE: number;
 }
 
 /** HTTP response compression configuration. */
@@ -139,10 +163,8 @@ interface GraphqlConfig {
 /** DataLoader configuration (batch size and cache timeouts). */
 interface LoadersConfig {
   BATCH_SIZE: number;
-  MAX_BATCH_SIZE: number;
   DEFAULT_CACHE_TIMEOUT: number;
   FACT_CACHE_TIMEOUT: number;
-  DIMENSION_CACHE_TIMEOUT: number;
   METADATA_CACHE_TIMEOUT: number;
   SELECT_OPTIONS_CACHE_TIMEOUT: number;
 }
@@ -153,6 +175,53 @@ interface PaginationConfig {
   MAX_LIMIT: number;
   MAX_OFFSET: number;
   SELECT_OPTIONS_LIMIT: number;
+}
+
+/** Bounds of the select options trees (getSelectOptionsTree). */
+export interface SelectOptionsConfig {
+  /** Hard bound on the node count of a tree; exceeding it is a BAD_USER_INPUT. */
+  TREE_MAX_NODES: number;
+}
+
+/** Bounds of the aggregate query (getAggregates). */
+export interface AggregatesConfig {
+  /** Maximum number of aggregates of one query; exceeding it is a BAD_USER_INPUT. */
+  MAX_AGGREGATES: number;
+  /** Maximum number of group columns of one query; exceeding it is a BAD_USER_INPUT. */
+  MAX_GROUP_BY: number;
+}
+
+/**
+ * Guards of the REST export endpoint (GET /api/export).
+ *
+ * Values may arrive as strings when overridden by environment variables; the
+ * export module coerces them with Number().
+ */
+interface ExportConfig {
+  /** Hard ceiling on exported rows, applied as a LIMIT. */
+  MAX_ROWS: number | string;
+  /** Concurrent exports allowed per client IP. */
+  MAX_CONCURRENT_PER_IP: number | string;
+  /** Concurrent exports allowed across all clients (each holds a pool connection). */
+  MAX_CONCURRENT_TOTAL: number | string;
+  /** Budget of one export until its first byte (query and COPY), in milliseconds. */
+  TIMEOUT_MS: number | string;
+  /** Budget of the transfer, from the first byte to the end, in milliseconds. */
+  TRANSFER_TIMEOUT_MS?: number | string;
+  /** Directory of the csv/parquet temporary files; empty uses the system tmp dir. */
+  TMP_DIR?: string;
+  /** Free space, in MB, the tmp volume must keep for a csv/parquet export (0 disables). */
+  TMP_MIN_FREE_MB?: number | string;
+}
+
+/** Graceful shutdown (SIGTERM / SIGINT). */
+interface ShutdownConfig {
+  /**
+   * Overall budget of the shutdown, in milliseconds: draining of the in-flight
+   * requests and exports, then closing of the pool and Redis. Must stay below
+   * the pod's terminationGracePeriodSeconds. May arrive as a string.
+   */
+  TIMEOUT_MS: number | string;
 }
 
 /** Redis configuration — reconnection back-off strategy. */
@@ -192,37 +261,9 @@ interface CacheRedisConfig {
   CLUSTER?: CacheClusterConfig;
 }
 
-/** Redis entry TTLs per data type (in seconds). */
-interface CacheTTLConfig {
-  DEFAULT: number;
-  METADATA: number;
-  DIMENSIONS: number;
-  FACTS: number;
-  AGGREGATED_FACTS: number;
-  SELECT_OPTIONS: number;
-  COUNT_QUERIES: number;
-}
-
-/** Automatic cache invalidation parameters. */
-interface CacheInvalidationConfig {
-  GRACE_PERIOD: number;
-  AUTO_INVALIDATE: boolean;
-  BATCH_SIZE: number;
-  TIMEOUT: number;
-}
-
-/** HTTP cache configuration (control headers). */
-interface CacheHttpConfig {
-  PUBLIC_PATHS: string[];
-  VARY_BY_HEADERS: string[];
-}
-
-/** Complete Redis and HTTP cache configuration. */
+/** Complete Redis cache configuration. */
 interface CacheConfig {
   REDIS: CacheRedisConfig;
-  TTL: CacheTTLConfig;
-  INVALIDATION: CacheInvalidationConfig;
-  HTTP_CACHE: CacheHttpConfig;
 }
 
 /** Source type of a DuckLake catalog: a static `.ducklake` file or a Postgres catalog. */
@@ -246,14 +287,15 @@ export interface CatalogConfig {
   DATA_PATH: string;
   READ_ONLY: boolean;
   /**
-   * Full list of schemas hosted by the catalog. The first element is the
-   * default schema used when a request omits the schema argument. Used to
-   * enumerate per-schema cache namespaces (invalidation, stats) and to
-   * validate the schema argument against an allow-list. May be a JSON-encoded
-   * string when provided through an environment variable, or a YAML list
-   * inline. Defaults to ['main'] when absent.
+   * Allow-list of the schemas served by the catalog; the first element is the
+   * default schema used when a request omits the schema argument. Absent (or
+   * an empty value, e.g. `${X_SCHEMAS:-}` with the variable unset) means
+   * "serve whatever the catalog holds": the schemas are discovered at attach
+   * and reload. The loader turns a JSON-encoded string from an environment
+   * variable into a list and drops an empty value, so this is either
+   * `undefined` or a non-empty list.
    */
-  SCHEMAS?: string[] | string;
+  SCHEMAS?: string[];
   /** Postgres connection settings. Required only when TYPE is 'postgres'. */
   POSTGRES?: PostgresCatalogConfig;
 }
@@ -267,12 +309,19 @@ export interface S3Config {
   ENDPOINT?: string;
 }
 
+/** Periodic catalog probe that detects data updates on every replica. */
+export interface CatalogFreshnessConfig {
+  /** Whether the probe runs at all (the admin reload route works either way). */
+  ENABLED: boolean;
+  /** Interval between two probes, in milliseconds. */
+  INTERVAL_MS: number;
+}
+
 /** Complete application configuration loaded from YAML files. */
 interface AppConfig {
   ENVIRONMENT: string;
   API: {
     PORT: number;
-    DOMAIN?: string;
     CORS: CorsConfig;
     REQUEST_LIMITS: RequestLimitsConfig;
     GRAPHQL: GraphqlConfig;
@@ -282,7 +331,6 @@ interface AppConfig {
       FACT_COMPLEX: number;
       AGGREGATED_SIMPLE: number;
       AGGREGATED_COMPLEX: number;
-      DIMENSION: number;
       METADATA: number;
       SELECT_OPTIONS: number;
       CACHE_DEFAULT: number;
@@ -290,6 +338,10 @@ interface AppConfig {
     SECURITY_THRESHOLDS: SecurityThresholdsConfig;
     LOADERS: LoadersConfig;
     PAGINATION: PaginationConfig;
+    SELECT_OPTIONS?: SelectOptionsConfig;
+    AGGREGATES?: AggregatesConfig;
+    EXPORT?: ExportConfig;
+    SHUTDOWN?: ShutdownConfig;
   };
   DATABASE: {
     POOL: {
@@ -303,12 +355,15 @@ interface AppConfig {
     ALLOWED_CATALOGS: string[] | string;
     ALLOW_CROSS_CATALOG_QUERIES: boolean;
   };
+  /** Versions de dataset_metadata.schema_version acceptées (JSON en variable d'env). */
+  SUPPORTED_SCHEMA_VERSIONS: number[] | string;
+  /** Sondage périodique des catalogues (détection des mises à jour sur chaque réplica). */
+  CATALOG_FRESHNESS?: CatalogFreshnessConfig;
   S3?: S3Config;
   CACHE: CacheConfig;
   CATALOGS: Record<string, CatalogConfig>;
   SECURITY: SecurityConfig;
   SECURITY_LIMITS: SecurityLimitsConfig;
-  SECURITY_PATTERNS: SecurityPatternsConfig;
   LOGGING: {
     LEVEL: string;
     FORMAT: string;
@@ -370,7 +425,6 @@ export class ConfigLoader {
       'api.yaml',
       'cache.yaml',
       'security.yaml',
-      'security-patterns.yaml',
       'logging.yaml',
     ];
 
@@ -394,6 +448,10 @@ export class ConfigLoader {
 
     // Conversion automatique des valeurs numériques et booléennes
     merged = this.convertNumericValues(merged);
+
+    // Listes de schémas (vide = découverte) et catalogues autorisés (défaut = CATALOGS)
+    merged = this.normalizeCatalogSchemas(merged);
+    merged = this.resolveAllowedCatalogs(merged);
 
     // Validation de l'environnement déclaré
     this.validateEnvironment(merged);
@@ -493,7 +551,7 @@ export class ConfigLoader {
 
       // Détection d'un objet contenant des clés d'environnement
       if (obj['development'] || obj['production']) {
-        // Fusion avec la section commune si présente (ex. SECURITY_PATTERNS)
+        // Fusion avec la section commune si présente (clé `common`)
         if (obj['common']) {
           const envSpecific = (obj[env] ?? obj['development'] ?? {}) as ConfigRecord;
           const result: ConfigRecord = { ...(obj['common'] as ConfigRecord) };
@@ -565,6 +623,94 @@ export class ConfigLoader {
     };
 
     return convert(obj) as ConfigRecord;
+  }
+
+  /**
+   * Parses a list given as a YAML array or as a JSON-encoded string.
+   *
+   * @param raw - Value read from the configuration.
+   * @param label - Setting name, quoted in the error message.
+   * @returns The list, or null when the value is absent or empty (null, undefined,
+   *   blank string, empty array).
+   * @throws {Error} When the value is neither a list of non-empty strings nor a
+   *   JSON string encoding one.
+   */
+  // Liste fournie en YAML ou en JSON (variable d'env) ; « absent ou vide » vaut null
+  private parseStringList(raw: unknown, label: string): string[] | null {
+    if (raw === undefined || raw === null) return null;
+
+    let list: unknown = raw;
+    if (typeof raw === 'string') {
+      if (raw.trim() === '') return null;
+      try {
+        list = JSON.parse(raw);
+      } catch {
+        throw new Error(`${label} must be a JSON list of strings, e.g. ["main"]; got: ${raw}`);
+      }
+    }
+
+    if (!Array.isArray(list) || list.some((item) => typeof item !== 'string' || item === '')) {
+      throw new Error(`${label} must be a list of non-empty strings.`);
+    }
+    return list.length === 0 ? null : [...new Set(list as string[])];
+  }
+
+  /**
+   * Normalizes `CATALOGS.<id>.SCHEMAS`: a list, or absent.
+   *
+   * A catalog whose SCHEMAS is absent, null, blank or `[]` serves every schema
+   * it holds (discovered at attach). The default value of `config/database.yaml`
+   * is the empty string, so "no variable set" reaches this point as `''` and
+   * must not be read as an (invalid) empty allow-list.
+   *
+   * @param config - Configuration record after env resolution and coercion.
+   * @returns The configuration, each catalog with a list SCHEMAS or none.
+   * @throws {Error} When a SCHEMAS value is malformed.
+   */
+  // Normalisation de SCHEMAS : liste non vide ou clé supprimée (découverte)
+  private normalizeCatalogSchemas(config: ConfigRecord): ConfigRecord {
+    const catalogs = config['CATALOGS'];
+    if (!this.isObject(catalogs)) return config;
+
+    const normalized: ConfigRecord = {};
+    for (const [id, catalog] of Object.entries(catalogs)) {
+      if (!this.isObject(catalog) || !('SCHEMAS' in catalog)) {
+        normalized[id] = catalog;
+        continue;
+      }
+      const { SCHEMAS: raw, ...rest } = catalog;
+      const list = this.parseStringList(raw, `CATALOGS.${id}.SCHEMAS`);
+      normalized[id] = list ? { ...rest, SCHEMAS: list } : rest;
+    }
+    return { ...config, CATALOGS: normalized };
+  }
+
+  /**
+   * Fills `CATALOG_ROUTING.ALLOWED_CATALOGS` with the CATALOGS keys when unset.
+   *
+   * Listing the catalogs twice (in CATALOGS and in ALLOWED_CATALOGS) invites
+   * drift; without an explicit list every configured catalog is allowed, and an
+   * explicit list narrows it. A JSON-encoded string is parsed into a list.
+   *
+   * @param config - Configuration record after env resolution and coercion.
+   * @returns The configuration with a list ALLOWED_CATALOGS (left absent when
+   *   no catalog is configured, which validation reports).
+   * @throws {Error} When ALLOWED_CATALOGS is malformed.
+   */
+  // Défaut de ALLOWED_CATALOGS : les clés de CATALOGS
+  private resolveAllowedCatalogs(config: ConfigRecord): ConfigRecord {
+    const routing = config['CATALOG_ROUTING'];
+    if (!this.isObject(routing)) return config;
+
+    const explicit = this.parseStringList(
+      routing['ALLOWED_CATALOGS'],
+      'CATALOG_ROUTING.ALLOWED_CATALOGS',
+    );
+    const catalogs = config['CATALOGS'];
+    const allowed = explicit ?? (this.isObject(catalogs) ? Object.keys(catalogs) : []);
+    if (allowed.length === 0) return config;
+
+    return { ...config, CATALOG_ROUTING: { ...routing, ALLOWED_CATALOGS: allowed } };
   }
 
   /**
@@ -671,20 +817,18 @@ export type {
   CacheRetryStrategyConfig,
   CacheClusterConfig,
   CacheClusterNodeConfig,
-  CacheTTLConfig,
-  CacheInvalidationConfig,
-  CacheHttpConfig,
   SecurityConfig,
   SecurityLimitsConfig,
-  SecurityPatternsConfig,
-  SecurityPatternEntry,
   SecurityThresholdsConfig,
   RateLimitConfig,
+  AdminRateLimitConfig,
   ComplexityConfig,
-  SanitizationConfig,
   SecurityMonitoringConfig,
   CorsConfig,
   RequestLimitsConfig,
   CompressionConfig,
   GraphqlConfig,
+  ExportConfig,
+  ShutdownConfig,
+  MetricsAccessConfig,
 };

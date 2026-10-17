@@ -4,13 +4,14 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
-    "start": "docusaurus start",
-    "build": "docusaurus build",
+    "start:api": "docusaurus start --config docusaurus.config.api.ts",
+    "start:toolbox": "docusaurus start --config docusaurus.config.toolbox.ts --port 3001",
+    "build:api": "docusaurus build --config docusaurus.config.api.ts --out-dir build/api",
+    "build:toolbox": "docusaurus build --config docusaurus.config.toolbox.ts --out-dir build/toolbox",
     "graphql-to-doc": "docusaurus graphql-to-doc",
     "swizzle": "docusaurus swizzle",
-    "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
-    "serve": "docusaurus serve"
+    "serve": "docusaurus serve --config docusaurus.config.api.ts --dir build/site"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.1",

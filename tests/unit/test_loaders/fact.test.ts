@@ -2,7 +2,9 @@
  * Unit tests for FactLoader (src/loaders/fact.ts).
  *
  * Verifies fact loading for default, JSON, and metadata formats,
- * pagination metadata computation, and table qualification.
+ * pagination metadata computation, table qualification, propagation of the
+ * compiled filter parameters to every query path, and identifier validation
+ * of fields / sort.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -19,8 +21,7 @@ import {
 /** Paramètres de base pour le chargement de faits. */
 interface FactLoadParams {
   fields: string[] | null;
-  filters: string | null;
-  structuredFilters: unknown | null;
+  where: { sql: string; params: unknown[] } | null;
   limit: number;
   offset: number;
   sort: Array<{ field: string; order: string }>;
@@ -61,6 +62,14 @@ jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  // La garde de version (db/schema-version.js) crée son propre logger contextuel
+  createContextLogger: () => ({
+    error: jest.fn(),
+    warn: jest.fn(),
+    info: jest.fn(),
+    debug: jest.fn(),
+    database: jest.fn(),
+  }),
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -85,8 +94,7 @@ describe('FactLoader', () => {
   // Paramètres de base réutilisés dans chaque test
   const baseParams: FactLoadParams = {
     fields: ['id', 'value'],
-    filters: null,
-    structuredFilters: null,
+    where: null,
     limit: 10,
     offset: 0,
     sort: [],
@@ -116,12 +124,12 @@ describe('FactLoader', () => {
     test('qualifie la table avec le schéma explicite lors de la requête SQL', async () => {
       mockConnection.all.mockResolvedValue([]);
 
-      // catalog explicite + schema non-défaut : on doit voir "catalog1".staging.fact_table
+      // catalog explicite + schema non-défaut : on doit voir "catalog1"."staging"."fact_table"
       const loader = createFactLoader('catalog1', 'staging');
       await loader.load({ ...baseParams });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"catalog1".staging.fact_table');
+      expect(query).toContain('"catalog1"."staging"."fact_table"');
       // L'appel à getDefaultSchema ne doit PAS être nécessaire (schéma fourni explicitement)
       expect(mockDatabaseManager.getDefaultSchema).not.toHaveBeenCalled();
     });
@@ -134,7 +142,7 @@ describe('FactLoader', () => {
       await loader.load({ ...baseParams });
 
       const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"catalog1".main.fact_table');
+      expect(query).toContain('"catalog1"."main"."fact_table"');
       expect(mockDatabaseManager.getDefaultSchema).toHaveBeenCalledWith('catalog1');
     });
   });
@@ -155,15 +163,55 @@ describe('FactLoader', () => {
       expect(result).toEqual(rows);
     });
 
-    test('inclut la clause WHERE pour les filtres textuels', async () => {
+    test('inclut la clause WHERE compilée et transmet ses paramètres', async () => {
       mockConnection.all.mockResolvedValue([]);
 
       const loader = createFactLoader('main');
-      await loader.load({ ...baseParams, filters: "country = 'FR'" });
+      await loader.load({ ...baseParams, where: { sql: '"country" = ?', params: ['FR'] } });
 
-      const query = mockConnection.all.mock.calls[0][0];
-      expect(query).toContain('WHERE');
-      expect(query).toContain('country');
+      const [query, params] = mockConnection.all.mock.calls[0];
+      expect(query).toContain('WHERE "country" = ?');
+      expect(params).toEqual(['FR']);
+    });
+
+    test("n'ajoute pas de WHERE et passe une liste de paramètres vide sans filtre", async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createFactLoader('main');
+      await loader.load({ ...baseParams });
+
+      const [query, params] = mockConnection.all.mock.calls[0];
+      expect(query).not.toContain('WHERE');
+      expect(params).toEqual([]);
+    });
+
+    test('quote les champs de sélection : un nom hostile reste un identifiant inerte', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      // L'existence de la colonne est contrôlée en amont (assertColumns) ; ici
+      // seul le quotage est en jeu
+      const loader = createFactLoader('main');
+      await loader.load({ ...baseParams, fields: ['id', 'a"; DROP TABLE fact_table --'] });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('SELECT "id", "a""; DROP TABLE fact_table --" FROM');
+    });
+
+    test('quote les champs de tri', async () => {
+      mockConnection.all.mockResolvedValue([]);
+
+      const loader = createFactLoader('main');
+      await loader.load({ ...baseParams, sort: [{ field: 'taux chômage', order: 'ASC' }] });
+
+      const query = mockConnection.all.mock.calls[0][0] as string;
+      expect(query).toContain('ORDER BY "taux chômage" ASC');
+    });
+
+    test('rejette une direction de tri hors ASC / DESC', async () => {
+      const loader = createFactLoader('main');
+      await expect(
+        loader.load({ ...baseParams, sort: [{ field: 'value', order: 'DESC; DROP' }] }),
+      ).rejects.toMatchObject({ extensions: { code: 'BAD_USER_INPUT' } });
     });
 
     test('inclut ORDER BY pour le tri', async () => {
@@ -173,7 +221,7 @@ describe('FactLoader', () => {
       await loader.load({ ...baseParams, sort: [{ field: 'value', order: 'DESC' }] });
 
       const query = mockConnection.all.mock.calls[0][0];
-      expect(query).toContain('ORDER BY value DESC');
+      expect(query).toContain('ORDER BY "value" DESC');
     });
 
     test('inclut LIMIT et OFFSET', async () => {
@@ -187,11 +235,17 @@ describe('FactLoader', () => {
       expect(query).toContain('OFFSET 10');
     });
 
-    test('lève une erreur si limit dépasse MAX_LIMIT', async () => {
+    test('une erreur SQL rejette la clé au lieu de renvoyer null', async () => {
+      mockConnection.all.mockRejectedValueOnce(
+        new Error('Binder Error: LIMIT/OFFSET cannot be negative'),
+      );
+
+      // La pagination est validée par le resolver ; si une valeur invalide
+      // atteint DuckDB, l'erreur remonte (BAD_USER_INPUT), jamais un null
       const loader = createFactLoader('main');
-      // Dépassement de la limite — erreur attrapée par createLoader → null
-      const result = await loader.load({ ...baseParams, limit: 9999 });
-      expect(result).toBeNull();
+      await expect(loader.load({ ...baseParams, limit: -1 })).rejects.toMatchObject({
+        extensions: { code: 'BAD_USER_INPUT' },
+      });
     });
   });
 
@@ -202,9 +256,16 @@ describe('FactLoader', () => {
       mockConnection.getAsJsonArray.mockResolvedValue('[{"id":1}]');
 
       const loader = createFactLoader('main');
-      const result = await loader.load({ ...baseParams, format: 'json' });
+      const result = await loader.load({
+        ...baseParams,
+        format: 'json',
+        where: { sql: '"value" > CAST(? AS DOUBLE)', params: [3] },
+      });
 
-      expect(mockConnection.getAsJsonArray).toHaveBeenCalled();
+      expect(mockConnection.getAsJsonArray).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE "value" > CAST(? AS DOUBLE)'),
+        [3],
+      );
       expect(result).toBe('[{"id":1}]');
     });
   });
@@ -217,10 +278,19 @@ describe('FactLoader', () => {
       mockConnection.getWithMetadata.mockResolvedValue(metaResult);
       mockConnection.all.mockResolvedValue([{ total: 5 }]);
 
+      const where = { sql: '"country" IN (CAST(? AS BIGINT), CAST(? AS BIGINT))', params: [1, 2] };
       const loader = createFactWithMetadataLoader('main');
-      await loader.load({ ...baseParams });
+      await loader.load({ ...baseParams, where });
 
-      expect(mockConnection.getWithMetadata).toHaveBeenCalled();
+      // Requête de données et requête de comptage reçoivent les mêmes paramètres
+      expect(mockConnection.getWithMetadata).toHaveBeenCalledWith(
+        expect.stringContaining(`WHERE ${where.sql}`),
+        [1, 2],
+      );
+      const [countQuery, countParams] = mockConnection.all.mock.calls[0];
+      expect(countQuery).toContain('COUNT(*)');
+      expect(countQuery).toContain(`WHERE ${where.sql}`);
+      expect(countParams).toEqual([1, 2]);
     });
   });
 
@@ -241,6 +311,17 @@ describe('FactLoader', () => {
       expect(result).toHaveProperty('hasNextPage');
       expect(result).toHaveProperty('currentPage');
       expect(result).toHaveProperty('totalPages');
+    });
+
+    test('transmet les paramètres du filtre à la requête de comptage', async () => {
+      mockConnection.all.mockResolvedValueOnce([]).mockResolvedValueOnce([{ total: 0 }]);
+
+      const loader = createFactWithCountLoader('main');
+      await loader.load({ ...baseParams, where: { sql: '"kind" = ?', params: ['x'] } });
+
+      expect(mockConnection.all.mock.calls[0][1]).toEqual(['x']);
+      expect(mockConnection.all.mock.calls[1][0]).toContain('WHERE "kind" = ?');
+      expect(mockConnection.all.mock.calls[1][1]).toEqual(['x']);
     });
 
     test('calcule hasNextPage correctement', async () => {

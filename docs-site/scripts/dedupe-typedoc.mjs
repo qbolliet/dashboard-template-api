@@ -26,7 +26,8 @@
  *      for the page title.
  *
  *   5. Deletes the TypeDoc-generated README.md so it does not conflict with
- *      the curated index.md copied later from docs-site/templates/.
+ *      the curated index.md copied later from docs-site/templates/ (see
+ *      copy-doc-templates.mjs).
  *
  * Usage: node docs-site/scripts/dedupe-typedoc.mjs
  */
@@ -36,7 +37,7 @@ import { join, dirname, relative, sep, posix } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, '..', 'code-reference');
+const ROOT = join(__dirname, '..', 'toolbox', 'code-reference');
 
 const BREADCRUMB_RE =
   /^\[\*\*[^\]]+\*\*\]\([^)]*README\.md\)\s*\n\s*\n\*\*\*\s*\n\s*\n\[[^\]]+\]\([^)]*README\.md\)[^\n]*\n\s*\n/;

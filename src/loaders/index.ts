@@ -1,18 +1,15 @@
 // Importation des modules de création de loaders
 import { createMetadataLoader } from './metadata.js';
-import { createDimensionLoader, createDimensionValueLoader } from './dimension.js';
 import {
   createFactLoader,
   createFactWithCountLoader,
   createFactWithMetadataLoader,
 } from './fact.js';
-import { createSelectOptionsLoader } from './select-options.js';
-import {
-  createAggregatedFactsLoader,
-  createAggregatedFactsWithMetadataLoader,
-  createAggregatedFactsWithCountLoader,
-} from './aggregated-facts.js';
-import { createCatalogMetadataLoader, createCatalogDimensionNamesLoader } from './catalog.js';
+import { createSelectOptionsLoader, createSelectOptionsTreeLoader } from './select-options.js';
+import { createFieldStatsLoader } from './field-stats.js';
+import { createAggregatesLoader, createAggregateGroupCountLoader } from './aggregates.js';
+import { createCatalogMetadataLoader } from './catalog.js';
+import { createDatasetInfoLoader } from './dataset-info.js';
 import {
   createCompareFacts,
   createCompareAggregatedFacts,
@@ -20,66 +17,49 @@ import {
 } from './cross-database.js';
 import { databaseManager } from '../db/index.js';
 
-import type { MetadataRow } from './metadata.js';
-import type { DimensionRecord, DimensionValue, DimensionValueParams } from './dimension.js';
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 import type { FactQueryParams, FactQueryResult } from './fact.js';
-import type { SelectOptionsParams, SelectOption } from './select-options.js';
-import type { AggregatedQueryParams, AggregatedResult } from './aggregated-facts.js';
-import type { CatalogMetadataRow, CatalogSchemaKey } from './catalog.js';
+import type {
+  SelectOptionsParams,
+  SelectOption,
+  SelectOptionsTreeParams,
+  SelectOptionNode,
+} from './select-options.js';
+import type { FieldStatsParams, FieldStats } from './field-stats.js';
+import type { AggregatePage } from './aggregates.js';
+import type { AggregatePageParams, AggregateCountParams } from '../utils/aggregate-query.js';
+import type { CatalogSchemaKey } from './catalog.js';
+import type { DatasetInfo } from './dataset-info.js';
 import type {
   CompareFactsParams,
   CompareAggregatedFactsParams,
   CrossDatabaseSelectOptionsParams,
   ComparisonResult,
+  AggregateComparisonPage,
   CrossDatabaseSelectOption,
 } from './cross-database.js';
 import type DataLoader from 'dataloader';
 /** DataLoader alias with a string cache key, used by all loaders in this module. */
 export type Loader<K, V> = DataLoader<K, V, string>;
 
-// ─── Interfaces des données d'amorçage ───────────────────────────────────────
-
-/** Generic key/value pair for priming a DataLoader. */
-interface KeyValuePair<K, V> {
-  key: K;
-  value: V;
-}
-
-/** Optional initial data for priming the full set of loaders. */
-interface PrimeData {
-  metadata?: KeyValuePair<string, MetadataRow | null>[];
-  dimensions?: KeyValuePair<string, DimensionRecord[]>[];
-  dimensionValues?: KeyValuePair<DimensionValueParams, DimensionValue>[];
-  facts?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  factsWithCount?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  factsWithMetadata?: KeyValuePair<FactQueryParams, FactQueryResult>[];
-  aggregatedFacts?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
-  aggregatedFactsWithMetadata?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
-  aggregatedFactsWithCount?: KeyValuePair<AggregatedQueryParams, AggregatedResult>[];
-  selectOptions?: KeyValuePair<SelectOptionsParams, SelectOption[]>[];
-}
-
 // ─── Interface de la collection de loaders ───────────────────────────────────
 
 /** Complete collection of loaders available for a single GraphQL request. */
 interface LoadersCollection {
-  metadata: Loader<string, MetadataRow | null>;
-  dimension: Loader<string, DimensionRecord[]>;
-  dimensionValue: Loader<DimensionValueParams, DimensionValue>;
+  metadata: Loader<string, FieldMetadata | null>;
   fact: Loader<FactQueryParams, FactQueryResult>;
   factWithCount: Loader<FactQueryParams, FactQueryResult>;
   factWithMetadata: Loader<FactQueryParams, FactQueryResult>;
-  aggregatedFacts: Loader<AggregatedQueryParams, AggregatedResult>;
-  aggregatedFactsWithMetadata: Loader<AggregatedQueryParams, AggregatedResult>;
-  aggregatedFactsWithCount: Loader<AggregatedQueryParams, AggregatedResult>;
+  aggregates: Loader<AggregatePageParams, AggregatePage>;
+  aggregateGroupCount: Loader<AggregateCountParams, number>;
   selectOptions: Loader<SelectOptionsParams, SelectOption[]>;
-  catalogMetadata: Loader<CatalogSchemaKey, CatalogMetadataRow[]>;
-  catalogDimensionNames: Loader<CatalogSchemaKey, string[]>;
+  selectOptionsTree: Loader<SelectOptionsTreeParams, SelectOptionNode[]>;
+  fieldStats: Loader<FieldStatsParams, FieldStats>;
+  catalogMetadata: Loader<CatalogSchemaKey, FieldMetadata[]>;
+  datasetInfo: Loader<CatalogSchemaKey, DatasetInfo>;
   compareFacts: Loader<CompareFactsParams, ComparisonResult>;
-  compareAggregatedFacts: Loader<CompareAggregatedFactsParams, ComparisonResult>;
+  compareAggregatedFacts: Loader<CompareAggregatedFactsParams, AggregateComparisonPage>;
   crossDatabaseSelectOptions: Loader<CrossDatabaseSelectOptionsParams, CrossDatabaseSelectOption[]>;
-  clearAll: () => void;
-  prime: (initialData?: PrimeData) => Promise<void>;
 }
 
 // Fonction de création de l'ensemble des loaders pour un identifiant de base de données
@@ -94,7 +74,7 @@ interface LoadersCollection {
  * @param schema - DuckLake schema within the catalog. Null uses the catalog's
  *   configured default schema. Validated against the catalog's allow-list
  *   (anti-injection: the schema is interpolated into qualified table names).
- * @returns LoadersCollection with all loaders plus clearAll and prime helpers.
+ * @returns LoadersCollection with all the loaders of one request.
  */
 const createLoaders = (
   catalogId: string | null = null,
@@ -112,29 +92,25 @@ const createLoaders = (
     }
   }
 
-  // Initialisation des loaders de méta-données et dimensions
+  // Loader des méta-données de colonnes
   const metadataLoader = createMetadataLoader(catalogId, schema);
-  const dimensionLoader = createDimensionLoader(catalogId, schema);
-  const dimensionValueLoader = createDimensionValueLoader(catalogId, schema);
 
   // Loaders pour les faits
   const factLoader = createFactLoader(catalogId, schema);
   const factWithCountLoader = createFactWithCountLoader(catalogId, schema);
   const factWithMetadataLoader = createFactWithMetadataLoader(catalogId, schema);
 
-  // Loaders pour les faits agrégés
-  const aggregatedFactsLoader = createAggregatedFactsLoader(catalogId, schema);
-  const aggregatedFactsWithMetadataLoader = createAggregatedFactsWithMetadataLoader(
-    catalogId,
-    schema,
-  );
-  const aggregatedFactsWithCountLoader = createAggregatedFactsWithCountLoader(catalogId, schema);
+  // Loaders des agrégats : pages, et comptage des groupes en cache séparé
+  const aggregatesLoader = createAggregatesLoader(catalogId, schema);
+  const aggregateGroupCountLoader = createAggregateGroupCountLoader(catalogId, schema);
 
   const selectOptionsLoader = createSelectOptionsLoader(catalogId, schema);
+  const selectOptionsTreeLoader = createSelectOptionsTreeLoader(catalogId, schema);
+  const fieldStatsLoader = createFieldStatsLoader(catalogId, schema);
 
   // Loaders catalog et cross-database — partagés, indépendants du catalogId
   const catalogMetadataLoader = createCatalogMetadataLoader();
-  const catalogDimensionNamesLoader = createCatalogDimensionNamesLoader();
+  const datasetInfoLoader = createDatasetInfoLoader();
   const compareFactsLoader = createCompareFacts();
   const compareAggregatedFactsLoader = createCompareAggregatedFacts();
   const crossDatabaseSelectOptionsLoader = createCrossDatabaseSelectOptions();
@@ -142,107 +118,21 @@ const createLoaders = (
   // Retourne un objet avec l'ensemble des loaders et les méthodes utilitaires
   return {
     metadata: metadataLoader,
-    dimension: dimensionLoader,
-    dimensionValue: dimensionValueLoader,
     fact: factLoader,
     factWithCount: factWithCountLoader,
     factWithMetadata: factWithMetadataLoader,
-    aggregatedFacts: aggregatedFactsLoader,
-    aggregatedFactsWithMetadata: aggregatedFactsWithMetadataLoader,
-    aggregatedFactsWithCount: aggregatedFactsWithCountLoader,
+    aggregates: aggregatesLoader,
+    aggregateGroupCount: aggregateGroupCountLoader,
     selectOptions: selectOptionsLoader,
+    selectOptionsTree: selectOptionsTreeLoader,
+    fieldStats: fieldStatsLoader,
     catalogMetadata: catalogMetadataLoader,
-    catalogDimensionNames: catalogDimensionNamesLoader,
+    datasetInfo: datasetInfoLoader,
     compareFacts: compareFactsLoader,
     compareAggregatedFacts: compareAggregatedFactsLoader,
     crossDatabaseSelectOptions: crossDatabaseSelectOptionsLoader,
-
-    // Méthode de nettoyage du cache de l'ensemble des loaders
-    clearAll: () => {
-      metadataLoader.clearAll();
-      dimensionLoader.clearAll();
-      dimensionValueLoader.clearAll();
-      factLoader.clearAll();
-      factWithCountLoader.clearAll();
-      factWithMetadataLoader.clearAll();
-      aggregatedFactsLoader.clearAll();
-      aggregatedFactsWithMetadataLoader.clearAll();
-      aggregatedFactsWithCountLoader.clearAll();
-      selectOptionsLoader.clearAll();
-      catalogMetadataLoader.clearAll();
-      catalogDimensionNamesLoader.clearAll();
-      compareFactsLoader.clearAll();
-      compareAggregatedFactsLoader.clearAll();
-      crossDatabaseSelectOptionsLoader.clearAll();
-    },
-
-    // Méthode d'amorçage de tous les loaders avec leurs données initiales
-    prime: async (initialData: PrimeData = {}) => {
-      const {
-        metadata = [],
-        dimensions = [],
-        dimensionValues = [],
-        facts = [],
-        factsWithCount = [],
-        factsWithMetadata = [],
-        aggregatedFacts = [],
-        aggregatedFactsWithMetadata = [],
-        aggregatedFactsWithCount = [],
-        selectOptions = [],
-      } = initialData;
-
-      // Amorçage de chaque loader avec ses données initiales
-      metadata.forEach(({ key, value }) => {
-        metadataLoader.prime(key, value);
-      });
-      dimensions.forEach(({ key, value }) => {
-        dimensionLoader.prime(key, value);
-      });
-      dimensionValues.forEach(({ key, value }) => {
-        dimensionValueLoader.prime(key, value);
-      });
-      facts.forEach(({ key, value }) => {
-        factLoader.prime(key, value);
-      });
-      factsWithCount.forEach(({ key, value }) => {
-        factWithCountLoader.prime(key, value);
-      });
-      factsWithMetadata.forEach(({ key, value }) => {
-        factWithMetadataLoader.prime(key, value);
-      });
-      aggregatedFacts.forEach(({ key, value }) => {
-        aggregatedFactsLoader.prime(key, value);
-      });
-      aggregatedFactsWithMetadata.forEach(({ key, value }) => {
-        aggregatedFactsWithMetadataLoader.prime(key, value);
-      });
-      aggregatedFactsWithCount.forEach(({ key, value }) => {
-        aggregatedFactsWithCountLoader.prime(key, value);
-      });
-      selectOptions.forEach(({ key, value }) => {
-        selectOptionsLoader.prime(key, value);
-      });
-    },
   };
 };
 
-// Fonction pour créer de nouveaux loaders pour chaque requête entrante
-/**
- * Creates a fresh set of data loaders for a single GraphQL request.
- *
- * Ensures per-request DataLoader instances to prevent data leaking
- * between concurrent requests while sharing the Redis cache layer.
- *
- * @param catalogId - Catalog alias to use; null uses the default catalog.
- * @param schema - DuckLake schema within the catalog; null uses the catalog default.
- * @returns New LoadersCollection for the current request.
- */
-const createLoadersForRequest = (
-  catalogId: string | null = null,
-  schema: string | null = null,
-): LoadersCollection => {
-  return createLoaders(catalogId, schema);
-};
-
-export { createLoaders, createLoadersForRequest };
-export type { LoadersCollection, PrimeData, KeyValuePair };
+export { createLoaders };
+export type { LoadersCollection };

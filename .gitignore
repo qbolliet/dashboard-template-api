@@ -9,11 +9,15 @@ docs-site/static/schema.json
 docs-site/static/schema.graphql
 
 # TypeDoc generated files (regenerated in CI)
-docs-site/code-reference/**
+docs-site/toolbox/code-reference/**
 
 # graphql-markdown generated files (regenerated in CI), except the static homepage placeholder
-docs-site/graphql-api/**
-!docs-site/graphql-api/index.md
+docs-site/api/graphql-api/**
+!docs-site/api/graphql-api/index.md
+
+# Data dictionary generated from the API (npm run docs:dictionary), and its temporary render
+docs-site/api/data-dictionary/
+docs-site/api/data-dictionary.tmp/
 
 # TypeScript compiled output
 dist/

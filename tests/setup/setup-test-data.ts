@@ -1,7 +1,13 @@
 /**
  * Test DuckLake catalog creation script.
  *
- * Creates (or resets) the test DuckLake catalogs used by the Jest test suite.
+ * Creates (or resets) the test DuckLake catalogs used by the Jest test suite,
+ * reproducing the DDL of the database specification (dashboard-template-database/docs/schema.md, section The three tables):
+ * every schema holds EXACTLY three tables — fact_table, metadata,
+ * dataset_metadata — categorical columns store their labels directly, and no
+ * dim_* table exists. A business code and its label are two fact_table
+ * columns linked by metadata.label_for (§2.6).
+ *
  * Must be run as a separate process (npm run test:setup) BEFORE npm test,
  * because DuckLake allows only one write connection at a time on Windows.
  * During tests the pool opens the catalogs in READ_ONLY mode (set via DEFAULT_READ_ONLY=true
@@ -17,160 +23,970 @@ import { fileURLToPath, pathToFileURL } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+type Connection = Awaited<ReturnType<InstanceType<typeof DuckDBInstance>['connect']>>;
+
+// Identifiant quoté, guillemets internes doublés — même règle que
+// src/utils/identifiers.ts, recopiée ici : le globalSetup de Jest charge ce
+// fichier sans la résolution .js → .ts des sources.
+const quoteIdent = (name: string): string => `"${name.replace(/"/g, '""')}"`;
+const qualifiedTable = (catalog: string, schema: string, table: string): string =>
+  [catalog, schema, table].map(quoteIdent).join('.');
+
 // ─── Interfaces et types ───────────────────────────────────────────────────────
 
-/** Entrée d'une dimension avec identifiant numérique et libellé textuel. */
-interface DimensionEntry {
-  value: number;
+/**
+ * One row of the `metadata` table, in the column order of the specification
+ * (dashboard-template-database/docs/schema.md, section `metadata`). `python_type` does not exist.
+ */
+interface MetadataRow {
+  name: string;
   label: string;
+  sqlType: string;
+  isPrimaryKey: boolean;
+  isCategorical: boolean;
+  parentName: string | null;
+  labelFor: string | null;
+  unit: string | null;
+  displayFormat: string | null;
+  family: string | null;
+  description: string | null;
+  defaultAggregation: string | null;
 }
 
-/** Registre des données de dimensions indexées par nom de dimension. */
-type DimensionData = Record<string, DimensionEntry[]>;
+/** The single row of the `dataset_metadata` table of a schema (§2.3). */
+interface DatasetMetadataRow {
+  label: string;
+  description: string;
+  source: string;
+  updatedAt: string;
+  schemaVersion: number;
+  clusterBy: string[];
+}
 
-/**
- * Ligne de métadonnées : [name, label, python_type, sql_type, is_categorical, is_primary_key].
- */
-type MetadataRow = [string, string, string, string, boolean, boolean];
+/** Full description of one test schema: its three tables and its data. */
+interface SchemaSpec {
+  metadata: MetadataRow[];
+  datasetMetadata: DatasetMetadataRow;
+  rows: unknown[][];
+}
 
-// ─── Données de référence ──────────────────────────────────────────────────────
+// ─── Libellés de référence ─────────────────────────────────────────────────────
 
-// Données des dimensions utilisées pour peupler les tables de référence
-const dimensionData: DimensionData = {
-  country: [
-    { value: 1, label: 'France' },
-    { value: 2, label: 'Germany' },
-    { value: 3, label: 'Spain' },
-    { value: 4, label: 'Italy' },
-    { value: 5, label: 'United Kingdom' },
-    { value: 6, label: 'Netherlands' },
-    { value: 7, label: 'Belgium' },
-    { value: 8, label: 'Portugal' },
-  ],
-  indicator: [
-    { value: 1, label: 'GDP Growth Rate' },
-    { value: 2, label: 'Inflation Rate' },
-    { value: 3, label: 'Unemployment Rate' },
-    { value: 4, label: 'Trade Balance' },
-    { value: 5, label: 'Interest Rate' },
-    { value: 6, label: 'Consumer Confidence' },
-  ],
-  kind: [
-    { value: 1, label: 'Actual' },
-    { value: 2, label: 'Forecast' },
-    { value: 3, label: 'Estimate' },
-    { value: 4, label: 'Revised' },
-  ],
-  model: [
-    { value: 1, label: 'Linear Regression' },
-    { value: 2, label: 'ARIMA' },
-    { value: 3, label: 'Neural Network' },
-    { value: 4, label: 'Random Forest' },
-    { value: 5, label: 'XGBoost' },
-  ],
-  training: [
-    { value: 1, label: 'Training Set 2023' },
-    { value: 2, label: 'Training Set 2024' },
-    { value: 3, label: 'Validation Set' },
-    { value: 4, label: 'Test Set' },
-  ],
+// Les colonnes catégorielles portent directement ces libellés (spec §2.1).
+const COUNTRIES = ['France', 'Germany', 'Spain', 'Italy', 'United Kingdom'];
+const INDICATORS = [
+  'GDP Growth Rate',
+  'Inflation Rate',
+  'Unemployment Rate',
+  'Trade Balance',
+] as const;
+const KINDS = ['Actual', 'Forecast'] as const;
+const MODELS = ['Linear Regression', 'ARIMA', 'Neural Network'] as const;
+const TRAININGS = ['Training Set 2023', 'Training Set 2024'] as const;
+
+// Pays présent dans tous les catalogues avec UNE seule ligne, dont la valeur est
+// nulle côté `default` : sert au test de division par zéro de deltaPercent.
+const ZERO_COUNTRY = 'Zeroland';
+
+// Pays propres à un seul catalogue : vérifient que compare* exclut les libellés
+// disjoints au lieu de les apparier par erreur.
+const DISJOINT_COUNTRY: Record<string, string> = {
+  default: 'Portugal',
+  macroeconomics: 'Netherlands',
+  public_finance: 'Belgium',
+  predictions: 'Poland',
 };
 
-// Lignes de métadonnées décrivant le schéma de la table de faits.
-// Convention multi-mesure : une colonne est une MESURE ssi is_primary_key = false.
-// Toutes les coordonnées (dimensions catégorielles + axes date/week/horizon) sont
-// donc is_primary_key = true ; seules les mesures co-localisées sont is_primary_key = false.
-const metadataRows: MetadataRow[] = [
-  // Coordonnées catégorielles (jointes aux tables dim_*)
-  ['indicator', 'Economic Indicator', 'int', 'BIGINT', true, true],
-  ['country', 'Country', 'int', 'BIGINT', true, true],
-  ['kind', 'Data Kind', 'int', 'BIGINT', true, true],
-  ['model', 'Model Type', 'float', 'DOUBLE', true, true],
-  ['training', 'Training Set', 'float', 'DOUBLE', true, true],
-  // Coordonnées d'axe non catégorielles
-  ['date', 'Date', 'datetime', 'TIMESTAMP_NS', false, true],
-  ['horizon', 'Forecast Horizon', 'float', 'DOUBLE', false, true],
-  ['week', 'Week Number', 'float', 'DOUBLE', false, true],
-  // Mesures co-localisées (types hétérogènes, dont une mesure textuelle)
-  ['value', 'Measurement Value', 'float', 'DOUBLE', false, false],
-  ['lower_bound', 'Lower Confidence Bound', 'float', 'DOUBLE', false, false],
-  ['upper_bound', 'Upper Confidence Bound', 'float', 'DOUBLE', false, false],
-  ['quality_score', 'Quality Score', 'float', 'DOUBLE', false, false],
-  ['notes', 'Notes', 'str', 'VARCHAR', false, false],
+// ─── Schéma « main » : palette de types de la spec §3 ──────────────────────────
+
+/** Column order of the `main` fact_table, shared by every `main`-like schema. */
+const MAIN_COLUMNS = `
+  country        VARCHAR,
+  indicator      VARCHAR,
+  kind           VARCHAR,
+  model          VARCHAR,
+  training       VARCHAR,
+  date           DATE,
+  horizon        INTEGER,
+  value          DOUBLE,
+  lower_bound    FLOAT,
+  upper_bound    FLOAT,
+  headcount      BIGINT,
+  sample_size    UINTEGER,
+  is_provisional BOOLEAN,
+  ingested_at    TIMESTAMP,
+  notes          VARCHAR,
+  quality_score  DOUBLE
+`;
+
+// Métadonnées du schéma « main ». Convention multi-mesure : une colonne est une
+// MESURE ssi is_primary_key = false ; toutes les coordonnées (catégorielles ou
+// non : date, horizon) sont is_primary_key = true.
+const MAIN_METADATA: MetadataRow[] = [
+  meta('country', 'Country', 'VARCHAR', true, true, { family: 'Géographie' }),
+  meta('indicator', 'Economic Indicator', 'VARCHAR', true, true, { family: 'Économie' }),
+  meta('kind', 'Data Kind', 'VARCHAR', true, true, { family: 'Méthode' }),
+  meta('model', 'Model Type', 'VARCHAR', true, true, { family: 'Méthode' }),
+  meta('training', 'Training Set', 'VARCHAR', true, true, { family: 'Méthode' }),
+  meta('date', 'Date', 'DATE', true, false, {
+    family: 'Temps',
+    description: "Date d'observation, premier jour du mois",
+  }),
+  meta('horizon', 'Forecast Horizon', 'INTEGER', true, false, {
+    unit: 'mois',
+    family: 'Temps',
+    description: 'Nombre de mois entre la date de production et la date observée',
+  }),
+  // Mesure de référence, entièrement documentée (unit + format d3 + famille + agrégation)
+  meta('value', 'Measurement Value', 'DOUBLE', false, false, {
+    unit: '€',
+    displayFormat: ',.2f',
+    family: 'Économie',
+    description: "Valeur mesurée de l'indicateur",
+    defaultAggregation: 'SUM',
+  }),
+  meta('lower_bound', 'Lower Confidence Bound', 'FLOAT', false, false, {
+    unit: '€',
+    displayFormat: ',.2f',
+    family: 'Économie',
+    defaultAggregation: 'MIN',
+  }),
+  meta('upper_bound', 'Upper Confidence Bound', 'FLOAT', false, false, {
+    unit: '€',
+    displayFormat: ',.2f',
+    family: 'Économie',
+    defaultAggregation: 'MAX',
+  }),
+  // Grand entier : contient au moins une valeur > 2^53 (sérialisation JSON à garantir)
+  meta('headcount', 'Headcount', 'BIGINT', false, false, {
+    unit: 'personnes',
+    displayFormat: ',.0f',
+    family: 'Démographie',
+    description: 'Effectif concerné — dépasse 2^53 sur au moins une ligne',
+    defaultAggregation: 'SUM',
+  }),
+  meta('sample_size', 'Sample Size', 'UINTEGER', false, false, {
+    family: 'Qualité',
+    defaultAggregation: 'SUM',
+  }),
+  meta('is_provisional', 'Provisional', 'BOOLEAN', false, false, { family: 'Qualité' }),
+  meta('ingested_at', 'Ingested At', 'TIMESTAMP', false, false, { family: 'Qualité' }),
+  meta('notes', 'Notes', 'VARCHAR', false, false, {
+    family: 'Qualité',
+    description: 'Note libre — NULL sur une partie des lignes',
+  }),
+  // Seconde mesure documentée, agrégée par moyenne
+  meta('quality_score', 'Quality Score', 'DOUBLE', false, false, {
+    displayFormat: '.0%',
+    family: 'Qualité',
+    description: 'Indice de confiance — NULL sur une partie des lignes',
+    defaultAggregation: 'AVG',
+  }),
+];
+
+// Clés primaires dans l'ordre de déclaration = cluster_by par défaut (spec §5.3)
+const MAIN_CLUSTER_BY = MAIN_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+// ─── Schéma « geography » : hiérarchie de colonnes (spec §2.5) ─────────────────
+
+/** Column order of the `geography` fact_table. */
+const GEOGRAPHY_COLUMNS = `
+  region       VARCHAR,
+  departement  VARCHAR,
+  commune      VARCHAR,
+  date         DATE,
+  population   UBIGINT,
+  area_km2     FLOAT,
+  budget       BIGINT,
+  density      DOUBLE,
+  is_urban     BOOLEAN
+`;
+
+// Chaîne region → departement → commune déclarée par parent_name ; les trois
+// niveaux sont catégoriels, comme l'exige la spec §2.5.
+const GEOGRAPHY_METADATA: MetadataRow[] = [
+  meta('region', 'Région', 'VARCHAR', true, true, { family: 'Géographie' }),
+  meta('departement', 'Département', 'VARCHAR', true, true, {
+    parentName: 'region',
+    family: 'Géographie',
+  }),
+  meta('commune', 'Commune', 'VARCHAR', true, true, {
+    parentName: 'departement',
+    family: 'Géographie',
+    description: 'NULL lorsque le département ne descend pas au niveau communal',
+  }),
+  meta('date', 'Date', 'DATE', true, false, { family: 'Temps' }),
+  meta('population', 'Population', 'UBIGINT', false, false, {
+    unit: 'hab.',
+    displayFormat: ',.0f',
+    family: 'Démographie',
+    defaultAggregation: 'SUM',
+  }),
+  meta('area_km2', 'Superficie', 'FLOAT', false, false, {
+    unit: 'km²',
+    displayFormat: ',.1f',
+    family: 'Géographie',
+    defaultAggregation: 'SUM',
+  }),
+  meta('budget', 'Budget', 'BIGINT', false, false, {
+    unit: '€',
+    displayFormat: ',.0f',
+    family: 'Finances',
+    description: 'Budget annuel — dépasse 2^53 sur au moins une ligne',
+    defaultAggregation: 'SUM',
+  }),
+  meta('density', 'Densité', 'DOUBLE', false, false, {
+    unit: 'hab./km²',
+    displayFormat: ',.1f',
+    family: 'Démographie',
+    description: 'NULL sur au moins une ligne',
+    defaultAggregation: 'AVG',
+  }),
+  meta('is_urban', 'Urbain', 'BOOLEAN', false, false, { family: 'Géographie' }),
+];
+
+const GEOGRAPHY_CLUSTER_BY = GEOGRAPHY_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+// Arbre géographique. Une commune NULL matérialise un arbre IRRÉGULIER : le
+// niveau absent vaut NULL et la branche s'arrête là (spec §2.5) — on ne répète
+// jamais le libellé du niveau supérieur. « Côte-d'Or » porte l'apostrophe qui
+// vérifie le passage des libellés en paramètre et non en littéral SQL.
+const GEOGRAPHY_TREE: Array<[string, string, string | null]> = [
+  ['Bourgogne-Franche-Comté', "Côte-d'Or", 'Dijon'],
+  ['Bourgogne-Franche-Comté', "Côte-d'Or", 'Beaune'],
+  ['Bourgogne-Franche-Comté', 'Saône-et-Loire', null],
+  ['Île-de-France', 'Paris', 'Paris'],
+  ['Île-de-France', 'Seine-et-Marne', 'Meaux'],
+  ['Île-de-France', 'Seine-et-Marne', 'Melun'],
+  ['Occitanie', 'Hérault', 'Montpellier'],
+];
+
+// ─── Schéma « emploi » : noms de colonnes non réduits à [A-Za-z0-9_] ────────────
+
+// La base accepte tout nom de colonne : espace, accent, apostrophe. Ce schéma
+// vérifie que l'API les projette, filtre, trie et regroupe (identifiants quotés
+// et contrôlés contre metadata), y compris dans le tri par défaut (cluster_by).
+
+/** Column order of the `emploi` fact_table. */
+const EMPLOI_COLUMNS = `
+  "zone d'emploi" VARCHAR,
+  "Année"         INTEGER,
+  "taux chômage"  DOUBLE
+`;
+
+const EMPLOI_METADATA: MetadataRow[] = [
+  meta("zone d'emploi", "Zone d'emploi", 'VARCHAR', true, true, { family: 'Géographie' }),
+  meta('Année', 'Année', 'INTEGER', true, false, { family: 'Temps' }),
+  meta('taux chômage', 'Taux de chômage', 'DOUBLE', false, false, {
+    unit: '%',
+    displayFormat: '.1f',
+    family: 'Emploi',
+    defaultAggregation: 'AVG',
+  }),
+];
+
+const EMPLOI_CLUSTER_BY = EMPLOI_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+// Zones d'emploi (l'apostrophe vérifie le passage des valeurs en paramètre)
+const EMPLOI_ZONES = ['Lyon', 'Paris', "Val-d'Oise"];
+const EMPLOI_YEARS = [2022, 2023, 2024];
+
+/**
+ * Builds the fact rows of the `emploi` schema.
+ *
+ * Values are deterministic: `5 + 2 × zone rank + 0.5 × (year − 2022)`, so the
+ * tests can assert exact filters, orderings and averages.
+ *
+ * @returns Rows aligned with EMPLOI_COLUMNS.
+ */
+// Lignes déterministes du schéma « emploi »
+function buildEmploiRows(): unknown[][] {
+  return EMPLOI_ZONES.flatMap((zone, rank) =>
+    EMPLOI_YEARS.map((year) => [zone, year, 5 + 2 * rank + 0.5 * (year - 2022)]),
+  );
+}
+
+// ─── Schéma « no_primary_key » : ni clé primaire, ni cluster_by ────────────────
+
+// Un jeu sans clé primaire : le writer le dédoublonne sur TOUTES les colonnes et
+// laisse cluster_by à NULL, si bien que l'API n'a que « ORDER BY ALL » pour
+// paginer de façon déterministe. Il porte aussi les types que la base déclare
+// sans les avoir physiquement précisés : `amount` est un DECIMAL(10,2) dont
+// metadata.sql_type dit « DECIMAL » (sortie de map_python_to_sql_type), et
+// `slot` un TIME, sans famille de filtre. Les lignes de metadata sont écrites
+// dans l'ordre ALPHABÉTIQUE, comme le fait le writer, et non dans celui des
+// colonnes de fact_table.
+
+/** Column order of the `no_primary_key` fact_table. */
+const NO_PRIMARY_KEY_COLUMNS = `
+  label       VARCHAR,
+  observed_on DATE,
+  amount      DECIMAL(10,2),
+  slot        TIME,
+  quantity    INTEGER
+`;
+
+// Ordre alphabétique volontaire (≠ ordre des colonnes de fact_table)
+const NO_PRIMARY_KEY_METADATA: MetadataRow[] = [
+  meta('amount', 'Montant', 'DECIMAL', false, false, {
+    unit: '€',
+    displayFormat: ',.2f',
+    family: 'Finances',
+    defaultAggregation: 'SUM',
+  }),
+  meta('label', 'Libellé', 'VARCHAR', false, true, { family: 'Général' }),
+  meta('observed_on', 'Date d’observation', 'DATE', false, false, { family: 'Temps' }),
+  meta('quantity', 'Quantité', 'INTEGER', false, false, {
+    family: 'Général',
+    defaultAggregation: 'SUM',
+  }),
+  meta('slot', 'Créneau', 'TIME', false, false, { family: 'Temps' }),
+];
+
+/** Number of rows of the `no_primary_key` fact_table (several pages of 25). */
+const NO_PRIMARY_KEY_ROW_COUNT = 240;
+
+/**
+ * Builds the fact rows of the `no_primary_key` schema.
+ *
+ * Every row differs from the others (`amount` is unique), as the writer's
+ * deduplication guarantees, while `label` repeats every twelve rows and
+ * `quantity` every seven: sorting on either leaves many ties, and the rows are
+ * NOT generated in any sorted order.
+ *
+ * @returns Rows aligned with NO_PRIMARY_KEY_COLUMNS.
+ */
+// Lignes déterministes, uniques, volontairement non triées
+function buildNoPrimaryKeyRows(): unknown[][] {
+  return Array.from({ length: NO_PRIMARY_KEY_ROW_COUNT }, (_, i) => {
+    // Multiplication par un premier avec 240 : mélange les lignes sans doublon
+    const shuffled = (i * 97) % NO_PRIMARY_KEY_ROW_COUNT;
+    const day = String((shuffled % 28) + 1).padStart(2, '0');
+    const hour = String(shuffled % 24).padStart(2, '0');
+    return [
+      `item-${String(shuffled % 12).padStart(2, '0')}`,
+      `2024-03-${day}`,
+      shuffled * 1.25,
+      `${hour}:${String((shuffled * 7) % 60).padStart(2, '0')}:00`,
+      shuffled % 7,
+    ];
+  });
+}
+
+// ─── Schéma « trade » : codes et libellés (spec §2.6) ────────────────────────────
+
+/** Column order of the `trade` fact_table. */
+const TRADE_COLUMNS = `
+  nc6             VARCHAR,
+  nc6_libelle     VARCHAR,
+  nc8             VARCHAR,
+  nc8_libelle_en  VARCHAR,
+  nc8_libelle_fr  VARCHAR,
+  partner_code    INTEGER,
+  partner_libelle VARCHAR,
+  year            INTEGER,
+  value           DOUBLE,
+  weight_kg       DOUBLE
+`;
+
+// Hiérarchie de codes nc6 → nc8 (parent_name) ; chaque niveau porte ses propres
+// colonnes de libellés (label_for), nc8 en a deux (en, fr). Les colonnes de
+// libellés ne sont ni clés primaires ni membres de la hiérarchie (spec §2.6) ;
+// elles sont catégorielles pour que getSharedFields ait à les exclure.
+const TRADE_METADATA: MetadataRow[] = [
+  meta('nc6', 'Code NC6', 'VARCHAR', true, true, { family: 'Nomenclature' }),
+  meta('nc6_libelle', 'Libellé NC6', 'VARCHAR', false, true, {
+    labelFor: 'nc6',
+    family: 'Nomenclature',
+  }),
+  meta('nc8', 'Code NC8', 'VARCHAR', true, true, {
+    parentName: 'nc6',
+    family: 'Nomenclature',
+    description: 'Code de la nomenclature combinée, zéros de tête compris',
+  }),
+  meta('nc8_libelle_en', 'Libellé NC8 (en)', 'VARCHAR', false, true, {
+    labelFor: 'nc8',
+    family: 'Nomenclature',
+  }),
+  meta('nc8_libelle_fr', 'Libellé NC8 (fr)', 'VARCHAR', false, true, {
+    labelFor: 'nc8',
+    family: 'Nomenclature',
+  }),
+  // Code numérique doté d'un libellé : value = CAST(code AS VARCHAR)
+  meta('partner_code', 'Code pays partenaire', 'INTEGER', true, true, { family: 'Géographie' }),
+  meta('partner_libelle', 'Pays partenaire', 'VARCHAR', false, true, {
+    labelFor: 'partner_code',
+    family: 'Géographie',
+  }),
+  meta('year', 'Année', 'INTEGER', true, false, { family: 'Temps' }),
+  meta('value', 'Valeur des échanges', 'DOUBLE', false, false, {
+    unit: '€',
+    displayFormat: ',.0f',
+    family: 'Commerce',
+    defaultAggregation: 'SUM',
+  }),
+  meta('weight_kg', 'Masse nette', 'DOUBLE', false, false, {
+    unit: 'kg',
+    displayFormat: ',.0f',
+    family: 'Commerce',
+    defaultAggregation: 'SUM',
+  }),
+];
+
+const TRADE_CLUSTER_BY = TRADE_METADATA.filter((m) => m.isPrimaryKey).map((m) => m.name);
+
+/** One nc8 code with its nc6 parent and every label (NULL when absent). */
+interface TradeCode {
+  nc6: string;
+  nc6Libelle: string;
+  nc8: string;
+  en: string | null;
+  fr: string | null;
+}
+
+// Libellé NC6 à apostrophe, partagé par les deux codes nc8 du chapitre 0201
+const NC6_BOVINS = "Viandes désossées de l'espèce bovine, fraîches ou réfrigérées";
+const NC6_CHEVAUX = 'Chevaux, autres que reproducteurs de race pure';
+
+// Codes du catalogue default. 02013090 n'a AUCUN libellé : NULL sur toutes ses
+// lignes, ce que la dépendance fonctionnelle code → libellé autorise.
+const TRADE_CODES_DEFAULT: TradeCode[] = [
+  {
+    nc6: '010121',
+    nc6Libelle: 'Chevaux reproducteurs de race pure',
+    nc8: '01012100',
+    en: 'Pure-bred breeding horses',
+    fr: 'Chevaux reproducteurs de race pure',
+  },
+  {
+    nc6: '010129',
+    nc6Libelle: NC6_CHEVAUX,
+    nc8: '01012910',
+    en: 'Horses for slaughter',
+    fr: 'Chevaux de boucherie',
+  },
+  {
+    nc6: '010129',
+    nc6Libelle: NC6_CHEVAUX,
+    nc8: '01012990',
+    en: 'Horses other than for slaughter',
+    fr: 'Chevaux autres que de boucherie',
+  },
+  {
+    nc6: '020130',
+    nc6Libelle: NC6_BOVINS,
+    nc8: '02013000',
+    en: 'Boneless bovine meat, fresh or chilled',
+    fr: "Viandes désossées de l'espèce bovine, fraîches ou réfrigérées",
+  },
+  { nc6: '020130', nc6Libelle: NC6_BOVINS, nc8: '02013090', en: null, fr: null },
+];
+
+// Codes du second catalogue : trois codes partagés avec default (compareFacts),
+// dont 02013090 libellé ici seulement (COALESCE des deux côtés), et un code propre.
+const TRADE_CODES_MACRO: TradeCode[] = [
+  TRADE_CODES_DEFAULT[0],
+  TRADE_CODES_DEFAULT[3],
+  {
+    nc6: '020130',
+    nc6Libelle: NC6_BOVINS,
+    nc8: '02013090',
+    en: 'Other boneless bovine meat',
+    fr: 'Autres viandes bovines désossées',
+  },
+  {
+    nc6: '030211',
+    nc6Libelle: 'Truites, fraîches ou réfrigérées',
+    nc8: '03021100',
+    en: 'Trout, fresh or chilled',
+    fr: 'Truites, fraîches ou réfrigérées',
+  },
+];
+
+// Pays partenaires : code numérique ISO 3166 et libellé (apostrophe comprise)
+const TRADE_PARTNERS: Array<[number, string]> = [
+  [250, 'France'],
+  [276, 'Allemagne'],
+  [384, "Côte d'Ivoire"],
 ];
 
 // ─── Fonctions utilitaires ─────────────────────────────────────────────────────
 
 /**
- * Generate a synthetic measurement value for a given indicator, country, date, and kind.
+ * Builds a metadata row, defaulting every optional UI field to NULL.
  *
- * Args:
- *     indicator: Indicator dimension entry.
- *     country: Country dimension entry.
- *     date: Observation date.
- *     kind: Data kind entry (actual, forecast, etc.).
- *     multiplier: Optional scaling factor applied to the base value.
- *
- * Returns:
- *     Computed synthetic measurement value.
+ * @param name - Technical column name.
+ * @param label - Display label.
+ * @param sqlType - DuckDB SQL type.
+ * @param isPrimaryKey - Whether the column belongs to the logical key.
+ * @param isCategorical - Whether the column is filtered through a select menu.
+ * @param options - Optional UI fields (parentName, labelFor, unit, displayFormat, family, description, defaultAggregation).
+ * @returns A fully populated MetadataRow.
  */
+// Construction d'une ligne de métadonnées avec valeurs optionnelles à NULL
+function meta(
+  name: string,
+  label: string,
+  sqlType: string,
+  isPrimaryKey: boolean,
+  isCategorical: boolean,
+  options: Partial<
+    Pick<
+      MetadataRow,
+      | 'parentName'
+      | 'labelFor'
+      | 'unit'
+      | 'displayFormat'
+      | 'family'
+      | 'description'
+      | 'defaultAggregation'
+    >
+  > = {},
+): MetadataRow {
+  return {
+    name,
+    label,
+    sqlType,
+    isPrimaryKey,
+    isCategorical,
+    parentName: options.parentName ?? null,
+    labelFor: options.labelFor ?? null,
+    unit: options.unit ?? null,
+    displayFormat: options.displayFormat ?? null,
+    family: options.family ?? null,
+    description: options.description ?? null,
+    defaultAggregation: options.defaultAggregation ?? null,
+  };
+}
+
+/**
+ * Generates a synthetic measurement value for a given coordinate.
+ *
+ * @param indicator - Indicator label.
+ * @param country - Country label.
+ * @param date - Observation date.
+ * @param kind - Data kind label.
+ * @param multiplier - Scaling factor applied to the base value.
+ * @returns Computed synthetic measurement value.
+ */
+// Génération d'une valeur synthétique, reproductible en ordre de grandeur
 function generateValue(
-  indicator: DimensionEntry,
-  country: DimensionEntry,
+  indicator: string,
+  country: string,
   date: Date,
-  kind: DimensionEntry,
+  kind: string,
   multiplier: number = 1.0,
 ): number {
-  let baseValue: number;
+  const countryRank = COUNTRIES.indexOf(country) + 1;
   // Variation saisonnière sinusoïdale sur 12 mois
   const monthVariation = Math.sin((date.getMonth() * Math.PI) / 6) * 0.1;
   const randomVariation = (Math.random() - 0.5) * 0.2;
 
   // Valeur de base selon l'indicateur
-  switch (indicator.value) {
-    case 1:
-      baseValue = 2.5 + (country.value % 3) * 0.5;
+  let baseValue: number;
+  switch (indicator) {
+    case 'GDP Growth Rate':
+      baseValue = 2.5 + (countryRank % 3) * 0.5;
       break;
-    case 2:
-      baseValue = 2.0 + (country.value % 4) * 0.3;
+    case 'Inflation Rate':
+      baseValue = 2.0 + (countryRank % 4) * 0.3;
       break;
-    case 3:
-      baseValue = 7.0 - (country.value % 4) * 0.8;
+    case 'Unemployment Rate':
+      baseValue = 7.0 - (countryRank % 4) * 0.8;
       break;
-    case 4:
-      baseValue = -20 + (country.value % 5) * 15;
-      break;
-    case 5:
-      baseValue = 3.5 + (country.value % 3) * 0.25;
-      break;
-    case 6:
-      baseValue = 100 + (country.value % 4) * 5;
+    case 'Trade Balance':
+      baseValue = -20 + (countryRank % 5) * 15;
       break;
     default:
       baseValue = 50;
   }
 
-  // Ajustement selon le type de donnée (prévision vs estimation)
-  if (kind.value === 2) baseValue *= 1.1;
-  else if (kind.value === 3) baseValue *= 0.95;
+  // Ajustement des prévisions par rapport aux valeurs constatées
+  if (kind === 'Forecast') baseValue *= 1.1;
 
   return (baseValue + monthVariation + randomVariation) * multiplier;
 }
 
 /**
- * Create a DuckLake catalog with schema, dimension tables, and fact data.
+ * Formats a Date as a SQL DATE literal (YYYY-MM-DD).
+ *
+ * @param date - Date to format.
+ * @returns ISO date string without the time part.
+ */
+// Formatage d'une date au format attendu par une colonne DATE
+function isoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Builds one fact row of a `main`-like schema, in MAIN_COLUMNS order.
+ *
+ * @param country - Country label.
+ * @param indicator - Indicator label.
+ * @param kind - Data kind label.
+ * @param date - Observation date.
+ * @param multiplier - Scaling factor applied to the measured value.
+ * @param overrides - Optional forced values (used by the zero-value row).
+ * @returns Row as an array aligned with MAIN_COLUMNS.
+ */
+// Construction d'une ligne de faits « main » avec ses mesures co-localisées
+function mainRow(
+  country: string,
+  indicator: string,
+  kind: string,
+  date: Date,
+  multiplier: number,
+  overrides: { value?: number } = {},
+): unknown[] {
+  const value = overrides.value ?? generateValue(indicator, country, date, kind, multiplier);
+  const horizon = kind === 'Forecast' ? Math.floor(Math.random() * 12) + 1 : 0;
+  const model = MODELS[Math.floor(Math.random() * MODELS.length)];
+  const training = TRAININGS[Math.floor(Math.random() * TRAININGS.length)];
+  // Une ligne sur trois laisse notes et quality_score à NULL (mesures nullables)
+  const sparse = date.getMonth() % 3 === 0;
+
+  return [
+    country,
+    indicator,
+    kind,
+    model,
+    training,
+    isoDate(date),
+    horizon,
+    value,
+    value * 0.9,
+    value * 1.1,
+    // BIGINT franchement au-delà de 2^53 sur les lignes constatées
+    kind === 'Actual' ? 9007199254740993n + BigInt(date.getMonth()) : 1234567n,
+    1000 + date.getMonth(),
+    kind === 'Forecast',
+    `${isoDate(date)} 03:15:00`,
+    sparse ? null : kind.toLowerCase(),
+    sparse ? null : Math.random(),
+  ];
+}
+
+/**
+ * Builds the fact rows of a `main`-like schema.
+ *
+ * @param countries - Country labels to generate rows for.
+ * @param indicators - Indicator labels to generate rows for.
+ * @param start - First observation date.
+ * @param end - Last observation date (inclusive).
+ * @param multiplier - Scaling factor applied to every measured value.
+ * @returns Rows aligned with MAIN_COLUMNS.
+ */
+// Génération mensuelle des faits sur la plage temporelle demandée
+function buildMainRows(
+  countries: string[],
+  indicators: readonly string[],
+  start: Date,
+  end: Date,
+  multiplier: number,
+): unknown[][] {
+  const rows: unknown[][] = [];
+  for (const country of countries) {
+    for (const indicator of indicators) {
+      for (const kind of KINDS) {
+        const current = new Date(start);
+        while (current <= end) {
+          rows.push(mainRow(country, indicator, kind, new Date(current), multiplier));
+          current.setMonth(current.getMonth() + 1);
+        }
+      }
+    }
+  }
+  return rows;
+}
+
+/**
+ * Builds the fact rows of the `geography` schema.
+ *
+ * @returns Rows aligned with GEOGRAPHY_COLUMNS.
+ */
+// Génération des faits géographiques, un point par nœud et par année
+function buildGeographyRows(): unknown[][] {
+  const rows: unknown[][] = [];
+  const dates = ['2023-01-01', '2024-01-01'];
+
+  GEOGRAPHY_TREE.forEach(([region, departement, commune], index) => {
+    dates.forEach((date, yearIndex) => {
+      const population = BigInt(25_000 + index * 40_000 + yearIndex * 1_500);
+      const area = 120.5 + index * 35.25;
+      // La densité est laissée à NULL sur les nœuds sans commune (arbre irrégulier)
+      const density = commune === null ? null : Number(population) / area;
+      rows.push([
+        region,
+        departement,
+        commune,
+        date,
+        population,
+        area,
+        // BIGINT au-delà de 2^53 pour vérifier la sérialisation des grands entiers
+        9007199254740995n + BigInt(index),
+        density,
+        commune !== null && index % 2 === 0,
+      ]);
+    });
+  });
+
+  return rows;
+}
+
+/**
+ * Builds the fact rows of a `trade` schema.
+ *
+ * Every label is a function of its code (one label per code, NULL included),
+ * so the rows honour the functional dependency the writer guarantees.
+ *
+ * @param codes - nc8 codes with their nc6 parent and labels.
+ * @param partners - Partner codes and labels.
+ * @param years - Observation years.
+ * @param multiplier - Scaling factor applied to every measured value.
+ * @returns Rows aligned with TRADE_COLUMNS.
+ */
+// Génération des échanges, une ligne par code, partenaire et année
+function buildTradeRows(
+  codes: TradeCode[],
+  partners: Array<[number, string]>,
+  years: number[],
+  multiplier: number,
+): unknown[][] {
+  const rows: unknown[][] = [];
+  codes.forEach((code, codeIndex) => {
+    partners.forEach(([partnerCode, partnerLabel], partnerIndex) => {
+      years.forEach((year, yearIndex) => {
+        const value = (1000 * (codeIndex + 1) + 100 * partnerIndex + 10 * yearIndex) * multiplier;
+        rows.push([
+          code.nc6,
+          code.nc6Libelle,
+          code.nc8,
+          code.en,
+          code.fr,
+          partnerCode,
+          partnerLabel,
+          year,
+          value,
+          value / 4,
+        ]);
+      });
+    });
+  });
+  return rows;
+}
+
+/**
+ * Builds the SchemaSpec of a `trade` schema.
+ *
+ * @param alias - Catalog alias, quoted in the dataset source.
+ * @param rows - Fact rows aligned with TRADE_COLUMNS.
+ * @returns The schema specification.
+ */
+// Assemblage d'un schéma « trade »
+function tradeSpec(alias: string, rows: unknown[][]): SchemaSpec {
+  return {
+    metadata: TRADE_METADATA,
+    datasetMetadata: {
+      label: `Échanges par produit — ${alias}`,
+      description: 'Échanges par code NC8 et pays partenaire',
+      source: `test-fixture:${alias}.trade`,
+      updatedAt: '2026-09-01 04:45:00',
+      schemaVersion: 1,
+      clusterBy: TRADE_CLUSTER_BY,
+    },
+    rows,
+  };
+}
+
+// ─── Écriture d'un schéma ──────────────────────────────────────────────────────
+
+/**
+ * Inserts rows into a staging table in batches, then copies them into the fact
+ * table sorted by cluster_by — exactly what the real writer does (spec §5.3).
+ *
+ * @param conn - Active DuckDB connection.
+ * @param qualified - Fully qualified fact table name.
+ * @param rows - Rows aligned with the fact table's column order.
+ * @param clusterBy - Physical sort columns.
+ */
+// Écriture triée : staging temporaire puis INSERT ... ORDER BY cluster_by
+async function insertFactRows(
+  conn: Connection,
+  qualified: string,
+  rows: unknown[][],
+  clusterBy: string[],
+): Promise<void> {
+  if (rows.length === 0) return;
+
+  await conn.run(`CREATE OR REPLACE TEMP TABLE staging_fact AS SELECT * FROM ${qualified} LIMIT 0`);
+
+  const columnCount = rows[0].length;
+  const placeholder = `(${Array(columnCount).fill('?').join(', ')})`;
+  const batchSize = 200;
+
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    const batch = rows.slice(offset, offset + batchSize);
+    await conn.run(
+      `INSERT INTO staging_fact VALUES ${batch.map(() => placeholder).join(', ')}`,
+      batch.flat(),
+    );
+  }
+
+  // Sans cluster_by (jeu sans clé primaire), l'ordre d'écriture est celui des lignes
+  const ordering = clusterBy.length > 0 ? ` ORDER BY ${clusterBy.map(quoteIdent).join(', ')}` : '';
+  await conn.run(`INSERT INTO ${qualified} SELECT * FROM staging_fact${ordering}`);
+  await conn.run('DROP TABLE staging_fact');
+}
+
+/**
+ * Creates the three tables of one schema and fills them.
+ *
+ * @param conn - Active DuckDB connection.
+ * @param alias - Alias of the already-attached catalog.
+ * @param schema - Schema name to create inside the catalog.
+ * @param columns - Fact table column definitions.
+ * @param spec - Metadata, dataset metadata, and fact rows of the schema.
+ * @param withDatasetMetadata - False to omit dataset_metadata entirely, which
+ *   reproduces a catalog written in the legacy format (version guard fixture).
+ */
+// Création des trois tables du schéma (spec §2) : aucune table dim_*
+async function createSchema(
+  conn: Connection,
+  alias: string,
+  schema: string,
+  columns: string,
+  spec: SchemaSpec,
+  withDatasetMetadata: boolean = true,
+): Promise<void> {
+  const qualify = (table: string): string => qualifiedTable(alias, schema, table);
+
+  if (schema !== 'main') {
+    await conn.run(`CREATE SCHEMA IF NOT EXISTS ${quoteIdent(alias)}.${quoteIdent(schema)}`);
+  }
+
+  // Table metadata — contrat entre la base et l'interface (spec §2.2), colonnes et
+  // contraintes dans l'ordre de METADATA_COLUMNS du writer
+  // (dt_ducklake_manager/utils/types.py)
+  await conn.run(`
+    CREATE TABLE ${qualify('metadata')} (
+      name                VARCHAR NOT NULL,
+      label               VARCHAR NOT NULL,
+      sql_type            VARCHAR NOT NULL,
+      is_categorical      BOOLEAN NOT NULL DEFAULT FALSE,
+      is_primary_key      BOOLEAN NOT NULL DEFAULT FALSE,
+      parent_name         VARCHAR,
+      label_for           VARCHAR,
+      unit                VARCHAR,
+      display_format      VARCHAR,
+      family              VARCHAR,
+      description         VARCHAR,
+      default_aggregation VARCHAR
+    )
+  `);
+
+  // Table dataset_metadata — exactement une ligne par schéma (spec §2.3).
+  // Son absence est volontaire dans la fixture de l'ancien format.
+  if (withDatasetMetadata) {
+    await conn.run(`
+    CREATE TABLE ${qualify('dataset_metadata')} (
+      label          VARCHAR,
+      description    VARCHAR,
+      source         VARCHAR,
+      updated_at     TIMESTAMP,
+      schema_version INTEGER,
+      cluster_by     VARCHAR
+    )
+  `);
+  }
+
+  await conn.run(`CREATE TABLE ${qualify('fact_table')} (${columns})`);
+
+  for (const row of spec.metadata) {
+    await conn.run(
+      `INSERT INTO ${qualify('metadata')}
+         (name, label, sql_type, is_primary_key, is_categorical, parent_name,
+          label_for, unit, display_format, family, description, default_aggregation)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.name,
+        row.label,
+        row.sqlType,
+        row.isPrimaryKey,
+        row.isCategorical,
+        row.parentName,
+        row.labelFor,
+        row.unit,
+        row.displayFormat,
+        row.family,
+        row.description,
+        row.defaultAggregation,
+      ],
+    );
+  }
+
+  const info = spec.datasetMetadata;
+  if (withDatasetMetadata) {
+    await conn.run(
+      `INSERT INTO ${qualify('dataset_metadata')}
+         (label, description, source, updated_at, schema_version, cluster_by)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        info.label,
+        info.description,
+        info.source,
+        info.updatedAt,
+        info.schemaVersion,
+        // NULL sans cluster_by, comme le writer d'un jeu sans clé primaire
+        info.clusterBy.length > 0 ? JSON.stringify(info.clusterBy) : null,
+      ],
+    );
+  }
+
+  await insertFactRows(conn, qualify('fact_table'), spec.rows, info.clusterBy);
+
+  console.log(`  [${alias}.${schema}] ${spec.rows.length} records inserted`);
+}
+
+/**
+ * Builds the SchemaSpec of a `main`-like schema.
+ *
+ * @param label - Dataset label exposed by dataset_metadata.
+ * @param source - Dataset source.
+ * @param rows - Fact rows aligned with MAIN_COLUMNS.
+ * @returns The schema specification.
+ */
+// Assemblage d'un schéma de type « main » (métadonnées communes + données propres)
+function mainSpec(label: string, source: string, rows: unknown[][]): SchemaSpec {
+  return {
+    metadata: MAIN_METADATA,
+    datasetMetadata: {
+      label,
+      description: "Série mensuelle d'indicateurs économiques par pays",
+      source,
+      updatedAt: '2026-09-01 04:30:00',
+      schemaVersion: 1,
+      clusterBy: MAIN_CLUSTER_BY,
+    },
+    rows,
+  };
+}
+
+// ─── Création d'un catalogue ───────────────────────────────────────────────────
+
+/**
+ * Creates a DuckLake catalog holding a single `main` schema.
  *
  * Deletes any existing catalog and data directory before recreation.
  *
- * Args:
- *     conn: Active DuckDB connection.
- *     alias: SQL alias for the attached catalog.
- *     catalogPath: Absolute path to the .ducklake metadata file.
- *     dataPath: Absolute path to the Parquet data directory.
- *     valueMultiplier: Scaling factor applied to all generated fact values.
+ * @param conn - Active DuckDB connection.
+ * @param alias - SQL alias for the attached catalog.
+ * @param catalogPath - Absolute path to the .ducklake metadata file.
+ * @param dataPath - Absolute path to the Parquet data directory.
+ * @param valueMultiplier - Scaling factor applied to all generated fact values.
  */
+// Création d'un catalogue et de son schéma principal
 async function createCatalog(
-  conn: Awaited<ReturnType<InstanceType<typeof DuckDBInstance>['connect']>>,
+  conn: Connection,
   alias: string,
   catalogPath: string,
   dataPath: string,
@@ -188,242 +1004,43 @@ async function createCatalog(
   // Attachement du nouveau catalogue DuckLake
   await conn.run(`ATTACH 'ducklake:${catalogPath}' AS "${alias}" (DATA_PATH '${dataPath}/')`);
 
-  // Création de la table de métadonnées
-  await conn.run(`
-    CREATE TABLE "${alias}".main.metadata (
-      name VARCHAR,
-      label VARCHAR,
-      python_type VARCHAR,
-      sql_type VARCHAR,
-      is_categorical BOOLEAN,
-      is_primary_key BOOLEAN
-    )
-  `);
+  // Les catalogues partagent les libellés de COUNTRIES (tests compare*) et
+  // ajoutent chacun un pays qui leur est propre (libellés disjoints).
+  const countries = [...COUNTRIES, DISJOINT_COUNTRY[alias]];
+  const rows = buildMainRows(
+    countries,
+    INDICATORS,
+    new Date('2022-01-01'),
+    new Date('2024-12-01'),
+    valueMultiplier,
+  );
 
-  // Création des tables de dimensions
-  const dimensions: string[] = ['country', 'indicator', 'kind', 'model', 'training'];
-  for (const dim of dimensions) {
-    await conn.run(`
-      CREATE TABLE "${alias}".main.dim_${dim} (
-        value BIGINT,
-        label VARCHAR
-      )
-    `);
-  }
+  // Ligne unique commune à tous les catalogues, à valeur nulle dans `default` :
+  // elle rend deltaPercent indéterminé sans polluer le reste du jeu de données.
+  rows.push(
+    mainRow(ZERO_COUNTRY, INDICATORS[0], 'Actual', new Date('2024-01-01'), 1.0, {
+      value: alias === 'default' ? 0 : 42,
+    }),
+  );
 
-  // Création de la table de faits (multi-mesure : value + bornes + score + notes)
-  await conn.run(`
-    CREATE TABLE "${alias}".main.fact_table (
-      indicator     BIGINT,
-      country       BIGINT,
-      date          TIMESTAMP_NS,
-      value         DOUBLE,
-      kind          BIGINT,
-      horizon       DOUBLE,
-      week          DOUBLE,
-      model         DOUBLE,
-      training      DOUBLE,
-      lower_bound   DOUBLE,
-      upper_bound   DOUBLE,
-      quality_score DOUBLE,
-      notes         VARCHAR
-    )
-  `);
-
-  // Insertion des lignes de métadonnées
-  for (const meta of metadataRows) {
-    await conn.run(
-      `INSERT INTO "${alias}".main.metadata
-         (name, label, python_type, sql_type, is_categorical, is_primary_key)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      meta,
-    );
-  }
-
-  // Insertion des données de dimensions
-  for (const [dimName, rows] of Object.entries(dimensionData)) {
-    for (const row of rows) {
-      await conn.run(`INSERT INTO "${alias}".main.dim_${dimName} (value, label) VALUES (?, ?)`, [
-        row.value,
-        row.label,
-      ]);
-    }
-  }
-
-  // Génération et insertion des données de faits
-  const startDate = new Date('2022-01-01');
-  const endDate = new Date('2024-12-31');
-  let insertCount = 0;
-
-  for (const country of dimensionData.country.slice(0, 5)) {
-    for (const indicator of dimensionData.indicator.slice(0, 4)) {
-      for (const kind of dimensionData.kind.slice(0, 2)) {
-        const currentDate = new Date(startDate);
-
-        // Itération mensuelle sur la plage temporelle
-        while (currentDate <= endDate) {
-          const value = generateValue(indicator, country, currentDate, kind, valueMultiplier);
-          const horizon = kind.value === 2 ? Math.floor(Math.random() * 12) + 1 : 0;
-          const week = Math.floor((currentDate.getDate() - 1) / 7) + 1;
-          const model =
-            dimensionData.model[Math.floor(Math.random() * dimensionData.model.length)].value;
-          const training =
-            dimensionData.training[Math.floor(Math.random() * dimensionData.training.length)].value;
-          // Mesures co-localisées : intervalle de confiance, score, note textuelle
-          const lowerBound = value * 0.9;
-          const upperBound = value * 1.1;
-          const qualityScore = Math.random();
-          const notes = kind.value === 2 ? 'forecast' : 'actual';
-
-          await conn.run(
-            `INSERT INTO "${alias}".main.fact_table
-               (indicator, country, date, value, kind, horizon, week, model, training,
-                lower_bound, upper_bound, quality_score, notes)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              indicator.value,
-              country.value,
-              currentDate.toISOString(),
-              value,
-              kind.value,
-              horizon,
-              week,
-              model,
-              training,
-              lowerBound,
-              upperBound,
-              qualityScore,
-              notes,
-            ],
-          );
-
-          insertCount++;
-          // Affichage de la progression tous les 100 enregistrements
-          if (insertCount % 100 === 0) {
-            process.stdout.write(`\r  [${alias}] ${insertCount} records...`);
-          }
-          currentDate.setMonth(currentDate.getMonth() + 1);
-        }
-      }
-    }
-  }
-
-  console.log(`\n  [${alias}] ${insertCount} records inserted (multiplier: ×${valueMultiplier})`);
-}
-
-// Dimension country du schéma `predictions` : MÊMES labels que `main` mais IDs
-// volontairement divergents (France=2 ici vs France=1 dans main, Germany=1 ici vs 2
-// dans main). Reproduit le cas réel où l'ID d'une modalité dépend de l'historique
-// d'arrivée par base. Une jointure cross-schéma sur l'ID brut serait silencieusement
-// fausse ; la jointure correcte passe par les labels via dim_country.
-const predictionsCountryDim: DimensionEntry[] = [
-  { value: 1, label: 'Germany' },
-  { value: 2, label: 'France' },
-  { value: 3, label: 'Spain' },
-];
-
-/**
- * Create a second schema (`predictions`) inside an already-attached catalog.
- *
- * Tables live under the catalog's DATA_PATH (set at ATTACH time). The country
- * dimension uses IDs that diverge from the catalog's `main` schema while keeping
- * the same labels, so cross-schema joins must resolve labels via dim_country.
- *
- * Args:
- *     conn: Active DuckDB connection.
- *     alias: Alias of the already-attached catalog (e.g. 'default').
- *     schema: Name of the schema to create (default 'predictions').
- */
-async function createPredictionsSchema(
-  conn: Awaited<ReturnType<InstanceType<typeof DuckDBInstance>['connect']>>,
-  alias: string,
-  schema: string = 'predictions',
-): Promise<void> {
-  // Création du schéma au sein du catalogue déjà attaché
-  await conn.run(`CREATE SCHEMA IF NOT EXISTS "${alias}".${schema}`);
-
-  // Métadonnées (mêmes colonnes que main)
-  await conn.run(`
-    CREATE TABLE "${alias}".${schema}.metadata (
-      name VARCHAR, label VARCHAR, python_type VARCHAR,
-      sql_type VARCHAR, is_categorical BOOLEAN, is_primary_key BOOLEAN
-    )
-  `);
-  for (const meta of metadataRows) {
-    await conn.run(
-      `INSERT INTO "${alias}".${schema}.metadata
-         (name, label, python_type, sql_type, is_categorical, is_primary_key)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      meta,
-    );
-  }
-
-  // Tables de dimensions : country divergente, les autres réutilisées de main
-  const dims: Record<string, DimensionEntry[]> = {
-    country: predictionsCountryDim,
-    indicator: dimensionData.indicator,
-    kind: dimensionData.kind,
-    model: dimensionData.model,
-    training: dimensionData.training,
-  };
-  for (const [dimName, rows] of Object.entries(dims)) {
-    await conn.run(
-      `CREATE TABLE "${alias}".${schema}.dim_${dimName} (value BIGINT, label VARCHAR)`,
-    );
-    for (const row of rows) {
-      await conn.run(
-        `INSERT INTO "${alias}".${schema}.dim_${dimName} (value, label) VALUES (?, ?)`,
-        [row.value, row.label],
-      );
-    }
-  }
-
-  // Table de faits + petit jeu de données (un point par country × indicateur)
-  await conn.run(`
-    CREATE TABLE "${alias}".${schema}.fact_table (
-      indicator BIGINT, country BIGINT, date TIMESTAMP_NS, value DOUBLE,
-      kind BIGINT, horizon DOUBLE, week DOUBLE, model DOUBLE, training DOUBLE,
-      lower_bound DOUBLE, upper_bound DOUBLE, quality_score DOUBLE, notes VARCHAR
-    )
-  `);
-  const refDate = new Date('2024-01-01');
-  for (const country of predictionsCountryDim) {
-    for (const indicator of dimensionData.indicator.slice(0, 3)) {
-      const value = generateValue(indicator, country, refDate, dimensionData.kind[0], 1.0);
-      await conn.run(
-        `INSERT INTO "${alias}".${schema}.fact_table
-           (indicator, country, date, value, kind, horizon, week, model, training,
-            lower_bound, upper_bound, quality_score, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          indicator.value,
-          country.value,
-          refDate.toISOString(),
-          value,
-          1,
-          0,
-          1,
-          1,
-          1,
-          value * 0.9,
-          value * 1.1,
-          Math.random(),
-          'actual',
-        ],
-      );
-    }
-  }
-
-  console.log(`  [${alias}.${schema}] schema created with divergent country IDs`);
+  await createSchema(
+    conn,
+    alias,
+    'main',
+    MAIN_COLUMNS,
+    mainSpec(`Indicateurs — ${alias}`, `test-fixture:${alias}`, rows),
+  );
 }
 
 // ─── Point d'entrée principal ──────────────────────────────────────────────────
 
 /**
- * Orchestrate the creation of all test DuckLake catalogs.
+ * Orchestrates the creation of all test DuckLake catalogs.
  *
  * Creates a shared in-memory DuckDB instance, installs the DuckLake extension
- * if needed, then creates the default, macroeconomics, and public_finance catalogs.
+ * if needed, then creates the default (main + predictions + geography +
+ * trade + emploi + no_primary_key), macroeconomics (main + trade), and
+ * public_finance catalogs.
  */
 async function setupTestData(): Promise<void> {
   // Création du répertoire de données de test si absent
@@ -443,7 +1060,7 @@ async function setupTestData(): Promise<void> {
       await conn.run('FORCE INSTALL ducklake FROM community; LOAD ducklake;');
     }
 
-    // Création du catalogue par défaut
+    // Catalogue par défaut
     await createCatalog(
       conn,
       'default',
@@ -452,11 +1069,116 @@ async function setupTestData(): Promise<void> {
       1.0,
     );
 
-    // Second schéma `predictions` dans le catalogue default (IDs country divergents)
-    // — sert aux tests cross-schéma et à la validation de la résolution par label.
-    await createPredictionsSchema(conn, 'default', 'predictions');
+    // Second schéma `predictions` : mêmes LIBELLÉS que `main` (la fact table les
+    // porte directement, il n'y a plus d'identifiant à réconcilier) plus un pays
+    // disjoint, pour les comparaisons cross-schéma.
+    await createSchema(
+      conn,
+      'default',
+      'predictions',
+      MAIN_COLUMNS,
+      mainSpec(
+        'Prévisions — default',
+        'test-fixture:default.predictions',
+        buildMainRows(
+          [...COUNTRIES.slice(0, 3), DISJOINT_COUNTRY.predictions],
+          INDICATORS.slice(0, 3),
+          new Date('2024-01-01'),
+          new Date('2024-03-01'),
+          1.0,
+        ),
+      ),
+    );
 
-    // Création du catalogue macroéconomie
+    // Troisième schéma `geography` : hiérarchie de colonnes region → departement
+    // → commune (spec §2.5), arbre irrégulier et libellé à apostrophe.
+    await createSchema(conn, 'default', 'geography', GEOGRAPHY_COLUMNS, {
+      metadata: GEOGRAPHY_METADATA,
+      datasetMetadata: {
+        label: 'Territoires',
+        description: 'Population et budget par niveau géographique',
+        source: 'test-fixture:default.geography',
+        updatedAt: '2026-09-01 04:35:00',
+        schemaVersion: 1,
+        clusterBy: GEOGRAPHY_CLUSTER_BY,
+      },
+      rows: buildGeographyRows(),
+    });
+
+    // Quatrième schéma `trade` : codes NC6 → NC8 et code numérique, chacun doté
+    // de colonnes de libellés (spec §2.6)
+    await createSchema(
+      conn,
+      'default',
+      'trade',
+      TRADE_COLUMNS,
+      tradeSpec('default', buildTradeRows(TRADE_CODES_DEFAULT, TRADE_PARTNERS, [2023, 2024], 1.0)),
+    );
+
+    // Cinquième schéma `emploi` : noms de colonnes avec espace, accent et
+    // apostrophe, y compris dans cluster_by
+    await createSchema(conn, 'default', 'emploi', EMPLOI_COLUMNS, {
+      metadata: EMPLOI_METADATA,
+      datasetMetadata: {
+        label: 'Emploi',
+        description: 'Taux de chômage par zone d’emploi et par année',
+        source: 'test-fixture:default.emploi',
+        updatedAt: '2026-09-01 04:36:00',
+        schemaVersion: 1,
+        clusterBy: EMPLOI_CLUSTER_BY,
+      },
+      rows: buildEmploiRows(),
+    });
+
+    // Sixième schéma `no_primary_key` : ni clé primaire ni cluster_by, un DECIMAL
+    // déclaré « DECIMAL » et un TIME, métadonnées écrites par ordre alphabétique
+    await createSchema(conn, 'default', 'no_primary_key', NO_PRIMARY_KEY_COLUMNS, {
+      metadata: NO_PRIMARY_KEY_METADATA,
+      datasetMetadata: {
+        label: 'Sans clé primaire',
+        description: 'Jeu sans clé primaire ni cluster_by, dédoublonné sur toutes ses colonnes',
+        source: 'test-fixture:default.no_primary_key',
+        updatedAt: '2026-09-01 04:37:00',
+        schemaVersion: 1,
+        clusterBy: [],
+      },
+      rows: buildNoPrimaryKeyRows(),
+    });
+
+    // Deux schémas VOLONTAIREMENT non conformes, réservés au test de la garde
+    // de version. Ils ne décrivent aucun format réel : le premier annonce une
+    // version que l'API ne supporte pas, le second reproduit un catalogue
+    // écrit avant l'existence de dataset_metadata.
+    const guardRows = buildMainRows(
+      COUNTRIES.slice(0, 2),
+      INDICATORS.slice(0, 1),
+      new Date('2024-01-01'),
+      new Date('2024-02-01'),
+      1.0,
+    );
+
+    await createSchema(conn, 'default', 'unsupported_version', MAIN_COLUMNS, {
+      ...mainSpec('Version non supportée', 'test-fixture:guard', guardRows),
+      datasetMetadata: {
+        label: 'Version non supportée',
+        description: 'Fixture de la garde de version — schema_version hors liste',
+        source: 'test-fixture:guard',
+        updatedAt: '2026-09-01 04:40:00',
+        schemaVersion: 99,
+        clusterBy: MAIN_CLUSTER_BY,
+      },
+    });
+
+    await createSchema(
+      conn,
+      'default',
+      'missing_dataset_metadata',
+      MAIN_COLUMNS,
+      mainSpec('Ancien format', 'test-fixture:guard', guardRows),
+      false,
+    );
+
+    // Catalogue macroéconomie
     await createCatalog(
       conn,
       'macroeconomics',
@@ -465,7 +1187,19 @@ async function setupTestData(): Promise<void> {
       1.05,
     );
 
-    // Création du catalogue finances publiques
+    // Schéma `trade` du second catalogue : codes nc8 en partie partagés (compareFacts)
+    await createSchema(
+      conn,
+      'macroeconomics',
+      'trade',
+      TRADE_COLUMNS,
+      tradeSpec(
+        'macroeconomics',
+        buildTradeRows(TRADE_CODES_MACRO, TRADE_PARTNERS.slice(0, 2), [2024], 1.05),
+      ),
+    );
+
+    // Catalogue finances publiques
     await createCatalog(
       conn,
       'public_finance',

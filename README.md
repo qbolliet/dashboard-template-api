@@ -7,7 +7,7 @@
 
 A production-ready **GraphQL API template** that connects to one or more [DuckLake](https://ducklake.select/) databases and exposes their content through a unified, read-only endpoint.
 
-**[Full documentation →](https://qbolliet.github.io/dashboard-template-api/)**
+**[Full documentation →](https://qbolliet.github.io/dashboard-template-api/)** — [API & Data](https://qbolliet.github.io/dashboard-template-api/) (GraphQL reference, export, data dictionary) and [Toolbox](https://qbolliet.github.io/dashboard-template-api/toolbox/) (setup, deployment, architecture, code reference)
 
 ---
 
@@ -17,10 +17,13 @@ A production-ready **GraphQL API template** that connects to one or more [DuckLa
 | ------------------ | --------------------------------------------------------- |
 | **Authentication** | None — fully public                                       |
 | **Operations**     | Read-only (no mutations)                                  |
+| **Bulk export**    | `GET \| POST /api/export` — Arrow · CSV · Parquet         |
 | **Protection**     | Rate limiting · complexity limits · depth limits          |
 | **Stack**          | Apollo Server 5 · DuckDB · Express 5 · Redis · TypeScript |
 
-The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query complexity analysis, and input sanitization protect against abuse.
+Whole datasets are exported over REST rather than paginated through GraphQL: `GET /api/export?catalog=…&schema=…&format=arrow|csv|parquet` streams the fact table with its types preserved. It uses the same filter tree as GraphQL (sent as a JSON body with `POST /api/export` when it is too long for a URL) and has its own row ceiling, beyond which the response is refused or explicitly truncated with a resume cursor, per-IP concurrency limit and timeout. See the [bulk export guide](https://qbolliet.github.io/dashboard-template-api/api-guide/export).
+
+The API is intentionally unauthenticated. It is designed to be deployed behind a reverse proxy with network-level access control. All catalogs are opened in read-only mode. Rate limiting, query depth and complexity limits, and identifier validation protect against abuse (filter values are bound parameters).
 
 ---
 
@@ -38,16 +41,19 @@ npm run dev                   # → http://localhost:4000/graphql
 
 ## npm scripts
 
-| Script                  | Description                         |
-| ----------------------- | ----------------------------------- |
-| `npm run dev`           | Development server with auto-reload |
-| `npm run build`         | Compile TypeScript → `dist/`        |
-| `npm run start:prod`    | Run compiled output                 |
-| `npm run lint`          | ESLint                              |
-| `npm run format`        | Prettier                            |
-| `npm run test:setup`    | Load test fixtures                  |
-| `npm test`              | Run Jest test suite                 |
-| `npm run test:coverage` | Tests with coverage report          |
+| Script                    | Description                                   |
+| ------------------------- | --------------------------------------------- |
+| `npm run dev`             | Development server with auto-reload           |
+| `npm run build`           | Compile TypeScript → `dist/`                  |
+| `npm run start:prod`      | Run compiled output                           |
+| `npm run lint`            | ESLint                                        |
+| `npm run format`          | Prettier                                      |
+| `npm run test:setup`      | Load test fixtures                            |
+| `npm test`                | Run Jest test suite                           |
+| `npm run test:coverage`   | Tests with coverage report                    |
+| `npm run schema:generate` | Regenerate the versioned SDL `schema.graphql` |
+| `npm run schema:check`    | Fail if `schema.graphql` is stale             |
+| `npm run schema:diff`     | Diff the SDL against the last release         |
 
 ---
 
@@ -70,10 +76,10 @@ helm install api dta/dashboard-template-api -f values.prod.yaml
 
 The full deployment guide — Dockerfile internals, `values.yaml` reference, ingress + TLS, autoscaling, and how to invalidate the Redis cache from an external updater — lives at:
 
-- [Deployment overview](https://qbolliet.github.io/dashboard-template-api/deployment/overview)
-- [Docker](https://qbolliet.github.io/dashboard-template-api/deployment/docker)
-- [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/deployment/kubernetes-helm)
-- [Data refresh](https://qbolliet.github.io/dashboard-template-api/deployment/data-refresh)
+- [Deployment overview](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/overview)
+- [Docker](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/docker)
+- [Kubernetes & Helm](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/kubernetes-helm)
+- [Data refresh](https://qbolliet.github.io/dashboard-template-api/toolbox/deployment/data-refresh)
 
 ---
 
@@ -88,8 +94,10 @@ dashboard-template-api/
 │   ├── schema/
 │   │   ├── typedefs/         # GraphQL type definitions
 │   │   └── resolvers/        # Query resolvers
+│   ├── generated/            # Resolver types generated from schema.graphql (codegen)
 │   ├── loaders/              # DataLoader implementations
-│   ├── security/             # Rate limiter, complexity, sanitization
+│   ├── export/               # REST bulk export (Arrow / CSV / Parquet)
+│   ├── security/             # Rate limiter, complexity, depth, CORS
 │   ├── cache/                # Redis cache helpers
 │   └── utils/                # Config loader, logger, utilities
 ├── config/
@@ -97,13 +105,14 @@ dashboard-template-api/
 │   ├── database.yaml         # DuckLake catalog paths and pool
 │   ├── security.yaml         # Rate limits, complexity, depth
 │   ├── cache.yaml            # Redis connection and TTL
-│   ├── logging.yaml          # Log levels and transports
-│   └── security-patterns.yaml
+│   └── logging.yaml          # Log levels and transports
 ├── tests/
 │   ├── setup/                # Jest setup and DI container
 │   ├── unit/                 # Unit tests mirroring src/
 │   └── integration/          # End-to-end GraphQL tests
-├── docs-site/                # Docusaurus documentation site
+├── docs-site/                # Docusaurus docs: API & Data site + Toolbox site
+├── codegen.ts                # GraphQL Code Generator config (src/generated/)
+├── schema.graphql            # Versioned GraphQL SDL (the API contract)
 ├── scripts/                  # Database update handler
 ├── docs/                     # Additional operational docs
 ├── helm/                     # Helm chart for Kubernetes deployment
@@ -115,20 +124,30 @@ dashboard-template-api/
 
 ## Documentation
 
-The full documentation is published at **https://qbolliet.github.io/dashboard-template-api/** and covers:
+The documentation is published as two sites at **https://qbolliet.github.io/dashboard-template-api/**:
 
-- [Getting started](https://qbolliet.github.io/dashboard-template-api/getting-started/installation) — installation, configuration, running tests
+**API & Data** (root) — specific to a deployment:
+
 - [API guide](https://qbolliet.github.io/dashboard-template-api/api-guide/overview) — all queries with parameters and examples
-- [Configuration reference](https://qbolliet.github.io/dashboard-template-api/configuration/overview) — every YAML key documented
-- [Architecture](https://qbolliet.github.io/dashboard-template-api/architecture/overview) — security layers, caching, data loading
-- [Schema explorer](https://qbolliet.github.io/dashboard-template-api/schema) — interactive GraphQL Voyager
+- [Bulk export](https://qbolliet.github.io/dashboard-template-api/api-guide/export) — `GET | POST /api/export` in Arrow, CSV or Parquet
+- [Consuming the API in TypeScript](https://qbolliet.github.io/dashboard-template-api/typescript-client) — GraphQL Code Generator setup for clients
+- [Data dictionary](https://qbolliet.github.io/dashboard-template-api/data-dictionary) — columns, labels and hierarchies of every served dataset (generated from the API)
+- [GraphQL reference](https://qbolliet.github.io/dashboard-template-api/graphql-api/graphql-api) and [Schema explorer](https://qbolliet.github.io/dashboard-template-api/schema) — interactive GraphQL Voyager
 
-To build the docs locally:
+**Toolbox** ([`/toolbox/`](https://qbolliet.github.io/dashboard-template-api/toolbox/)) — reusable from one project to another:
+
+- [Getting started](https://qbolliet.github.io/dashboard-template-api/toolbox/getting-started/installation) — installation, configuration, running tests
+- [Configuration reference](https://qbolliet.github.io/dashboard-template-api/toolbox/configuration/overview) — every YAML key documented
+- [Architecture](https://qbolliet.github.io/dashboard-template-api/toolbox/architecture/overview) — security layers, caching, data loading
+- [API versioning](https://qbolliet.github.io/dashboard-template-api/toolbox/api-versioning) and [code reference](https://qbolliet.github.io/dashboard-template-api/toolbox/code-reference/)
+
+To build the docs locally (see [Building the documentation](https://qbolliet.github.io/dashboard-template-api/toolbox/getting-started/building-the-docs)):
 
 ```bash
-npm run build                                    # compile TypeScript first
-node docs-site/scripts/generate-schema.mjs      # generate schema.json for Voyager
-cd docs-site && npm install && npm run start
+npm install && npm --prefix docs-site install
+npm run test:setup                # test catalogs, for the data dictionary
+npm run docs:build:test-api       # both sites, dictionary from the test API → docs-site/build/site/
+npm --prefix docs-site run serve
 ```
 
 ---

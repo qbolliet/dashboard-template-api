@@ -47,6 +47,12 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
   config: mockConfig,
 }));
 
+// Logger mocké : les pannes Redis sont journalisées en avertissement
+const mockLogger = { warn: jest.fn(), error: jest.fn() };
+jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
+  logger: mockLogger,
+}));
+
 // ─── Import dynamique ─────────────────────────────────────────────────────────
 
 // Assertion d'assignation définitive — withCache sera assigné dans beforeAll.
@@ -88,12 +94,7 @@ describe('withCache', () => {
 
       expect(result).toEqual(data);
       expect(loader).toHaveBeenCalledTimes(1);
-      expect(mockRedis.set).toHaveBeenCalledWith(
-        'test:miss',
-        JSON.stringify(data),
-        'EX',
-        300
-      );
+      expect(mockRedis.set).toHaveBeenCalledWith('test:miss', JSON.stringify(data), 'EX', 300);
     });
 
     test('uses provided timeout instead of default', async () => {
@@ -104,12 +105,7 @@ describe('withCache', () => {
       const loader = jest.fn().mockResolvedValue({ ok: true });
       await withCache('test:custom-ttl', loader as () => Promise<unknown>, 60);
 
-      expect(mockRedis.set).toHaveBeenCalledWith(
-        'test:custom-ttl',
-        expect.any(String),
-        'EX',
-        60
-      );
+      expect(mockRedis.set).toHaveBeenCalledWith('test:custom-ttl', expect.any(String), 'EX', 60);
     });
   });
 
@@ -155,6 +151,49 @@ describe('withCache', () => {
       const result = await withCache('test:set-error', loader as () => Promise<unknown>);
 
       expect(result).toEqual(data);
+      // Échec d'écriture : la valeur chargée est rendue, sans second chargement
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    test('rethrows a loader error without calling the loader a second time', async () => {
+      // Erreur du loader (requête en échec) : jamais rejouée comme une panne Redis
+      mockRedis.get.mockResolvedValue(null);
+      const loader = jest.fn().mockRejectedValue(new Error('Binder Error: nope'));
+
+      await expect(
+        withCache('test:loader-error', loader as () => Promise<unknown>),
+      ).rejects.toThrow('Binder Error: nope');
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(mockRedis.set).not.toHaveBeenCalled();
+    });
+
+    test('rethrows a loader error once even when Redis read failed first', async () => {
+      // Panne Redis puis erreur du loader : un seul appel, l'erreur du loader remonte
+      mockRedis.get.mockRejectedValue(new Error('Redis connection failed'));
+      const loader = jest.fn().mockRejectedValue(new Error('IO Error: disk'));
+
+      await expect(withCache('test:both-errors', loader as () => Promise<unknown>)).rejects.toThrow(
+        'IO Error: disk',
+      );
+      expect(loader).toHaveBeenCalledTimes(1);
+    });
+
+    test('treats a corrupt cache entry as a miss', async () => {
+      mockRedis.get.mockResolvedValue('{not json');
+      mockRedis.set.mockResolvedValue('OK');
+      const loader = jest.fn().mockResolvedValue({ fresh: true });
+
+      const result = await withCache('test:corrupt', loader as () => Promise<unknown>);
+
+      expect(result).toEqual({ fresh: true });
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(mockRedis.set).toHaveBeenCalledWith(
+        'test:corrupt',
+        JSON.stringify({ fresh: true }),
+        'EX',
+        300,
+      );
     });
   });
 });

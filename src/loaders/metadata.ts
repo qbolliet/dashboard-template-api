@@ -1,24 +1,23 @@
 // Importation des modules
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
+import {
+  METADATA_FIELD_WITH_LABELS_WHERE,
+  METADATA_SELECT,
+  toFieldMetadataWithLabels,
+} from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
-
-// ─── Interfaces de méta-données ───────────────────────────────────────────────
-
-/** Row of the metadata table returned by DuckDB. */
-interface MetadataRow {
-  name: string;
-  is_categorical?: boolean;
-  is_primary_key?: boolean;
-  [key: string]: unknown;
-}
+import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
 // Classe de chargement des méta-données
 /**
  * Loader for metadata table queries.
  *
- * Extends BaseQueryLoader to load field metadata (type, categorical flag,
- * primary key flag) from the metadata table of the current catalog.
+ * Extends BaseQueryLoader to load the metadata row of a single field from the
+ * metadata table of the current catalog. Rows are returned in camelCase: the
+ * snake_case → camelCase mapping lives in utils/metadata-mapping.ts. The same
+ * read also returns the label columns pointing at the field, so `labelFields`
+ * is derived without a second query.
  */
 class MetadataLoader extends BaseQueryLoader {
   // Initialisation avec la configuration spécifique aux méta-données
@@ -35,6 +34,8 @@ class MetadataLoader extends BaseQueryLoader {
       cache: true,
       // Durée de mise en cache plus longue car les méta-données changent rarement
       cacheTimeout: config.API.LOADERS.METADATA_CACHE_TIMEOUT,
+      // Échéance alignée sur le timeout du resolver consommateur
+      queryTimeout: config.API.TIMEOUTS.METADATA,
       catalogId,
       schema,
     });
@@ -44,35 +45,27 @@ class MetadataLoader extends BaseQueryLoader {
   /**
    * Loads metadata for a single field name.
    *
-   * Converts is_categorical and is_primary_key columns from integer
-   * to boolean before returning.
-   *
    * @param connection - Active DuckDB connection from the pool.
    * @param name - Field name to look up in the metadata table.
-   * @returns Metadata row for the given name, or null when not found.
+   * @returns Metadata row in camelCase with its `labelFields`, or null when the
+   *   field is unknown.
    */
-  async loadSingle(connection: DuckDBConnection, name: string): Promise<MetadataRow | null> {
-    // Paramétrisation de la requête pour éviter les injections SQL
-    const query = `SELECT * FROM ${this.qualifyTable('metadata')} WHERE name = ?`;
+  async loadSingle(connection: DuckDBConnection, name: string): Promise<FieldMetadata | null> {
+    // Paramétrisation de la requête pour éviter les injections SQL ; la colonne
+    // est lue avec ses colonnes de libellés, base du calcul de labelFields
+    const query =
+      `SELECT ${METADATA_SELECT} FROM ${this.qualifyTable('metadata')} ` +
+      `WHERE ${METADATA_FIELD_WITH_LABELS_WHERE}`;
 
     // Exécution de la requête
-    const result = await connection.all(query, [name]);
+    const result = await connection.all(query, [name, name]);
 
     // Absence de résultat → retour null
     if (!result || result.length === 0) {
       return null;
     }
 
-    // Conversion des indicateurs booléens stockés en entier
-    const metadata = result[0] as MetadataRow;
-    if (metadata && 'is_categorical' in metadata) {
-      metadata.is_categorical = Boolean(metadata.is_categorical);
-    }
-    if (metadata && 'is_primary_key' in metadata) {
-      metadata.is_primary_key = Boolean(metadata.is_primary_key);
-    }
-
-    return metadata;
+    return toFieldMetadataWithLabels(result, name);
   }
 }
 
@@ -82,14 +75,14 @@ class MetadataLoader extends BaseQueryLoader {
  *
  * @param catalogId - Catalog alias to query; null uses the default catalog.
  * @param schema - DuckLake schema within the catalog; null uses the catalog default.
- * @returns DataLoader keyed by field name, returning MetadataRow or null.
+ * @returns DataLoader keyed by field name, returning FieldMetadata or null.
  */
 const createMetadataLoader = (catalogId: string | null = null, schema: string | null = null) => {
   const loader = new MetadataLoader(catalogId, schema);
-  return loader.createLoader<string, MetadataRow | null>((connection, name) =>
+  return loader.createLoader<string, FieldMetadata | null>((connection, name) =>
     loader.loadSingle(connection, name),
   );
 };
 
 export { createMetadataLoader };
-export type { MetadataRow };
+export type { FieldMetadata };

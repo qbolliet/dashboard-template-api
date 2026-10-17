@@ -65,7 +65,8 @@ const createRedisClient = (): Redis | Cluster => {
   const ioredisConfig = {
     host: redisConfig.HOST,
     port: redisConfig.PORT,
-    password: redisConfig.PASSWORD,
+    password: redisConfig.PASSWORD || undefined,
+    db: redisConfig.DB,
     keyPrefix: redisConfig.KEY_PREFIX ?? 'graphql-api:',
 
     // Calcul du délai de reconnexion exponentiel borné entre les tentatives

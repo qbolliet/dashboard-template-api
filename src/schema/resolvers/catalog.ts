@@ -1,8 +1,17 @@
 // Importation des modules
 import { GraphQLError } from 'graphql';
+import { previewValue } from '../../utils/preview-value.js';
 import { databaseManager } from '../../db/index.js';
 import type { GraphQLContext } from './types.js';
-import type { CatalogMetadataRow } from '../../loaders/catalog.js';
+import {
+  attachScopeToAll,
+  contextScope,
+  effectiveScope,
+  validateSchemaForCatalog,
+} from './scope.js';
+import { sqlTypeFamily } from '../../utils/filter-tree.js';
+import type { FieldMetadata } from '../../utils/metadata-mapping.js';
+import type { DatasetInfo } from '../../loaders/dataset-info.js';
 import type { SelectOption } from '../../loaders/select-options.js';
 
 // ─── Interfaces des arguments ─────────────────────────────────────────────────
@@ -21,16 +30,19 @@ export interface FieldsArgs {
   isCategorical?: boolean | null;
   isPrimaryKey?: boolean | null;
   namePattern?: string | null;
+  family?: string | null;
+  /** False (default) hides the label columns, which are not variables to offer. */
+  includeLabelFields?: boolean | null;
 }
 
-/** A single (catalog, schema) target as accepted by getSharedDimensions. */
+/** A single (catalog, schema) target as accepted by getSharedFields. */
 export interface CatalogSchemaTarget {
   catalog: string;
   schema?: string | null;
 }
 
-/** Arguments for the getSharedDimensions query. */
-export interface SharedDimensionsArgs {
+/** Arguments for the getSharedFields query. */
+export interface SharedFieldsArgs {
   targets: CatalogSchemaTarget[];
 }
 
@@ -38,8 +50,8 @@ export interface SharedDimensionsArgs {
 
 /**
  * Source object exposed by Catalog.schemas to resolve CatalogSchemaInfo
- * sub-fields. Carries the parent catalog id so that the `fields` and
- * `dimensionNames` field resolvers know which DataLoader key to use.
+ * sub-fields. Carries the parent catalog id so that the `fields` field
+ * resolver knows which DataLoader key to use.
  */
 export interface CatalogSchemaInfoSource {
   catalogId: string;
@@ -56,25 +68,20 @@ export interface CatalogEntry {
 // ─── Fonction utilitaire ──────────────────────────────────────────────────────
 
 /**
- * Validates an optional schema argument against the catalog's allow-list.
+ * Resolves the type a metadata row is compared by in getSharedFields.
  *
- * The schema must belong to the configured (and optionally SQL-discovered)
- * list of schemas for the catalog. This is stricter than a regex check on the
- * identifier shape: it rejects syntactically valid but unknown schemas before
- * any string is interpolated into SQL.
+ * The family, except for the `other` family (TIME, INTERVAL, BLOB, nested
+ * types…), which is too coarse to pair columns: two `other` columns only match
+ * when they have the very same SQL type, which keeps the intersection
+ * conservative instead of silently pairing incompatible columns.
  *
- * @param catalog - Catalog the schema must belong to.
- * @param schema - Schema name to validate, or null/undefined to skip.
- * @throws {GraphQLError} When the schema is not in the catalog's allow-list.
+ * @param row - Metadata row of a catalog/schema.
+ * @returns The family, or `other:<SQL type>` for the `other` family.
  */
-function validateSchemaForCatalog(catalog: string, schema?: string | null): void {
-  if (!schema) return;
-  if (!databaseManager.isValidSchema(catalog, schema)) {
-    throw new GraphQLError(
-      `Schema '${schema}' is not available for catalog '${catalog}'. ` +
-        `Available: ${databaseManager.getSchemas(catalog).join(', ')}`,
-    );
-  }
+// Clé de comparaison du type d'une colonne : sa famille, ou son type exact si « other »
+function typeKeyOf(row: FieldMetadata): string {
+  const family = sqlTypeFamily(row.sqlType);
+  return family === 'other' ? `other:${row.sqlType.trim().toUpperCase()}` : family;
 }
 
 // Construction d'un resolver pour le catalogue multi-bases
@@ -82,13 +89,13 @@ function validateSchemaForCatalog(catalog: string, schema?: string | null): void
  * Resolvers for catalog introspection queries.
  *
  * Exposes the list of available catalogs and their schemas (with lazy
- * per-schema fields and dimension names via the CatalogSchemaInfo type
- * resolvers), the field metadata of a specific (catalog, schema) pair,
- * a filtered SelectOption view of those fields, and the intersection of
- * dimensions across several (catalog, schema) targets.
+ * per-schema fields via the CatalogSchemaInfo type resolver), the field
+ * metadata of a specific (catalog, schema) pair, a filtered SelectOption
+ * view of those fields, and the intersection of fields across several
+ * (catalog, schema) targets.
  */
 const catalogResolvers = {
-  // ── Type resolver: per-schema lazy loading of fields and dimension names ──
+  // ── Type resolver: per-schema lazy loading of the field metadata ──
   CatalogSchemaInfo: {
     /**
      * Loads the metadata table rows of the schema this source describes.
@@ -105,40 +112,45 @@ const catalogResolvers = {
       parent: CatalogSchemaInfoSource,
       _: Record<string, never>,
       { loaders }: GraphQLContext,
-    ): Promise<CatalogMetadataRow[]> => {
-      return loaders.catalogMetadata.load({ catalog: parent.catalogId, schema: parent.name });
+    ): Promise<FieldMetadata[]> => {
+      const rows = await loaders.catalogMetadata.load({
+        catalog: parent.catalogId,
+        schema: parent.name,
+      });
+      // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
+      return attachScopeToAll(rows, effectiveScope(parent.catalogId, parent.name));
     },
 
     /**
-     * Loads the names of categorical fields in the schema this source describes.
+     * Loads the dataset_metadata row of the schema this source describes.
      *
-     * Invoked only when the client selects `dimensionNames` under `schemas { … }`.
+     * Same lazy mechanism as `fields`: a query that only asks for
+     * `schemas { name }` never touches the dataset_metadata table.
      *
      * @param parent - Source object {catalogId, name} carried from Catalog.schemas.
      * @param _ - Field arguments (none).
      * @param context - GraphQL context with loaders.
-     * @returns Array of categorical field names for this schema.
+     * @returns Dataset information of this schema.
      */
-    dimensionNames: async (
+    info: async (
       parent: CatalogSchemaInfoSource,
       _: Record<string, never>,
       { loaders }: GraphQLContext,
-    ): Promise<string[]> => {
-      return loaders.catalogDimensionNames.load({
-        catalog: parent.catalogId,
-        schema: parent.name,
-      });
+    ): Promise<DatasetInfo> => {
+      return loaders.datasetInfo.load({ catalog: parent.catalogId, schema: parent.name });
     },
   },
 
   Query: {
     /**
-     * Lists all available catalogs with their hosted schemas.
+     * Lists all available catalogs with their servable schemas.
      *
      * Returns catalog identifiers and per-schema sources usable by the
-     * CatalogSchemaInfo type resolvers. The `fields` and `dimensionNames`
-     * sub-fields of each schema are loaded only when explicitly selected
-     * by the client (lazy cascade via GraphQL selection sets).
+     * CatalogSchemaInfo type resolvers. Only the schemas that pass the schema
+     * version guard are listed (the others were warned about at attach), so
+     * the whole `schemas { fields info }` cascade can be resolved. The `fields`
+     * sub-field of each schema is loaded only when explicitly selected by the
+     * client (lazy cascade via GraphQL selection sets).
      *
      * @param _ - Parent resolver result (unused at root).
      * @param __ - Query arguments (none).
@@ -150,9 +162,9 @@ const catalogResolvers = {
       return databaseManager.getAvailableCatalogs().map((id) => ({
         id,
         defaultSchema: databaseManager.getDefaultSchema(id),
-        // Source objects carry catalogId so CatalogSchemaInfo's field
-        // resolvers can scope their DataLoader keys to the right schema.
-        schemas: databaseManager.getSchemas(id).map((name) => ({ catalogId: id, name })),
+        // Les objets source portent catalogId : les resolvers de champs de
+        // CatalogSchemaInfo bornent ainsi leurs clés DataLoader au bon schéma.
+        schemas: databaseManager.getSupportedSchemas(id).map((name) => ({ catalogId: id, name })),
       }));
     },
 
@@ -162,17 +174,43 @@ const catalogResolvers = {
      * @param _ - Parent resolver result (unused at root).
      * @param args - Catalog alias and optional schema to query.
      * @param context - GraphQL context with loaders.
-     * @returns Array of catalog metadata rows describing the schema.
+     * @returns Array of catalog metadata rows describing the schema, each
+     *   carrying its catalog and schema for the lazy `stats` field.
      */
     // Récupération du schéma d'un catalogue spécifique
     getCatalogSchema: async (
       _: unknown,
       { catalog, schema }: CatalogSchemaArgs,
       { loaders }: GraphQLContext,
-    ): Promise<CatalogMetadataRow[]> => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalog);
-      validateSchemaForCatalog(targetCatalog, schema);
-      return loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+    ): Promise<FieldMetadata[]> => {
+      const scope = contextScope(catalog, schema);
+      const rows = await loaders.catalogMetadata.load({
+        catalog: scope.catalog,
+        schema: scope.schema,
+      });
+      // Catalogue et schéma rattachés pour la résolution paresseuse de `stats`
+      return attachScopeToAll(rows, scope);
+    },
+
+    /**
+     * Fetches the dataset information of a specific catalog/schema.
+     *
+     * Same data as the lazy `info` field of CatalogSchemaInfo, addressable
+     * directly when the client already knows which schema it wants.
+     *
+     * @param _ - Parent resolver result (unused at root).
+     * @param args - Catalog alias and optional schema to query.
+     * @param context - GraphQL context with loaders.
+     * @returns Dataset information of the target schema.
+     */
+    // Récupération des méta-données de jeu de résultats d'un catalogue/schéma
+    getDatasetInfo: async (
+      _: unknown,
+      { catalog, schema }: CatalogSchemaArgs,
+      { loaders }: GraphQLContext,
+    ): Promise<DatasetInfo> => {
+      const scope = contextScope(catalog, schema);
+      return loaders.datasetInfo.load({ catalog: scope.catalog, schema: scope.schema });
     },
 
     /**
@@ -183,19 +221,34 @@ const catalogResolvers = {
      * is optional; when several are provided they are combined with AND.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern.
+     * Label columns (non-null `labelFor`) are excluded unless
+     * `includeLabelFields` is true: they render the values of a code column
+     * and are not variables to offer in a menu.
+     *
+     * @param args - Filtering options: catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern, family, includeLabelFields.
      * @param context - GraphQL context with loaders.
      * @returns Array of SelectOption where value is the field name and label is the field label (fallback: name).
      */
     // Récupération des noms de champs au format SelectOption avec filtrage en mémoire
     getFields: async (
       _: unknown,
-      { catalog, schema, sqlType, isCategorical, isPrimaryKey, namePattern }: FieldsArgs,
+      {
+        catalog,
+        schema,
+        sqlType,
+        isCategorical,
+        isPrimaryKey,
+        namePattern,
+        family,
+        includeLabelFields,
+      }: FieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<SelectOption[]> => {
-      const targetCatalog = databaseManager.validateCatalogRouting(catalog ?? null);
-      validateSchemaForCatalog(targetCatalog, schema);
-      const fields = await loaders.catalogMetadata.load({ catalog: targetCatalog, schema });
+      const scope = contextScope(catalog, schema);
+      const fields = await loaders.catalogMetadata.load({
+        catalog: scope.catalog,
+        schema: scope.schema,
+      });
 
       // Normalisation des termes de comparaison une seule fois
       const normalizedSqlType = sqlType ? sqlType.toLowerCase() : null;
@@ -203,22 +256,24 @@ const catalogResolvers = {
 
       return fields
         .filter((field) => {
+          // Colonnes de libellés masquées par défaut
+          if (!includeLabelFields && field.labelFor !== null) {
+            return false;
+          }
           // Filtre par type SQL (comparaison insensible à la casse)
-          if (
-            normalizedSqlType &&
-            String(field.sql_type ?? '').toLowerCase() !== normalizedSqlType
-          ) {
+          if (normalizedSqlType && field.sqlType.toLowerCase() !== normalizedSqlType) {
             return false;
           }
           // Filtre par caractère catégoriel
-          if (
-            typeof isCategorical === 'boolean' &&
-            Boolean(field.is_categorical) !== isCategorical
-          ) {
+          if (typeof isCategorical === 'boolean' && field.isCategorical !== isCategorical) {
             return false;
           }
           // Filtre par caractère clé primaire
-          if (typeof isPrimaryKey === 'boolean' && Boolean(field.is_primary_key) !== isPrimaryKey) {
+          if (typeof isPrimaryKey === 'boolean' && field.isPrimaryKey !== isPrimaryKey) {
+            return false;
+          }
+          // Filtre par famille thématique (égalité stricte, colonne metadata.family)
+          if (family && field.family !== family) {
             return false;
           }
           // Filtre par sous-chaîne dans le nom (insensible à la casse)
@@ -228,56 +283,74 @@ const catalogResolvers = {
           return true;
         })
         .map((field) => ({
-          value: String(field.name),
-          // Repli sur le nom lorsque le label est absent ou vide
-          label: (field.label as string | undefined) || String(field.name),
+          value: field.name,
+          // Repli sur le nom lorsque le label est vide
+          label: field.label || field.name,
         }));
     },
 
     /**
-     * Finds dimension names that are shared across all specified targets.
+     * Finds the categorical field names shared by all specified targets.
      *
      * Each target is a (catalog, schema) pair; schema is optional and
-     * defaults to the catalog's default schema. Catalogs and schemas
-     * are validated against the allow-list before loading. The result
-     * is the intersection of dimension name sets across all targets.
+     * defaults to the catalog's default schema. Catalogs and schemas are
+     * validated against the allow-list before loading. A field is shared
+     * when every target declares it as categorical under the same name and
+     * with the same SQL type family, so it is safe to use as a join key in
+     * a cross-catalog query. Label columns are excluded: the join is made on
+     * the code, more stable than a revisable label.
      *
      * @param _ - Parent resolver result (unused at root).
      * @param args - List of (catalog, schema) targets.
      * @param context - GraphQL context with loaders.
-     * @returns Array of dimension names present in every specified target.
+     * @returns Array of field names present in every specified target.
      * @throws {GraphQLError} When targets is empty or contains invalid identifiers.
      */
-    // Calcul de l'intersection des dimensions partagées entre plusieurs cibles
-    getSharedDimensions: async (
+    // Intersection des metadata des cibles : même nom, même famille de type
+    getSharedFields: async (
       _: unknown,
-      { targets }: SharedDimensionsArgs,
+      { targets }: SharedFieldsArgs,
       { loaders }: GraphQLContext,
     ): Promise<string[]> => {
       // Validation de la présence d'au moins une cible
       if (!targets || targets.length === 0) {
-        throw new GraphQLError('At least one target must be specified');
+        throw new GraphQLError('At least one target must be specified', {
+          extensions: { code: 'BAD_USER_INPUT' },
+        });
       }
 
       // Validation de chaque cible : catalogue connu et schéma (si fourni) dans l'allow-list
       targets.forEach(({ catalog, schema }) => {
         if (!databaseManager.isValidCatalog(catalog)) {
           throw new GraphQLError(
-            `Catalog '${catalog}' is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
+            `Catalog ${previewValue(catalog)} is not available. Available: ${databaseManager.getAvailableCatalogs().join(', ')}`,
+            { extensions: { code: 'BAD_USER_INPUT' } },
           );
         }
         validateSchemaForCatalog(catalog, schema);
       });
 
-      const dimensionSets = await Promise.all(
+      const metadataSets = await Promise.all(
         targets.map(({ catalog, schema }) =>
-          loaders.catalogDimensionNames.load({ catalog, schema: schema ?? null }),
+          loaders.catalogMetadata.load({ catalog, schema: schema ?? null }),
         ),
       );
 
-      // Intersection des ensembles de dimensions
-      const [first, ...rest] = dimensionSets;
-      return first.filter((dim) => rest.every((set) => set.includes(dim)));
+      // Indexation par nom de colonne catégorielle hors libellés, avec sa famille de type
+      const indexed = metadataSets.map((rows) => {
+        const families = new Map<string, string>();
+        rows
+          .filter((row) => row.isCategorical && row.labelFor === null)
+          .forEach((row) => families.set(String(row.name), typeKeyOf(row)));
+        return families;
+      });
+
+      const [first, ...rest] = indexed;
+      return [...first.entries()]
+        .filter(([name, family]) =>
+          rest.every((other) => other.has(name) && other.get(name) === family),
+        )
+        .map(([name]) => name);
     },
   },
 };

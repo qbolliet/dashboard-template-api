@@ -1,5 +1,7 @@
 // Importation des modules
+import http from 'node:http';
 import { ApolloServer } from '@apollo/server';
+import { ApolloServerPluginDrainHttpServer } from '@apollo/server/plugin/drainHttpServer';
 import type {
   ApolloServerPlugin,
   GraphQLRequestContext,
@@ -10,6 +12,7 @@ import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import compression from 'compression';
 import { v4 as uuidv4 } from 'uuid';
+import { getVariableValues } from 'graphql';
 import type { GraphQLFormattedError } from 'graphql';
 
 // Importation des modules locaux
@@ -18,12 +21,24 @@ import { createLoaders } from './loaders/index.js';
 import type { LoadersCollection } from './loaders/index.js';
 import { logger, createContextLogger } from './utils/logger.js';
 import { closeAllConnections, databaseManager } from './db/index.js';
+import type { DatabaseManager } from './db/database-manager.js';
 import { redis } from './cache/index.js';
-import { initializeSecurityManager } from './security/index.js';
+import {
+  initializeSecurityManager,
+  configuredTrustProxy,
+  createCorsMiddleware,
+} from './security/index.js';
 import { createDepthLimitRule } from './security/depth-limit.js';
+import { createMetricsAccess } from './security/metrics-auth.js';
+import { createColumnCounter } from './security/column-counter.js';
+import { applyRequestLimits } from './security/request-limits.js';
 import { config } from './utils/config-loader.js';
 import { createCacheInvalidationRoutes } from './cache/cache-invalidation.js';
 import { createCatalogRoutes } from './db/catalog-routes.js';
+import { catalogFreshnessMonitor } from './db/catalog-freshness.js';
+import { createExportRoutes } from './export/export-routes.js';
+import { formatGraphQLError, logGraphQLError } from './utils/graphql-errors.js';
+import { createShutdown, drainBudgetMs } from './shutdown.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -42,10 +57,11 @@ interface ServerMetrics {
 interface ServerContext {
   requestId: string;
   loaders: LoadersCollection;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  databaseManager: any;
-  requestCatalog: string | null;
-  requestSchema: string | null;
+  databaseManager: DatabaseManager;
+  /**
+   * Returns loaders bound to the given catalog/schema (GraphQL arguments
+   * only — see `contextScope`), or null to reuse `loaders`.
+   */
   getLoadersForCatalog: (
     catalogId: string | null,
     schema?: string | null,
@@ -60,10 +76,220 @@ interface ExpressError extends Error {
   status?: number;
 }
 
-/** Apollo response body shape used to access errors in willSendResponse. */
+/** Apollo response body shape used to count errors in willSendResponse. */
 interface MutableSingleResult {
   singleResult?: {
     errors?: GraphQLFormattedError[];
+  };
+}
+
+/** Security manager instance built by initializeSecurityManager. */
+type SecurityManagerInstance = ReturnType<typeof initializeSecurityManager>;
+
+/** Options overriding the configuration when building the Apollo server. */
+export interface ApolloServerOverrides {
+  /** Forces introspection on or off instead of API.GRAPHQL.INTROSPECTION. */
+  introspection?: boolean;
+  /**
+   * HTTP server to drain when Apollo stops: it stops accepting connections and
+   * waits for in-flight requests and exports, within the shutdown drain budget.
+   */
+  httpServer?: http.Server;
+}
+
+/**
+ * Builds the Apollo Server with its lifecycle plugin and validation rules.
+ *
+ * Validation relies on Apollo's specified rules (unknown fields, arguments and
+ * fragments, missing selections, NoIntrospection when introspection is off) to
+ * which only the depth limit is added. A custom rule must never return a value
+ * from a visitor: `visitInParallel` reads any non-undefined return as
+ * "skip this subtree" for every rule, which would silently disable them all.
+ *
+ * @param securityManager - Security manager run before each operation.
+ * @param metrics - Shared operational counters updated per request.
+ * @param overrides - Configuration overrides, used by tests.
+ * @returns The configured (not yet started) Apollo Server.
+ */
+function createApolloServer(
+  securityManager: SecurityManagerInstance,
+  metrics: ServerMetrics,
+  overrides: ApolloServerOverrides = {},
+): ApolloServer<ServerContext> {
+  // Définition du plugin de cycle de vie des requêtes Apollo
+  const requestLifecyclePlugin: ApolloServerPlugin<ServerContext> = {
+    async requestDidStart({
+      request,
+      contextValue,
+    }: GraphQLRequestContext<ServerContext>): Promise<GraphQLRequestListener<ServerContext>> {
+      const requestStart = Date.now();
+
+      const contextLogger = createContextLogger({
+        requestId: contextValue?.requestId,
+        operationName: request.operationName ?? undefined,
+      });
+
+      metrics.requests.total++;
+
+      return {
+        // Validation de sécurité avant l'exécution de l'opération
+        async didResolveOperation({
+          document,
+          operation,
+          request: opRequest,
+          schema: operationSchema,
+        }): Promise<void> {
+          securityManager.validateRequest(
+            operation as { name?: { value?: string }; operation?: string },
+          );
+
+          // Rejet avant exécution des requêtes trop coûteuses
+          // (scores par champ : SECURITY.COMPLEXITY de config/security.yaml)
+          if (operation) {
+            // Variables coercées (valeurs par défaut de l'opération comprises) : une
+            // variable omise ou nulle n'apparaît pas dans opRequest.variables. Si la
+            // coercion échoue, valeurs brutes : l'exécution rejettera la requête.
+            const rawVariables = (opRequest.variables ?? {}) as Record<string, unknown>;
+            const { coerced } = getVariableValues(
+              schema,
+              operation.variableDefinitions ?? [],
+              rawVariables,
+            );
+
+            // Nombre de colonnes (prix de Metadata.stats) lu par les loaders de
+            // la requête : les resolvers réutilisent la même lecture
+            await securityManager.validateComplexity(
+              document,
+              operation,
+              coerced ?? rawVariables,
+              contextValue,
+              {
+                schema: operationSchema,
+                columns: contextValue?.loaders
+                  ? createColumnCounter(contextValue.loaders)
+                  : undefined,
+              },
+            );
+          }
+        },
+
+        // Logging de la complétion de la requête
+        async willSendResponse({ response }): Promise<void> {
+          const duration = Date.now() - requestStart;
+          const mutableBody = response.body as MutableSingleResult;
+          const errors = mutableBody.singleResult?.errors;
+
+          contextLogger.performance('Request completed', {
+            duration,
+            errors: errors?.length ?? 0,
+          });
+
+          // Mise à jour des compteurs de métriques
+          if (errors && errors.length > 0) metrics.requests.errors++;
+          metrics.responseTimes.push(duration);
+          if (metrics.responseTimes.length > metrics.maxStoredTimes) {
+            metrics.responseTimes.shift();
+          }
+        },
+
+        // Seule journalisation des erreurs de la requête : un identifiant par
+        // erreur, porté par ses extensions jusqu'à formatError et au client
+        async didEncounterErrors({ errors: graphqlErrors }): Promise<void> {
+          graphqlErrors.forEach((error) => {
+            const errorId = uuidv4();
+            error.extensions['errorId'] = errorId;
+            logGraphQLError(contextLogger, error, errorId);
+          });
+        },
+      };
+    },
+  };
+
+  return new ApolloServer<ServerContext>({
+    // Schéma exécutable de l'API
+    schema,
+    // Signaux gérés par la séquence d'arrêt (src/shutdown.ts) seule : le
+    // handler d'Apollo arrêterait le serveur de son côté puis relèverait le
+    // signal sur le processus, en plein drainage et avant la fermeture du pool
+    stopOnTerminationSignals: false,
+    // Introspection : autorisée en développement seulement (NoIntrospection d'Apollo sinon)
+    introspection: overrides.introspection ?? config.API.GRAPHQL.INTROSPECTION,
+    // Formatage des erreurs : message conservé pour une erreur client, masqué
+    // en production pour une erreur interne ; errorId toujours présent
+    formatError: (formattedError, error) => {
+      // Identifiant posé (et journalisé) par didEncounterErrors ; à défaut —
+      // erreur levée hors du pipeline de la requête —, généré et journalisé ici
+      const carriedId = formattedError.extensions?.['errorId'];
+      const errorId = typeof carriedId === 'string' ? carriedId : uuidv4();
+      if (errorId !== carriedId) {
+        logGraphQLError(createContextLogger({}), error, errorId);
+      }
+      return formatGraphQLError(formattedError, {
+        errorId,
+        production: config.ENVIRONMENT === 'production',
+      });
+    },
+    // Règles de validation ajoutées à celles d'Apollo : profondeur maximale
+    validationRules: [
+      createDepthLimitRule(
+        config.SECURITY?.MAX_QUERY_DEPTH ?? config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5,
+      ),
+    ],
+    // Plugins : cycle de vie des requêtes ; drainage du serveur HTTP à l'arrêt
+    // (requêtes et exports en cours menés à terme, connexions coupées au-delà)
+    plugins: [
+      requestLifecyclePlugin,
+      ...(overrides.httpServer
+        ? [
+            ApolloServerPluginDrainHttpServer({
+              httpServer: overrides.httpServer,
+              stopGracePeriodMillis: drainBudgetMs(),
+            }),
+          ]
+        : []),
+    ],
+  });
+}
+
+/**
+ * Builds the GraphQL context of a request.
+ *
+ * Catalog and schema are resolved exclusively from GraphQL arguments — no
+ * HTTP header is ever read (see `contextScope` in
+ * src/schema/resolvers/scope.ts, the single point of that resolution for
+ * every resolver). `loaders` are the default catalog's; `getLoadersForCatalog`
+ * builds a fresh set for any other (catalog, schema) target, reusing `loaders`
+ * when the target resolves back to the default with no schema override.
+ *
+ * @param args - Express request and response of the GraphQL call.
+ * @returns The context injected into every resolver and plugin.
+ */
+async function createContext({
+  req,
+  res,
+}: {
+  req: Request;
+  res: Response;
+}): Promise<ServerContext> {
+  const defaultCatalog = databaseManager.getDefaultCatalog();
+
+  return {
+    requestId: uuidv4(),
+    loaders: createLoaders(null, null),
+    databaseManager,
+    getLoadersForCatalog: (
+      catalogId: string | null,
+      schema: string | null = null,
+    ): LoadersCollection | null => {
+      const targetCatalog = databaseManager.validateCatalogRouting(catalogId) as string;
+      // Réutilisation des loaders par défaut si aucune cible explicite ne s'en écarte
+      if (targetCatalog === defaultCatalog && !schema) {
+        return null;
+      }
+      return createLoaders(targetCatalog, schema);
+    },
+    req,
+    res,
   };
 }
 
@@ -78,100 +304,43 @@ interface MutableSingleResult {
  */
 async function startServer(): Promise<void> {
   const app = express();
+  // Serveur HTTP créé avant Apollo, qui le drainera à l'arrêt ; l'écoute ne
+  // commence qu'en fin de démarrage
+  const httpServer = http.createServer(app);
 
-  // En-têtes de sécurité et configuration CORS
+  // Refus 503 de toute requête (sondes exceptées) une fois l'arrêt engagé,
+  // y compris sur les connexions persistantes encore ouvertes ; alimenté plus
+  // bas (le budget et les ressources à fermer dépendent du reste du démarrage)
+  let shutdown: ReturnType<typeof createShutdown> | null = null;
   app.use((req: Request, res: Response, next: NextFunction): void => {
-    // Détermination des origines autorisées selon l'environnement
-    const allowedOrigins: string[] = config.API.CORS.ORIGINS;
-    const origin = req.headers.origin;
+    if (shutdown) shutdown.guard(req, res, next);
+    else next();
+  });
 
-    if (origin && (allowedOrigins.includes(origin) || allowedOrigins.includes('*'))) {
-      res.set('Access-Control-Allow-Origin', origin);
-    } else if (allowedOrigins.includes('*')) {
-      res.set('Access-Control-Allow-Origin', '*');
-    }
+  // Proxys de confiance, réglés avant tout middleware : req.ip est l'adresse
+  // la plus à droite de x-forwarded-for qui n'est pas un proxy de confiance
+  // (identité unique du client pour les limiteurs et l'export)
+  app.set('trust proxy', configuredTrustProxy());
 
+  // Suppression de l'en-tête révélant la stack (Express)
+  app.disable('x-powered-by');
+
+  // CORS : origines explicitement listées (CORS_ORIGINS), préflight court-circuité
+  app.use(createCorsMiddleware());
+
+  // En-têtes de sécurité, sur toute requête ayant franchi le CORS
+  app.use((_req: Request, res: Response, next: NextFunction): void => {
     res.set({
-      'Access-Control-Allow-Credentials': String(config.API.CORS.CREDENTIALS),
-      'Access-Control-Allow-Methods': config.API.CORS.METHODS.join(', '),
-      'Access-Control-Allow-Headers': config.API.CORS.HEADERS.join(', '),
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'X-XSS-Protection': '1; mode=block',
       'Strict-Transport-Security': `max-age=${config.API.SECURITY_THRESHOLDS.HSTS_MAX_AGE}; includeSubDomains`,
     });
-
-    if (req.method === 'OPTIONS') {
-      res.sendStatus(204);
-      return;
-    }
     next();
   });
 
-  // Gestion de la taille limite des requêtes
-  app.use(
-    express.json({
-      // Vérification que la taille de la requête est inférieure à la taille maximale fixée en paramètre
-      limit: config.API.REQUEST_LIMITS.MAX_REQUEST_SIZE,
-      verify: (req: Request, _res: Response, buf: Buffer): void => {
-        // Exclusion des requêtes d'introspection de la vérification
-        try {
-          const body = JSON.parse(buf.toString()) as Record<string, unknown>;
-          if (body['operationName'] === 'IntrospectionQuery') {
-            return;
-          }
-
-          // Comptage récursif du nombre de champs de l'objet
-          const countFields = (obj: unknown): number => {
-            let count = 0;
-            const queue: unknown[] = [obj];
-
-            while (queue.length > 0) {
-              const current = queue.shift();
-              if (typeof current === 'object' && current !== null) {
-                Object.values(current as Record<string, unknown>).forEach((value) => {
-                  if (typeof value === 'object' && value !== null) {
-                    queue.push(value);
-                  }
-                  count++;
-                });
-              }
-            }
-            return count;
-          };
-
-          // Vérification du nombre de champs par rapport au maximum autorisé
-          const fields = countFields(body);
-          if (fields > config.API.REQUEST_LIMITS.MAX_FIELDS) {
-            throw new Error('Too many fields in request');
-          }
-
-          // Estimation récursive de la taille de chaque champ
-          const checkFieldSize = (obj: unknown): void => {
-            if (typeof obj === 'object' && obj !== null) {
-              Object.entries(obj as Record<string, unknown>).forEach(([key, value]) => {
-                if (
-                  typeof value === 'string' &&
-                  value.length > config.API.REQUEST_LIMITS.MAX_FIELD_SIZE
-                ) {
-                  throw new Error(`Field ${key} exceeds maximum allowed size`);
-                }
-                if (typeof value === 'object' && value !== null) {
-                  checkFieldSize(value);
-                }
-              });
-            }
-          };
-          // Vérification de la taille de chaque champ
-          checkFieldSize(body);
-        } catch (error) {
-          if ((error as Error).message !== 'Unexpected end of JSON input') {
-            throw error;
-          }
-        }
-      },
-    }),
-  );
+  // Corps JSON : taille brute, taille du document et des variables (400 au-delà)
+  applyRequestLimits(app);
 
   // Compression des réponses volumineuses
   if (config.API.COMPRESSION.ENABLED) {
@@ -188,16 +357,12 @@ async function startServer(): Promise<void> {
     );
   }
 
-  // Contrôle du cache HTTP selon le chemin de la requête
-  app.use((req: Request, res: Response, next: NextFunction): void => {
-    if (config.CACHE.HTTP_CACHE.PUBLIC_PATHS.some((path) => req.path.startsWith(path))) {
-      res.set('Cache-Control', `public, max-age=${config.CACHE.TTL.DEFAULT}`);
-      res.set('Vary', config.CACHE.HTTP_CACHE.VARY_BY_HEADERS.join(', '));
-    } else {
-      res.set('Cache-Control', 'no-store');
-    }
-    next();
-  });
+  // Création du gestionnaire de sécurité
+  const securityManager = initializeSecurityManager(config.SECURITY);
+
+  // Limitation stricte des routes d'administration, avant la vérification de la
+  // clé : chaque tentative compte, ce qui borne la recherche de x-admin-key
+  app.use(['/api/cache', '/api/catalog'], securityManager.createAdminRateLimitMiddleware());
 
   // Configuration des routes d'invalidation de cache
   createCacheInvalidationRoutes(app);
@@ -223,38 +388,43 @@ async function startServer(): Promise<void> {
     });
   });
 
-  // GET /ready — vérification des dépendances (pool DB + Redis)
+  // GET /ready — sonde de disponibilité (pool DB + Redis), publique : état
+  // minimal, sans détail de pool ni message d'erreur (journalisés à la place)
   app.get('/ready', async (_req: Request, res: Response): Promise<void> => {
-    const checks: Record<string, { status: string; pool?: unknown; message?: string }> = {};
+    // Arrêt engagé : retrait du routage, sans attendre l'échec des dépendances
+    if (shutdown?.isShuttingDown()) {
+      res.status(503).json({ status: 'shutting_down' });
+      return;
+    }
+
     let allOk = true;
 
     // Vérification du pool DuckDB
     try {
-      const stats = databaseManager.getStatistics() as { sharedPool: unknown };
-      checks['database'] = { status: 'ok', pool: stats.sharedPool };
+      databaseManager.getStatistics();
     } catch (err) {
-      checks['database'] = { status: 'error', message: (err as Error).message };
+      logger.error('Readiness check failed: database', err);
       allOk = false;
     }
 
     // Vérification de la connexion Redis
     try {
       await redis.ping();
-      checks['redis'] = { status: 'ok' };
     } catch (err) {
-      checks['redis'] = { status: 'error', message: (err as Error).message };
+      logger.error('Readiness check failed: redis', err);
       allOk = false;
     }
 
-    res.status(allOk ? 200 : 503).json({
-      status: allOk ? 'ready' : 'not_ready',
-      timestamp: new Date().toISOString(),
-      checks,
-    });
+    res.status(allOk ? 200 : 503).json({ status: allOk ? 'ready' : 'not_ready' });
   });
 
-  // GET /metrics — métriques opérationnelles légères
-  app.get('/metrics', (_req: Request, res: Response): void => {
+  // GET /metrics — métriques opérationnelles légères, réservées à l'exploitation :
+  // adresse de METRICS.ALLOWED_IPS, sinon clé admin (401 à défaut) derrière le
+  // limiteur strict des routes d'administration
+  const metricsAccess = createMetricsAccess({
+    rateLimit: securityManager.createAdminRateLimitMiddleware(),
+  });
+  app.get('/metrics', metricsAccess, (_req: Request, res: Response): void => {
     const times = metrics.responseTimes;
     const avg = times.length > 0 ? Math.round(times.reduce((a, b) => a + b, 0) / times.length) : 0;
     const sorted = [...times].sort((a, b) => a - b);
@@ -275,129 +445,14 @@ async function startServer(): Promise<void> {
       },
       responseTime: { avg, p95, p99, samples: times.length },
       database: dbStats.sharedPool,
+      // Dernier marqueur vu et date de la dernière sonde, par schéma
+      catalogFreshness: catalogFreshnessMonitor.getStatus(),
       memory: process.memoryUsage(),
     });
   });
 
-  // Création du gestionnaire de sécurité
-  const securityManager = initializeSecurityManager(config.SECURITY);
-
-  // Définition du plugin de cycle de vie des requêtes Apollo
-  const requestLifecyclePlugin: ApolloServerPlugin<ServerContext> = {
-    async requestDidStart({
-      request,
-      contextValue,
-    }: GraphQLRequestContext<ServerContext>): Promise<GraphQLRequestListener<ServerContext>> {
-      const requestStart = Date.now();
-
-      const contextLogger = createContextLogger({
-        requestId: contextValue?.requestId,
-        operationName: request.operationName ?? undefined,
-      });
-
-      metrics.requests.total++;
-
-      return {
-        // Validation de sécurité avant l'exécution de l'opération
-        async didResolveOperation({ operation, request: opRequest }): Promise<void> {
-          await securityManager.validateRequest(
-            operation as { name?: { value?: string }; operation?: string },
-            opRequest as { query?: string },
-            contextValue,
-          );
-        },
-
-        // Logging de la complétion de la requête et formatage en production
-        async willSendResponse({ response }): Promise<void> {
-          const duration = Date.now() - requestStart;
-          const mutableBody = response.body as MutableSingleResult;
-          const errors = mutableBody.singleResult?.errors;
-
-          contextLogger.performance('Request completed', {
-            duration,
-            errors: errors?.length ?? 0,
-          });
-
-          // Mise à jour des compteurs de métriques
-          if (errors && errors.length > 0) metrics.requests.errors++;
-          metrics.responseTimes.push(duration);
-          if (metrics.responseTimes.length > metrics.maxStoredTimes) {
-            metrics.responseTimes.shift();
-          }
-
-          // Masquage des messages d'erreur détaillés en production
-          if (errors && config.ENVIRONMENT === 'production' && mutableBody.singleResult) {
-            mutableBody.singleResult.errors = errors.map((error) => ({
-              message: 'An error occurred',
-              extensions: {
-                errorId: error.extensions?.['errorId'] as string | undefined,
-                code: error.extensions?.['code'] as string | undefined,
-              },
-            }));
-          }
-        },
-
-        // Logging des erreurs GraphQL rencontrées lors de la résolution
-        async didEncounterErrors({ errors: graphqlErrors }): Promise<void> {
-          graphqlErrors.forEach((error) => {
-            contextLogger.error('GraphQL error', error, {
-              path: error.path,
-              locations: error.locations,
-            });
-          });
-        },
-      };
-    },
-  };
-
   // Création du serveur Apollo
-  const server = new ApolloServer<ServerContext>({
-    // Schéma exécutable de l'API
-    schema,
-    // Autorisation de l'introspection en développement
-    introspection: config.API.GRAPHQL.INTROSPECTION,
-    // Formatage des erreurs avec identifiant unique de traçabilité
-    formatError: (formattedError, error) => {
-      // Génération d'un identifiant unique associé à l'erreur
-      const errorId = uuidv4();
-      logger.error(`Error [${errorId}]: ${formattedError.message}`, {
-        stack: (error as Error)?.stack,
-      });
-      // Distinction du message d'erreur selon l'environnement
-      const isProduction = config.ENVIRONMENT === 'production';
-      return {
-        message: isProduction ? 'An error occurred' : formattedError.message,
-        extensions: {
-          code: formattedError.extensions?.['code'] ?? 'INTERNAL_SERVER_ERROR',
-          errorId,
-        },
-      };
-    },
-    // Règles de validation des requêtes entrantes
-    validationRules: [
-      // Règle de limitation de la profondeur des requêtes
-      createDepthLimitRule(
-        config.SECURITY?.MAX_QUERY_DEPTH ?? config.SECURITY_LIMITS?.DEFAULT_DEPTH_LIMIT ?? 5,
-      ),
-      // Liste blanche des opérations valides
-      () => ({
-        OperationDefinition(node) {
-          // Extraction du nom de l'opération pour la validation
-          const operationName = node.name?.value;
-
-          // Exemption des requêtes d'introspection en développement
-          if (config.ENVIRONMENT !== 'production' && operationName === 'IntrospectionQuery') {
-            return;
-          }
-
-          // Autorisation de toutes les opérations par défaut
-          return true;
-        },
-      }),
-    ],
-    // Plugins du cycle de vie des requêtes
-    plugins: [requestLifecyclePlugin],
-  });
+  const server = createApolloServer(securityManager, metrics, { httpServer });
 
   // Réconciliation de la liste de schémas par catalogue avec ce que DuckLake
   // expose réellement (warn si un schéma configuré est absent à l'ATTACH).
@@ -410,60 +465,29 @@ async function startServer(): Promise<void> {
     throw error;
   }
 
+  // Sondage périodique des catalogues : chaque réplica détecte seule les mises
+  // à jour et bascule ses clés de cache sur la nouvelle version des données
+  catalogFreshnessMonitor.start();
+
   // Démarrage du serveur Apollo
   await server.start();
+
+  // Limitation de taux par IP — montée AVANT le middleware Apollo : une requête
+  // refusée ne coûte ni parsing GraphQL, ni resolver, ni accès à la base.
+  // Portée volontairement limitée à /graphql et /api/export : les sondes
+  // /health, /ready et /metrics ne sont jamais limitées. Les deux routes
+  // partagent le limiteur du SecurityManager, donc le même budget par client.
+  app.use('/graphql', securityManager.createRateLimitMiddleware());
+
+  // Export REST volumineux (arrow/csv/parquet) : rate limiter partagé, puis ses
+  // propres gardes (plafond de lignes, concurrence par IP, timeout)
+  createExportRoutes(app, { rateLimit: securityManager.createRateLimitMiddleware() });
 
   // Application du middleware Apollo via Express
   app.use(
     '/graphql',
     expressMiddleware(server, {
-      context: async ({ req, res }: { req: Request; res: Response }): Promise<ServerContext> => {
-        // Extraction du catalogue et du schéma depuis les en-têtes
-        const headerCatalog = req.headers['x-catalog-id'] as string | undefined;
-        const headerSchema = (req.headers['x-schema-id'] as string | undefined) ?? null;
-
-        // Validation du routage vers le catalogue spécifié
-        let validatedCatalog: string | null = null;
-        if (headerCatalog) {
-          try {
-            validatedCatalog = databaseManager.validateCatalogRouting(null, headerCatalog) as
-              | string
-              | null;
-          } catch (error) {
-            logger.warn('Invalid catalog specified in header', {
-              requestedCatalog: headerCatalog,
-              error: (error as Error).message,
-            });
-            // Poursuite avec le catalogue par défaut plutôt qu'un échec
-          }
-        }
-
-        return {
-          requestId: uuidv4(),
-          loaders: createLoaders(validatedCatalog, headerSchema),
-          databaseManager,
-          requestCatalog: validatedCatalog,
-          requestSchema: headerSchema,
-          getLoadersForCatalog: (
-            catalogId: string | null,
-            schema: string | null = null,
-          ): LoadersCollection | null => {
-            const targetCatalog = databaseManager.validateCatalogRouting(
-              catalogId,
-              validatedCatalog,
-            ) as string | null;
-            // Résolution du schéma : argument explicite, sinon schéma du contexte (en-tête)
-            const targetSchema = schema ?? headerSchema;
-            // Réutilisation des loaders du contexte si catalogue ET schéma identiques
-            if (targetCatalog === validatedCatalog && targetSchema === headerSchema) {
-              return null;
-            }
-            return createLoaders(targetCatalog, targetSchema);
-          },
-          req,
-          res,
-        };
-      },
+      context: createContext,
     }),
   );
 
@@ -485,45 +509,45 @@ async function startServer(): Promise<void> {
     });
   });
 
-  // Gestionnaire de fermeture gracieuse du serveur
-  const gracefulShutdown = async (signal: string): Promise<void> => {
-    logger.info(`Received ${signal} signal. Starting graceful shutdown...`);
-    try {
-      await Promise.all([
-        // Fermeture du client Redis
-        redis.quit(),
-        // Fermeture de l'ensemble des connexions DuckDB
-        closeAllConnections(),
-        // Nettoyage des ressources du gestionnaire de sécurité
-        securityManager.cleanup(),
-        // Arrêt du serveur Apollo
-        server.stop(),
-      ]);
-      logger.info('Graceful shutdown completed');
-      process.exit(0);
-    } catch (error) {
-      logger.error('Error during graceful shutdown:', error);
-      process.exit(1);
-    }
-  };
+  // Arrêt gracieux : refus des nouvelles requêtes, drainage (requêtes et exports
+  // en cours, par le plugin Apollo), puis fermeture du pool, des limiteurs et de
+  // Redis — dans cet ordre, aucune requête ne tient plus de connexion — le tout
+  // borné par API.SHUTDOWN.TIMEOUT_MS
+  const currentShutdown = createShutdown({
+    // Aucun rechargement de catalogue pendant l'arrêt
+    beforeDrain: [() => catalogFreshnessMonitor.stop()],
+    drain: () => server.stop(),
+    steps: [
+      { name: 'database pool', close: () => closeAllConnections() },
+      { name: 'security manager', close: () => securityManager.cleanup() },
+      { name: 'redis', close: () => redis.quit() },
+    ],
+  });
+  shutdown = currentShutdown;
 
   // Abonnement aux signaux de fermeture du processus
   process.on('SIGTERM', () => {
-    void gracefulShutdown('SIGTERM');
+    void currentShutdown.run('SIGTERM');
   });
   // Abonnement au signal d'interruption (Ctrl+C en développement)
   process.on('SIGINT', () => {
-    void gracefulShutdown('SIGINT');
+    void currentShutdown.run('SIGINT');
   });
 
-  // Initialisation du port d'écoute
+  // Écoute sur le port ; une erreur (port occupé…) fait échouer le démarrage
   const port = process.env['PORT'] ?? 4000;
-  app.listen(port, () => {
-    logger.info(`Server ready at http://localhost:${port}/graphql`);
-    logger.info(`Environment: ${config.ENVIRONMENT}`);
-    logger.info(`GraphQL Playground: ${config.API.GRAPHQL.PLAYGROUND ? 'enabled' : 'disabled'}`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, () => {
+      httpServer.off('error', reject);
+      resolve();
+    });
   });
+  // Logging
+  logger.info(`Server ready at http://localhost:${port}/graphql`);
+  logger.info(`Environment: ${config.ENVIRONMENT}`);
+  logger.info(`GraphQL Playground: ${config.API.GRAPHQL.PLAYGROUND ? 'enabled' : 'disabled'}`);
 }
 
-export { startServer };
+export { startServer, createApolloServer, createContext };
 export type { ServerContext, ServerMetrics };

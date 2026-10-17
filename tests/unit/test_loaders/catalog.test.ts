@@ -1,9 +1,9 @@
 /**
- * Unit tests for CatalogMetadataLoader and CatalogDimensionNamesLoader
- * (src/loaders/catalog.ts).
+ * Unit tests for CatalogMetadataLoader (src/loaders/catalog.ts).
  *
- * Verifies full-catalog metadata retrieval with boolean coercion,
- * categorical field name extraction, and SQL query qualification.
+ * Verifies full-catalog metadata retrieval with boolean coercion, SQL query
+ * qualification and the ordering of the rows by the physical position of their
+ * column in fact_table (the metadata table itself is stored alphabetically).
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -17,18 +17,18 @@ import {
 
 // ─── Interfaces ────────────────────────────────────────────────────────────────
 
-/** Ligne de métadonnée retournée par la base de données (avant coercion). */
+/** Ligne brute de la table metadata, en snake_case. */
 interface MetadataRow {
   name: string;
-  type?: string;
+  sql_type?: string;
   is_categorical: number | boolean;
 }
 
-/** Métadonnée traitée — booléen converti. */
+/** Métadonnée exposée par le loader — camelCase, booléen converti. */
 interface MetadataResult {
   name: string;
-  type?: string;
-  is_categorical: boolean;
+  sqlType: string;
+  isCategorical: boolean;
 }
 
 /** Instance d'un loader DataLoader — interface minimale. */
@@ -39,7 +39,6 @@ interface DataLoaderInstance {
 /** Module catalog.ts après import dynamique. */
 interface CatalogModule {
   createCatalogMetadataLoader: () => DataLoaderInstance;
-  createCatalogDimensionNamesLoader: () => DataLoaderInstance;
 }
 
 // ─── État des mocks partagés ───────────────────────────────────────────────────
@@ -49,6 +48,30 @@ const mockPool = makePool();
 const mockConnection = makeConnection();
 const mockDatabaseManager = makeDatabaseManager(mockPool);
 const mockConfig = makeLoaderConfig();
+const mockWarn = jest.fn();
+
+/**
+ * Routes the two reads of the loader: the metadata rows, then the positions of
+ * the fact_table columns (duckdb_columns).
+ *
+ * @param rows - Rows returned for the metadata table.
+ * @param columns - fact_table column names, in table order (defaults to the row order).
+ */
+// Réponses aux deux lectures : table metadata, puis positions des colonnes de fact_table
+const respond = (rows: Array<Record<string, unknown>>, columns?: string[]): void => {
+  const order = columns ?? rows.map((row) => String(row.name));
+  mockConnection.all.mockImplementation(async (sql: unknown) =>
+    String(sql).includes('duckdb_columns')
+      ? order.map((column_name, index) => ({ column_name, column_index: index + 1 }))
+      : rows,
+  );
+};
+
+/** SQL texts of the metadata reads (the position reads excluded). */
+const metadataQueries = (): string[] =>
+  mockConnection.all.mock.calls
+    .map((call) => String(call[0]))
+    .filter((sql) => !sql.includes('duckdb_columns'));
 
 // ─── Enregistrement des mocks ─────────────────────────────────────────────────
 
@@ -62,6 +85,14 @@ jest.unstable_mockModule('../../../src/utils/cache.js', () => ({
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: { error: jest.fn(), info: jest.fn(), debug: jest.fn() },
+  // La garde de version (db/schema-version.js) crée son propre logger contextuel
+  createContextLogger: () => ({
+    error: jest.fn(),
+    warn: mockWarn,
+    info: jest.fn(),
+    debug: jest.fn(),
+    database: jest.fn(),
+  }),
 }));
 
 jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
@@ -72,10 +103,9 @@ jest.unstable_mockModule('../../../src/utils/config-loader.js', () => ({
 
 // Déclarations avant beforeAll — remplies après résolution des mocks
 let createCatalogMetadataLoader: CatalogModule['createCatalogMetadataLoader'];
-let createCatalogDimensionNamesLoader: CatalogModule['createCatalogDimensionNamesLoader'];
 
 beforeAll(async () => {
-  ({ createCatalogMetadataLoader, createCatalogDimensionNamesLoader } =
+  ({ createCatalogMetadataLoader } =
     (await import('../../../src/loaders/catalog.js')) as unknown as CatalogModule);
 });
 
@@ -103,21 +133,22 @@ describe('CatalogMetadataLoader', () => {
 
   describe('loadAllMetadata', () => {
     test('charge toutes les métadonnées pour un catalogue', async () => {
-      mockConnection.all.mockResolvedValue([
-        { name: 'age', type: 'integer', is_categorical: 0 },
-        { name: 'country', type: 'string', is_categorical: 1 },
+      respond([
+        { name: 'age', sql_type: 'INTEGER', is_categorical: 0 },
+        { name: 'country', sql_type: 'VARCHAR', is_categorical: 1 },
       ]);
 
       const loader = createCatalogMetadataLoader();
       const result = (await loader.load({ catalog: 'catalog1' })) as MetadataResult[];
 
       expect(result).toHaveLength(2);
-      expect(result[0].is_categorical).toBe(false);
-      expect(result[1].is_categorical).toBe(true);
+      expect(result[0].isCategorical).toBe(false);
+      expect(result[0].sqlType).toBe('INTEGER');
+      expect(result[1].isCategorical).toBe(true);
     });
 
-    test('convertit is_categorical en booléen', async () => {
-      mockConnection.all.mockResolvedValue([
+    test('convertit is_categorical en isCategorical booléen', async () => {
+      respond([
         { name: 'status', is_categorical: 1 },
         { name: 'score', is_categorical: 0 },
       ]);
@@ -125,23 +156,23 @@ describe('CatalogMetadataLoader', () => {
       const loader = createCatalogMetadataLoader();
       const result = (await loader.load({ catalog: 'mydb' })) as MetadataResult[];
 
-      expect(result[0].is_categorical).toBe(true);
-      expect(result[1].is_categorical).toBe(false);
+      expect(result[0].isCategorical).toBe(true);
+      expect(result[1].isCategorical).toBe(false);
     });
 
     test('utilise le bon catalogue dans la requête SQL', async () => {
-      mockConnection.all.mockResolvedValue([]);
+      respond([]);
 
       const loader = createCatalogMetadataLoader();
       await loader.load({ catalog: 'catalog_abc' });
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
+      const query = metadataQueries()[0];
       expect(query).toContain('"catalog_abc"');
       expect(query).toContain('metadata');
     });
 
     test("appelle getDefaultSchema avec l'id du catalogue quand schema est absent", async () => {
-      mockConnection.all.mockResolvedValue([]);
+      respond([]);
 
       const loader = createCatalogMetadataLoader();
       await loader.load({ catalog: 'mydb' });
@@ -150,22 +181,29 @@ describe('CatalogMetadataLoader', () => {
     });
 
     test('utilise le schéma explicite et ignore le défaut quand fourni', async () => {
-      mockConnection.all.mockResolvedValue([]);
+      respond([]);
 
       const loader = createCatalogMetadataLoader();
       await loader.load({ catalog: 'mydb', schema: 'staging' });
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"mydb".staging.metadata');
+      const query = metadataQueries()[0];
+      expect(query).toContain('"mydb"."staging"."metadata"');
       // Pas de fallback : getDefaultSchema ne doit pas être appelé quand schema est fourni
       expect(mockDatabaseManager.getDefaultSchema).not.toHaveBeenCalled();
     });
 
     test('discrimine deux schémas du même catalogue dans le cache DataLoader', async () => {
       // Deux retours différents pour les deux clés (catalog, schema) distinctes
-      mockConnection.all
-        .mockResolvedValueOnce([{ name: 'a', is_categorical: 1 }])
-        .mockResolvedValueOnce([{ name: 'b', is_categorical: 1 }]);
+      mockConnection.all.mockImplementation(async (sql: unknown) => {
+        const text = String(sql);
+        if (text.includes('duckdb_columns')) {
+          return [
+            { column_name: 'a', column_index: 1 },
+            { column_name: 'b', column_index: 2 },
+          ];
+        }
+        return [{ name: text.includes('"main"') ? 'a' : 'b', is_categorical: 1 }];
+      });
 
       const loader = createCatalogMetadataLoader();
       const r1 = (await loader.load({ catalog: 'mydb', schema: 'main' })) as MetadataResult[];
@@ -173,84 +211,80 @@ describe('CatalogMetadataLoader', () => {
 
       // Les deux clés ont produit deux SQL différents et deux résultats distincts
       expect(r1).not.toEqual(r2);
-      expect(mockConnection.all).toHaveBeenCalledTimes(2);
-      const sqlA = mockConnection.all.mock.calls[0][0] as string;
-      const sqlB = mockConnection.all.mock.calls[1][0] as string;
-      expect(sqlA).toContain('"mydb".main.metadata');
-      expect(sqlB).toContain('"mydb".staging.metadata');
+      // Chaque schéma coûte deux lectures : metadata, puis positions des colonnes
+      expect(mockConnection.all).toHaveBeenCalledTimes(4);
+      const [sqlA, sqlB] = metadataQueries();
+      expect(sqlA).toContain('"mydb"."main"."metadata"');
+      expect(sqlB).toContain('"mydb"."staging"."metadata"');
     });
 
     test('retourne un tableau vide si aucune métadonnée', async () => {
-      mockConnection.all.mockResolvedValue([]);
+      respond([]);
 
       const loader = createCatalogMetadataLoader();
       const result = await loader.load({ catalog: 'empty_catalog' });
 
       expect(result).toEqual([]);
     });
-  });
-});
 
-// ─── CatalogDimensionNamesLoader ──────────────────────────────────────────────
+    // ── Ordre physique des colonnes ─────────────────────────────────────────
 
-describe('CatalogDimensionNamesLoader', () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockDatabaseManager.getPool.mockReturnValue(mockPool);
-    mockDatabaseManager.getDefaultSchema.mockReturnValue('main');
-    mockPool.acquire.mockResolvedValue(mockConnection);
-  });
+    test('ordonne les lignes selon la position des colonnes dans fact_table', async () => {
+      // La table metadata est lue par ordre alphabétique (ordre d'écriture du writer)
+      respond(
+        [
+          { name: 'amount', is_categorical: 0 },
+          { name: 'label', is_categorical: 1 },
+          { name: 'observed_on', is_categorical: 0 },
+        ],
+        ['label', 'observed_on', 'amount'],
+      );
 
-  // ── Instanciation ─────────────────────────────────────────────────────────
+      const loader = createCatalogMetadataLoader();
+      const result = (await loader.load({ catalog: 'mydb' })) as MetadataResult[];
 
-  describe('createCatalogDimensionNamesLoader', () => {
-    test('crée un DataLoader valide', () => {
-      const loader = createCatalogDimensionNamesLoader();
-      expect(loader).toBeDefined();
-      expect(typeof loader.load).toBe('function');
-    });
-  });
-
-  // ── Extraction des noms de champs catégoriels ─────────────────────────────
-
-  describe('loadDimensionNames', () => {
-    test('retourne les noms des champs catégoriels', async () => {
-      mockConnection.all.mockResolvedValue([{ name: 'country' }, { name: 'status' }]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      const result = await loader.load({ catalog: 'catalog1' });
-
-      expect(result).toEqual(['country', 'status']);
+      expect(result.map((field) => field.name)).toEqual(['label', 'observed_on', 'amount']);
+      expect(mockWarn).not.toHaveBeenCalled();
     });
 
-    test('filtre par is_categorical = true dans la requête', async () => {
-      mockConnection.all.mockResolvedValue([]);
+    test('lit les positions du fact_table du schéma résolu, en paramètres liés', async () => {
+      respond([{ name: 'a', is_categorical: 0 }]);
 
-      const loader = createCatalogDimensionNamesLoader();
-      await loader.load({ catalog: 'mydb' });
+      const loader = createCatalogMetadataLoader();
+      await loader.load({ catalog: 'mydb', schema: 'staging' });
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('is_categorical');
-      expect(query).toContain('true');
+      const positionsCall = mockConnection.all.mock.calls.find((call) =>
+        String(call[0]).includes('duckdb_columns'),
+      );
+      expect(String(positionsCall?.[0])).toContain("table_name = 'fact_table'");
+      expect(positionsCall?.[1]).toEqual(['mydb', 'staging']);
     });
 
-    test('utilise le bon catalogue dans la requête SQL', async () => {
-      mockConnection.all.mockResolvedValue([]);
+    test('place en fin de liste, par nom, une ligne sans colonne dans fact_table, avec un warn', async () => {
+      respond(
+        [
+          { name: 'zeta_stale', is_categorical: 0 },
+          { name: 'country', is_categorical: 1 },
+          { name: 'alpha_stale', is_categorical: 0 },
+          { name: 'age', is_categorical: 0 },
+        ],
+        ['age', 'country'],
+      );
 
-      const loader = createCatalogDimensionNamesLoader();
-      await loader.load({ catalog: 'target_db' });
+      const loader = createCatalogMetadataLoader();
+      const result = (await loader.load({ catalog: 'mydb', schema: 'main' })) as MetadataResult[];
 
-      const query = mockConnection.all.mock.calls[0][0] as string;
-      expect(query).toContain('"target_db"');
-    });
-
-    test('retourne un tableau vide si aucun champ catégoriel', async () => {
-      mockConnection.all.mockResolvedValue([]);
-
-      const loader = createCatalogDimensionNamesLoader();
-      const result = await loader.load({ catalog: 'catalog_no_dims' });
-
-      expect(result).toEqual([]);
+      expect(result.map((field) => field.name)).toEqual([
+        'age',
+        'country',
+        'alpha_stale',
+        'zeta_stale',
+      ]);
+      expect(mockWarn).toHaveBeenCalledTimes(1);
+      expect(mockWarn).toHaveBeenCalledWith(
+        expect.stringContaining('mydb.main.fact_table'),
+        expect.objectContaining({ columns: ['alpha_stale', 'zeta_stale'] }),
+      );
     });
   });
 });

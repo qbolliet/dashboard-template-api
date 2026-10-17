@@ -1,10 +1,19 @@
 // Importation des modules nécessaires pour la gestion des bases de données
-import { DuckDBPool, type CatalogEntry } from './pool.js';
+import { GraphQLError } from 'graphql';
+import { DuckDBPool, type CatalogEntry, type PoolStats } from './pool.js';
 import { dirname, resolve } from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { config } from '../utils/config-loader.js';
+import { qualifiedTable } from '../utils/identifiers.js';
 import { createContextLogger } from '../utils/logger.js';
+import { reconcileSchemaList, type SchemaPolicy } from './schema-reconciliation.js';
+import {
+  evaluateSchemaVersion,
+  isSchemaSupported,
+  replaceSchemaVersions,
+  type SchemaVersionStatus,
+} from './schema-version.js';
 
 // Résolution de l'emplacement du fichier et du dossier pour les chemins relatifs
 const __filename = fileURLToPath(import.meta.url);
@@ -19,18 +28,15 @@ const dbLogger = createContextLogger({
 // Détection des URI distantes (s3://, gs://, az://, http(s)://, …) : ces chemins
 // ne doivent pas passer par resolve()/fs.existsSync (réservés au système de fichiers local).
 const REMOTE_URI_PATTERN = /^[a-z0-9]+:\/\//i;
+/**
+ * Tells whether a path is a remote URI (`s3://`, `https://`, …) rather than a local file.
+ *
+ * @param p - Catalog or data path.
+ * @returns True for a path with a URI scheme.
+ */
 const isRemoteUri = (p: string): boolean => REMOTE_URI_PATTERN.test(p);
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
-
-/** Shared pool statistics returned by {@link DatabaseManager.getStatistics}. */
-export interface PoolStats {
-  available: number;
-  using: number;
-  total: number;
-  maxConnections: number;
-  attachedCatalogs: string[];
-}
 
 /** Full statistics snapshot for the database manager. */
 export interface DatabaseStats {
@@ -39,6 +45,61 @@ export interface DatabaseStats {
   allowedCatalogs: string[];
   allowCrossCatalog: boolean;
 }
+
+/**
+ * Data version of one catalog/schema, as served by the live instance.
+ *
+ * Read from `dataset_metadata.updated_at`, which the writer stamps inside the
+ * transaction of every write: it changes exactly when the data does.
+ */
+export interface DataVersion {
+  /** `epoch_us(updated_at)` as a digit string, or {@link NO_DATA_VERSION}. */
+  version: string;
+  /** `updated_at` as ISO 8601 UTC, or null when unreadable. */
+  updatedAt: string | null;
+}
+
+/**
+ * Explicit settings replacing the configuration, so that several independent
+ * managers (several "API instances") can live in one process — used by tests.
+ */
+export interface DatabaseManagerOptions {
+  /** Catalog entries to attach, used as is (no path resolution). */
+  catalogs: CatalogEntry[];
+  /** Schema allow-list per catalog; a catalog without entry adopts the discovery. */
+  schemas?: Record<string, string[]>;
+  /** Default catalog (defaults to the first entry). */
+  defaultCatalog?: string;
+  /** Allowed catalogs (defaults to every entry). */
+  allowedCatalogs?: string[];
+  /** Whether cross-catalog queries are allowed (defaults to false). */
+  allowCrossCatalog?: boolean;
+}
+
+/** Version segment used when a schema has no readable `updated_at`. */
+export const NO_DATA_VERSION = 'none';
+
+// Lecture du marqueur de version : updated_at en microsecondes (chiffres seuls,
+// sans « : » qui casserait les motifs de clés Redis) et en ISO pour les métriques
+export const DATA_VERSION_SELECT =
+  'schema_version, ' +
+  'CAST(epoch_us(updated_at) AS VARCHAR) AS data_version, ' +
+  "strftime(updated_at, '%Y-%m-%dT%H:%M:%S.%fZ') AS updated_at_iso";
+
+/**
+ * Decodes the version columns of a `dataset_metadata` row.
+ *
+ * @param row - Row read with {@link DATA_VERSION_SELECT}, or undefined when the table is empty.
+ * @returns The data version (NO_DATA_VERSION when `updated_at` is NULL or the row missing).
+ */
+export const toDataVersion = (row: Record<string, unknown> | undefined): DataVersion => {
+  const raw = row?.['data_version'];
+  const iso = row?.['updated_at_iso'];
+  return {
+    version: raw === null || raw === undefined ? NO_DATA_VERSION : String(raw),
+    updatedAt: iso === null || iso === undefined ? null : String(iso),
+  };
+};
 
 // ─── Classe DatabaseManager ───────────────────────────────────────────────────
 
@@ -61,7 +122,8 @@ export interface DatabaseStats {
  *       PATH: 'outputs/project_a.ducklake'
  *       DATA_PATH: 'outputs/project_a_data/'
  *       READ_ONLY: true
- *       SCHEMAS: ['main']   # liste des schémas hébergés, le 1er est le défaut
+ *       SCHEMAS: ['main']   # facultatif : liste blanche, le 1er est le défaut ;
+ *                           # absent ou vide = tous les schémas découverts
  *   DATABASE:
  *     POOL:
  *       MAX_CONNECTIONS: 5
@@ -83,17 +145,39 @@ class DatabaseManager {
   // Sert au reconcilier post-ATTACH : ces catalogues sont restreints à l'intersection
   // (config ∩ découverte), tandis que les autres adoptent la liste découverte.
   private readonly explicitlyConfiguredSchemas: Set<string>;
+  // Version des données servie par l'instance vivante, par "catalogue.schéma".
+  // Remplacée d'un bloc après chaque (re)lecture : jamais d'état partiel.
+  private dataVersions: Map<string, DataVersion>;
+  // Réglages explicites remplaçant la configuration (null = configuration)
+  private readonly options: DatabaseManagerOptions | null;
 
-  constructor() {
-    // Configuration du routage des catalogues depuis le fichier de config
-    this.defaultCatalog = config.CATALOG_ROUTING.DEFAULT_CATALOG;
+  /**
+   * Builds the catalog registry (entries, default, allow-lists) without attaching anything;
+   * the pool attaches them later.
+   *
+   * @param options - Explicit settings replacing the configuration; omit to read
+   *   `config.CATALOGS` / `config.CATALOG_ROUTING` (the application singleton).
+   */
+  constructor(options: DatabaseManagerOptions | null = null) {
+    this.options = options;
 
-    // ALLOWED_CATALOGS peut être une string JSON ou un tableau selon le config-loader
-    const rawAllowed = config.CATALOG_ROUTING.ALLOWED_CATALOGS;
-    this.allowedCatalogs =
-      typeof rawAllowed === 'string' ? (JSON.parse(rawAllowed) as string[]) : rawAllowed;
+    if (options) {
+      // Réglages explicites : catalogues fournis tels quels
+      const aliases = options.catalogs.map((c) => c.alias);
+      this.defaultCatalog = options.defaultCatalog ?? aliases[0] ?? '';
+      this.allowedCatalogs = options.allowedCatalogs ?? aliases;
+      this.allowCrossCatalog = options.allowCrossCatalog ?? false;
+    } else {
+      // Configuration du routage des catalogues depuis le fichier de config
+      this.defaultCatalog = config.CATALOG_ROUTING.DEFAULT_CATALOG;
 
-    this.allowCrossCatalog = config.CATALOG_ROUTING.ALLOW_CROSS_CATALOG_QUERIES;
+      // ALLOWED_CATALOGS peut être une string JSON ou un tableau selon le config-loader
+      const rawAllowed = config.CATALOG_ROUTING.ALLOWED_CATALOGS;
+      this.allowedCatalogs =
+        typeof rawAllowed === 'string' ? (JSON.parse(rawAllowed) as string[]) : rawAllowed;
+
+      this.allowCrossCatalog = config.CATALOG_ROUTING.ALLOW_CROSS_CATALOG_QUERIES;
+    }
 
     // Pool partagé unique : un seul DuckDB en mémoire, tous les catalogues attachés
     this.sharedPool = null;
@@ -104,14 +188,35 @@ class DatabaseManager {
     this.configuredSchemas = {};
     // Trace des catalogues à allow-list stricte (SCHEMAS explicitement fourni)
     this.explicitlyConfiguredSchemas = new Set();
+    // Aucune version connue avant la première lecture (initSchemas)
+    this.dataVersions = new Map();
 
     // Initialisation automatique
     this.initializeDatabases();
   }
 
   /**
+   * Build the catalog entries from explicit options, recording their schema lists.
+   *
+   * @param options - Explicit settings given to the constructor.
+   * @returns The catalog entries, unchanged.
+   */
+  private catalogsFromOptions(options: DatabaseManagerOptions): CatalogEntry[] {
+    for (const catalog of options.catalogs) {
+      const listed = options.schemas?.[catalog.alias];
+      this.schemas[catalog.alias] = listed ? [...listed] : ['main'];
+      this.configuredSchemas[catalog.alias] = listed ? [...listed] : ['main'];
+      if (listed) {
+        this.explicitlyConfiguredSchemas.add(catalog.alias);
+      }
+    }
+    return [...options.catalogs];
+  }
+
+  /**
    * Build the catalog array and create the single shared DuckDB pool.
-   * Each entry in config.CATALOGS becomes an ATTACH in the shared DuckDB instance.
+   * Each entry in config.CATALOGS (or in the explicit options) becomes an ATTACH
+   * in the shared DuckDB instance.
    */
   initializeDatabases(): void {
     dbLogger.database('Initializing database manager', {
@@ -121,13 +226,14 @@ class DatabaseManager {
     });
 
     // Construction de la liste des catalogues DuckLake à attacher
-    const catalogs: CatalogEntry[] = [];
+    const catalogs: CatalogEntry[] = this.options ? this.catalogsFromOptions(this.options) : [];
+    const configuredCatalogs = this.options ? {} : config.CATALOGS;
 
-    for (const [catalogId, catalogConfig] of Object.entries(config.CATALOGS)) {
+    for (const [catalogId, catalogConfig] of Object.entries(configuredCatalogs)) {
       const type = catalogConfig.TYPE ?? 'file';
 
-      // Liste des schémas du catalogue (SCHEMAS), défaut ['main']
-      // SCHEMAS peut arriver sous forme de string JSON depuis une variable d'env
+      // Liste des schémas du catalogue (SCHEMAS) : ['main'] provisoire tant que la
+      // découverte n'a pas eu lieu quand SCHEMAS est absent
       const resolved = this.resolveSchemas(catalogConfig);
       this.schemas[catalogId] = [...resolved];
       this.configuredSchemas[catalogId] = [...resolved];
@@ -254,26 +360,21 @@ class DatabaseManager {
   }
 
   /**
-   * Resolve the schema list for a catalog from its SCHEMAS field.
+   * Resolve the initial schema list for a catalog from its SCHEMAS field.
    *
-   * SCHEMAS may be a YAML array or a JSON-string (from an env var). When the
-   * field is absent, the catalog is assumed to host the single 'main' schema.
+   * The config loader has already turned an env-var JSON string into a list and
+   * dropped an absent or empty value. When SCHEMAS is absent, the list is the
+   * placeholder ['main'] until {@link initSchemas} discovers what the catalog
+   * actually holds.
    *
    * @param catalogConfig - Per-catalog configuration block.
-   * @returns Non-empty deduplicated list of schemas (defaults to ['main']).
+   * @returns Non-empty deduplicated list of schemas (['main'] until discovered).
    */
-  private resolveSchemas(catalogConfig: { SCHEMAS?: string[] | string }): string[] {
-    // Liste SCHEMAS absente : on retombe sur le mono-schéma par défaut.
+  private resolveSchemas(catalogConfig: { SCHEMAS?: string[] }): string[] {
     if (catalogConfig.SCHEMAS === undefined) {
       return ['main'];
     }
-    // SCHEMAS peut être un tableau YAML ou une chaîne JSON (variable d'env).
-    const raw = catalogConfig.SCHEMAS;
-    const list = typeof raw === 'string' ? (JSON.parse(raw) as string[]) : raw;
-    if (!Array.isArray(list) || list.length === 0) {
-      throw new Error('CATALOGS.<id>.SCHEMAS must be a non-empty list of schema names.');
-    }
-    return [...new Set(list)];
+    return [...new Set(catalogConfig.SCHEMAS)];
   }
 
   /**
@@ -330,25 +431,49 @@ class DatabaseManager {
   }
 
   /**
-   * Get the default DuckLake schema name for a catalog (first in the list).
+   * Get the default DuckLake schema name for a catalog.
+   *
+   * It is the first schema of the list that passes the version guard, so the
+   * default is always one the API can serve (and one `getCatalogs` lists); when
+   * none does, the first of the list.
    *
    * @param catalogId - Catalog identifier.
-   * @returns First schema configured for the catalog, or 'main' if none.
+   * @returns Default schema of the catalog, or 'main' if it has none.
    */
   getDefaultSchema(catalogId: string): string {
-    const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog];
-    return list?.[0] ?? 'main';
+    const owner = catalogId in this.schemas ? catalogId : this.defaultCatalog;
+    const list = this.schemas[owner] ?? [];
+    return list.find((schema) => isSchemaSupported(owner, schema)) ?? list[0] ?? 'main';
   }
 
   /**
    * Get the full list of schemas known for a catalog.
    *
+   * Includes the schemas the version guard refuses: they stay addressable so a
+   * query on one fails with SCHEMA_VERSION_UNSUPPORTED rather than "unknown
+   * schema". Use {@link getSupportedSchemas} to list what can be served.
+   *
    * @param catalogId - Catalog identifier.
-   * @returns Copy of the configured schema list (at least one element).
+   * @returns Copy of the schema list (at least one element).
    */
   getSchemas(catalogId: string): string[] {
     const list = this.schemas[catalogId] ?? this.schemas[this.defaultCatalog] ?? ['main'];
     return [...list];
+  }
+
+  /**
+   * Get the schemas of a catalog that pass the schema version guard.
+   *
+   * Those are the schemas `getCatalogs` exposes. A schema found unsupported at
+   * attach (unreadable format, `schema_version` not listed, missing
+   * `dataset_metadata`) is warned about there and left out.
+   *
+   * @param catalogId - Catalog identifier.
+   * @returns The servable schemas, in list order (possibly empty).
+   */
+  getSupportedSchemas(catalogId: string): string[] {
+    const owner = catalogId in this.schemas ? catalogId : this.defaultCatalog;
+    return this.getSchemas(catalogId).filter((schema) => isSchemaSupported(owner, schema));
   }
 
   /**
@@ -373,25 +498,30 @@ class DatabaseManager {
 
   /**
    * Validate and resolve the catalog ID for a GraphQL request.
-   * Priority: explicit parameter > HTTP header context > default catalog.
+   * Priority: explicit parameter > fallback parameter > default catalog.
+   *
+   * Catalog targeting is argument-only (no HTTP header is ever consulted);
+   * `fallbackCatalog` exists for callers resolving a fallback other than the
+   * default (most callers pass only `requestedCatalog`).
    *
    * @param requestedCatalog - Catalog requested by the client.
-   * @param contextCatalog - Catalog from request context (HTTP header).
+   * @param fallbackCatalog - Catalog to use when none was requested, before the default.
    * @returns Validated catalog ID to use.
-   * @throws {Error} If the resolved catalog is not available.
+   * @throws {GraphQLError} BAD_USER_INPUT if the resolved catalog is not available.
    */
   validateCatalogRouting(
     requestedCatalog: string | null = null,
-    contextCatalog: string | null = null,
+    fallbackCatalog: string | null = null,
   ): string {
-    // Priorité : paramètre GraphQL > en-tête HTTP > catalogue par défaut
-    // Utilisation de || pour traiter les chaînes vides comme absentes
-    const targetCatalog = requestedCatalog || contextCatalog || this.defaultCatalog;
+    // Priorité : paramètre explicite > paramètre de repli > catalogue par défaut
+    const targetCatalog = requestedCatalog || fallbackCatalog || this.defaultCatalog;
 
     if (!this.isValidCatalog(targetCatalog)) {
-      throw new Error(
+      // Erreur de saisie du client : message exposé tel quel, même en production
+      throw new GraphQLError(
         `Catalog '${targetCatalog}' is not available. ` +
           `Available catalogs: ${this.getAvailableCatalogs().join(', ')}`,
+        { extensions: { code: 'BAD_USER_INPUT' } },
       );
     }
 
@@ -404,7 +534,8 @@ class DatabaseManager {
    * Rebuilds the shared DuckDB instance so the API picks up data refreshed by an
    * external process (e.g. a nightly DuckLake update) without a pod restart.
    * In-flight requests drain on the old instance; new requests use the fresh
-   * catalog. Resolves once the new instance is ready.
+   * catalog. Resolves once the old instance is closed and the data versions
+   * (hence the cache namespaces) have been re-read on the new one.
    *
    * @throws {Error} If the shared pool is not initialized or the rebuild fails.
    */
@@ -419,7 +550,13 @@ class DatabaseManager {
     // Re-chargement des catalogues
     await this.sharedPool.reload();
 
+    // Attente de la fermeture de l'ancienne instance AVANT de relire les
+    // versions : une fois la version montée, plus aucune connexion ne lit
+    // l'ancien état, donc aucune donnée périmée sous une clé de nouvelle version
+    await this.sharedPool.awaitDrain();
+
     // Ré-application de la politique d'allow-list contre la nouvelle découverte
+    // (relit aussi les versions de données servies)
     await this.initSchemas();
 
     // Logging
@@ -464,15 +601,51 @@ class DatabaseManager {
   }
 
   /**
+   * Reconciles the schemas discovered in a catalog with its configured policy.
+   *
+   * Pure (no state change, no log): see {@link reconcileSchemaList}. Used by
+   * {@link initSchemas} and by the freshness probe, which compares its result
+   * with {@link getSchemas} to detect an added or removed schema.
+   *
+   * @param catalogId - Catalog alias.
+   * @param discovered - Schemas reported by `information_schema.schemata` for it.
+   * @returns The schemas the catalog would serve, the first one being the default.
+   */
+  reconcileSchemas(catalogId: string, discovered: string[]): string[] {
+    return reconcileSchemaList(discovered, this.schemaPolicy(catalogId)).schemas;
+  }
+
+  /**
+   * Returns the configured schema policy of a catalog.
+   *
+   * @param catalogId - Catalog alias.
+   * @returns Configured list (`['main']` when none) and whether it is explicit.
+   */
+  private schemaPolicy(catalogId: string): SchemaPolicy {
+    return {
+      configured: this.configuredSchemas[catalogId] ?? ['main'],
+      explicit: this.explicitlyConfiguredSchemas.has(catalogId),
+    };
+  }
+
+  /**
    * Reconcile the per-catalog schema allow-list with what DuckLake actually exposes.
    *
-   * Calls {@link DuckDBPool.discoverCatalogSchemas} and applies, per catalog:
+   * Calls {@link DuckDBPool.discoverCatalogSchemas} and applies, per catalog,
+   * {@link reconcileSchemas}:
    *  - If SCHEMAS was explicitly configured: intersect with the discovered list
    *    (any configured-but-missing schema triggers a warning). Treat the config
    *    as an allow-list — never widen beyond it.
-   *  - If SCHEMAS was not configured: adopt the discovered list. Fall back to
-   *    ['main'] when the discovery is empty so the API never starts up with an
-   *    empty schema list.
+   *  - If SCHEMAS was not configured (absent or empty, the default): adopt the
+   *    discovered list, `main` first then alphabetical, so the default schema is
+   *    stable. Fall back to ['main'] when the discovery is empty so the API never
+   *    starts up with an empty schema list. A schema added to or removed from
+   *    the catalog later is detected by the freshness probe, which reloads.
+   *
+   * The schema lists, their version verdicts and their data versions are
+   * computed first, then switched together in one synchronous step: a request
+   * never sees a new schema before its verdict (a schema created without
+   * `dataset_metadata` is refused by the guard, never queried).
    *
    * Idempotent and safe to call repeatedly (start-up, after reloadCatalogs(),
    * after reloadCatalog()). The result is the source of truth for isValidSchema,
@@ -485,48 +658,148 @@ class DatabaseManager {
       throw new Error('Shared pool is not initialized.');
     }
 
+    // Schémas découverts
     const discovered = await this.sharedPool.discoverCatalogSchemas();
+    const schemas: Record<string, string[]> = {};
 
+    // Intersection avec les schémas de la configuration
     for (const catalogId of Object.keys(this.configuredSchemas)) {
       const discoveredList = discovered[catalogId] ?? [];
+      const policy = this.schemaPolicy(catalogId);
+      const reconciled = reconcileSchemaList(discoveredList, policy);
 
-      if (this.explicitlyConfiguredSchemas.has(catalogId)) {
-        // Allow-list stricte : intersection (config ∩ découverte), ordre de la config
-        const configured = this.configuredSchemas[catalogId];
-        const intersection = configured.filter((s) => discoveredList.includes(s));
-        const missing = configured.filter((s) => !discoveredList.includes(s));
-
-        if (missing.length > 0) {
-          dbLogger.warn(`Configured schemas missing from DuckLake for ${catalogId}`, {
-            missing,
-            discovered: discoveredList,
-          });
-        }
-
-        // Fallback : si l'intersection est vide (toute la config est manquante),
-        // on conserve la config pour ne pas casser les requêtes existantes,
-        // mais on logge un warn explicite.
-        if (intersection.length === 0) {
-          dbLogger.warn(`No configured schema was discovered for ${catalogId}; keeping config`, {
-            configured,
-            discovered: discoveredList,
-          });
-          this.schemas[catalogId] = [...configured];
-        } else {
-          this.schemas[catalogId] = intersection;
-        }
-      } else {
-        // Pas de SCHEMAS dans la config : on adopte la liste découverte.
-        // Fallback à ['main'] si la découverte est vide (catalogue vide / non encore peuplé).
-        this.schemas[catalogId] = discoveredList.length > 0 ? [...discoveredList] : ['main'];
+      if (reconciled.missing.length > 0) {
+        dbLogger.warn(`Configured schemas missing from DuckLake for ${catalogId}`, {
+          missing: reconciled.missing,
+          discovered: discoveredList,
+        });
       }
+      // Fallback : si l'intersection est vide (toute la config est manquante),
+      // on conserve la config pour ne pas casser les requêtes existantes,
+      // mais on logge un warn explicite.
+      if (reconciled.keptConfigured) {
+        dbLogger.warn(`No configured schema was discovered for ${catalogId}; keeping config`, {
+          configured: policy.configured,
+          discovered: discoveredList,
+        });
+      }
+      schemas[catalogId] = reconciled.schemas;
 
       dbLogger.database(`Schemas reconciled for ${catalogId}`, {
-        active: this.schemas[catalogId],
+        active: schemas[catalogId],
         discovered: discoveredList,
-        explicit: this.explicitlyConfiguredSchemas.has(catalogId),
+        explicit: policy.explicit,
       });
     }
+
+    // Sondage de la version de chaque schéma actif, une fois par attach/reload
+    const probed = await this.probeSchemaVersions(schemas);
+
+    // Bascule atomique : liste, verdicts et versions changent ensemble, et les
+    // clés de cache suivantes portent la nouvelle version
+    this.schemas = schemas;
+    replaceSchemaVersions(probed.verdicts);
+    this.dataVersions = probed.dataVersions;
+  }
+
+  /**
+   * Probes `dataset_metadata` for every schema of the given lists.
+   *
+   * Runs once per attach/reload and returns the verdicts to cache in
+   * db/schema-version.ts, so no query path ever pays for this check. An
+   * unsupported or unreadable schema is warned about here and rejected later,
+   * when a query targets it — start-up is never blocked, because the other
+   * schemas remain usable.
+   *
+   * @param schemas - Schema lists about to be served, per catalog.
+   * @returns The version verdicts and the data versions, not applied yet.
+   */
+  // Sondage des versions : un seul passage, verdicts appliqués par l'appelant
+  private async probeSchemaVersions(schemas: Record<string, string[]>): Promise<{
+    verdicts: { catalog: string; schema: string; status: SchemaVersionStatus }[];
+    dataVersions: Map<string, DataVersion>;
+  }> {
+    const verdicts: { catalog: string; schema: string; status: SchemaVersionStatus }[] = [];
+    const dataVersions = new Map<string, DataVersion>();
+    if (!this.sharedPool) return { verdicts, dataVersions };
+
+    const connection = await this.sharedPool.acquire();
+    try {
+      for (const [catalogId, schemaList] of Object.entries(schemas)) {
+        for (const schema of schemaList) {
+          let version: number | null = null;
+          let dataVersion: DataVersion = { version: NO_DATA_VERSION, updatedAt: null };
+          try {
+            // Une seule lecture pour la version du format et celle des données
+            const rows = await connection.all(
+              `SELECT ${DATA_VERSION_SELECT} FROM ${qualifiedTable(catalogId, schema, 'dataset_metadata')} LIMIT 1`,
+            );
+            const raw = rows[0]?.schema_version;
+            // Une table présente mais vide vaut une table absente (spec §2.3 :
+            // exactement une ligne par schéma).
+            version = raw === null || raw === undefined ? null : Number(raw);
+            dataVersion = toDataVersion(rows[0]);
+          } catch {
+            // Table dataset_metadata absente : catalogue à l'ancien format
+            version = null;
+          }
+          verdicts.push({
+            catalog: catalogId,
+            schema,
+            status: evaluateSchemaVersion(catalogId, schema, version),
+          });
+          dataVersions.set(`${catalogId}.${schema}`, dataVersion);
+        }
+      }
+    } finally {
+      this.sharedPool.release(connection);
+    }
+
+    return { verdicts, dataVersions };
+  }
+
+  /**
+   * Returns the data version served for a catalog/schema.
+   *
+   * It is the `updated_at` marker read on the live instance at the last
+   * (re)attach, and it enters every Redis key of that schema
+   * (`<type>:<catalog>:<schema>@<version>:…`): once it changes, entries
+   * computed on older data are no longer reachable.
+   *
+   * @param catalogId - Catalog alias.
+   * @param schema - Schema name within the catalog.
+   * @returns The version segment, or NO_DATA_VERSION when never read.
+   */
+  getDataVersion(catalogId: string, schema: string): string {
+    return this.dataVersions.get(`${catalogId}.${schema}`)?.version ?? NO_DATA_VERSION;
+  }
+
+  /**
+   * Returns every data version served, for diagnostics and metrics.
+   *
+   * @returns Nested record catalog → schema → data version.
+   */
+  getDataVersions(): Record<string, Record<string, DataVersion>> {
+    const result: Record<string, Record<string, DataVersion>> = {};
+    for (const [catalogId, schemaList] of Object.entries(this.schemas)) {
+      result[catalogId] = {};
+      for (const schema of schemaList) {
+        result[catalogId][schema] = this.dataVersions.get(`${catalogId}.${schema}`) ?? {
+          version: NO_DATA_VERSION,
+          updatedAt: null,
+        };
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Returns the catalog entries attached to the shared pool.
+   *
+   * @returns Copy of the catalog entries (empty when the pool is closed).
+   */
+  getCatalogEntries(): CatalogEntry[] {
+    return [...(this.sharedPool?.catalogs ?? [])];
   }
 
   /**
@@ -553,19 +826,9 @@ class DatabaseManager {
    * @returns Statistics for the shared pool and routing configuration.
    */
   getStatistics(): DatabaseStats {
-    // Récupération des statistiques du pool partagé si disponible
-    const poolStats: PoolStats | null = this.sharedPool
-      ? {
-          available: this.sharedPool.pool.filter((c) => !c.inUse).length,
-          using: this.sharedPool.pool.filter((c) => c.inUse).length,
-          total: this.sharedPool.pool.length,
-          maxConnections: this.sharedPool.maxConnections,
-          attachedCatalogs: (this.sharedPool.catalogs ?? []).map((c) => c.alias),
-        }
-      : null;
-
+    // Statistiques du pool partagé (occupation, file, attentes) si disponible
     return {
-      sharedPool: poolStats,
+      sharedPool: this.sharedPool ? this.sharedPool.getStats() : null,
       defaultCatalog: this.defaultCatalog,
       allowedCatalogs: this.allowedCatalogs,
       allowCrossCatalog: this.allowCrossCatalog,

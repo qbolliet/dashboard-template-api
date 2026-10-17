@@ -1,23 +1,28 @@
 API:
   PORT: ${PORT:-4000}
-  DOMAIN: ${API_DOMAIN:-'https://your-production-domain.com'}
 
   CORS:
-    CREDENTIALS: true
+    # Aucun cookie n'est utilisé par l'API : pas de credentials cross-origin
+    CREDENTIALS: false
     METHODS: ['GET', 'POST', 'OPTIONS']
     HEADERS: ['Content-Type', 'Authorization']
+    # Durée de mise en cache du préflight par le navigateur (secondes)
+    MAX_AGE: 86400
+    # Origines cross-origin autorisées. En développement : liste YAML. En
+    # production : CORS_ORIGINS, liste JSON (ex. '["https://qbolliet.github.io"]'),
+    # vide par défaut — aucune origine cross-origin tant qu'elle n'est pas fixée.
     ORIGINS:
       development:
         - 'https://studio.apollographql.com'
         - 'http://localhost:3000'
         - 'http://localhost:5173'
-      production:
-        - ${API_DOMAIN:-'https://your-production-domain.com'}
+      production: ${CORS_ORIGINS:-[]}
 
   REQUEST_LIMITS:
+    # Taille maximale du corps HTTP brut (refus 400 au-delà)
     MAX_REQUEST_SIZE: '100kb'
-    MAX_FIELD_SIZE: 1000
-    MAX_FIELDS: 50
+    # Taille maximale du document GraphQL (`query`), en caractères
+    MAX_QUERY_SIZE: 20000
 
   GRAPHQL:
     INTROSPECTION:
@@ -29,7 +34,7 @@ API:
 
   COMPRESSION:
     ENABLED: true
-    THRESHOLD: 1024  # 1KB
+    THRESHOLD: 1024 # 1KB
     LEVEL: 6
 
   # Pagination limits
@@ -39,13 +44,55 @@ API:
     MAX_OFFSET: 10000
     SELECT_OPTIONS_LIMIT: 50
 
+  # Arbres d'options (getSelectOptionsTree)
+  SELECT_OPTIONS:
+    # Nombre maximal de nœuds d'un arbre ; au-delà, erreur explicite invitant
+    # à utiliser searchTerm ou maxDepth (aucune troncature silencieuse)
+    TREE_MAX_NODES: 5000
+
+  # Requête d'agrégats (getAggregates) : au-delà, BAD_USER_INPUT avant tout SQL
+  AGGREGATES:
+    # Nombre maximal d'agrégats d'une requête (chacun est une expression du SELECT)
+    MAX_AGGREGATES: 20
+    # Nombre maximal de colonnes de groupe (chacune multiplie les groupes possibles)
+    MAX_GROUP_BY: 4
+
+  # Export REST volumineux (GET /api/export) — garde-fous propres, hors GraphQL
+  EXPORT:
+    # Plafond de lignes, appliqué par LIMIT dans la requête
+    MAX_ROWS: ${EXPORT_MAX_ROWS:-5000000}
+    # Exports simultanés par IP (429 au-delà)
+    MAX_CONCURRENT_PER_IP: ${EXPORT_MAX_CONCURRENT_PER_IP:-2}
+    # Exports simultanés tous clients confondus : chaque export occupe une
+    # connexion du pool pendant toute sa durée, GraphQL doit garder les autres
+    MAX_CONCURRENT_TOTAL: ${EXPORT_MAX_CONCURRENT_TOTAL:-2}
+    # Durée maximale (ms) jusqu'au premier octet : sonde puis COPY (csv/parquet),
+    # ouverture du flux (arrow). Interruption de la requête, 504 avant le premier octet
+    TIMEOUT_MS: ${EXPORT_TIMEOUT_MS:-120000}
+    # Durée maximale (ms) de l'envoi, du premier octet à la fin : un client lent
+    # est coupé au-delà. En arrow, la requête se déroule pendant l'envoi
+    TRANSFER_TIMEOUT_MS: ${EXPORT_TRANSFER_TIMEOUT_MS:-600000}
+    # Répertoire des fichiers temporaires csv/parquet (vide = <tmp système>/dashboard-api-export)
+    TMP_DIR: ${EXPORT_TMP_DIR:-}
+    # Espace libre (Mo) que le volume de TMP_DIR doit conserver : en dessous, un export
+    # csv/parquet est refusé (507). 0 désactive le contrôle
+    TMP_MIN_FREE_MB: ${EXPORT_TMP_MIN_FREE_MB:-1024}
+
+  # Arrêt gracieux (SIGTERM / SIGINT) : les requêtes et exports en cours sont
+  # menés à terme, puis le pool et Redis sont fermés
+  SHUTDOWN:
+    # Budget total (ms) de l'arrêt, au-delà duquel le processus sort de force
+    # (code 1, exports restants coupés). Doit rester INFÉRIEUR au
+    # terminationGracePeriodSeconds du pod (Helm), sans quoi kubelet tue le
+    # processus avant (SIGKILL) ; le chart le vérifie
+    TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-25000}
+
   # Query timeouts by operation type (ms)
   TIMEOUTS:
     FACT_SIMPLE: 10000
     FACT_COMPLEX: 15000
     AGGREGATED_SIMPLE: 10000
     AGGREGATED_COMPLEX: 15000
-    DIMENSION: 5000
     METADATA: 5000
     SELECT_OPTIONS: 5000
     CACHE_DEFAULT: 300
@@ -54,15 +101,12 @@ API:
   SECURITY_THRESHOLDS:
     HSTS_MAX_AGE: 31536000
     VALIDATION_MAX_LENGTH: 500
-    ERROR_TRUNCATION_LENGTH: 50
     QUERY_SNIPPET_LENGTH: 100
 
   # Data loader configuration
   LOADERS:
     BATCH_SIZE: 10
-    MAX_BATCH_SIZE: 50
     DEFAULT_CACHE_TIMEOUT: 300
     FACT_CACHE_TIMEOUT: 300
-    DIMENSION_CACHE_TIMEOUT: 600
     METADATA_CACHE_TIMEOUT: 600
     SELECT_OPTIONS_CACHE_TIMEOUT: 600

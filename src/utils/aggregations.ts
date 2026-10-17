@@ -1,0 +1,93 @@
+// Importation des modules
+import { sqlTypeFamily } from './filter-tree.js';
+import type { SqlTypeFamily } from './filter-tree.js';
+import type { Aggregation } from '../generated/graphql.js';
+
+// ─── Constantes ───────────────────────────────────────────────────────────────
+
+/** Every aggregation of the GraphQL `Aggregation` enum, in its declaration order. */
+const AGGREGATIONS: readonly Aggregation[] = [
+  'SUM',
+  'AVG',
+  'MAX',
+  'MIN',
+  'COUNT',
+  'MEDIAN',
+  'MODE',
+];
+
+/**
+ * SQL function of each aggregation. Interpolated in the SQL: the key is an enum
+ * value checked by GraphQL, never a client string.
+ */
+const AGGREGATION_SQL: Readonly<Record<Aggregation, string>> = {
+  SUM: 'SUM',
+  AVG: 'AVG',
+  MAX: 'MAX',
+  MIN: 'MIN',
+  COUNT: 'COUNT',
+  MEDIAN: 'MEDIAN',
+  MODE: 'MODE',
+};
+
+// Agrégations admises par famille de type de la mesure ; la famille « other »
+// (TIME, INTERVAL, BLOB, LIST…) n'admet que celles qui valent pour tous les
+// types (MODE, COUNT)
+const ALLOWED_BY_FAMILY: Record<SqlTypeFamily, readonly Aggregation[]> = {
+  numeric: AGGREGATIONS,
+  date: ['MAX', 'MIN', 'COUNT', 'MODE'],
+  text: ['COUNT', 'MODE'],
+  boolean: ['COUNT', 'MODE'],
+  other: ['COUNT', 'MODE'],
+};
+
+// Agrégations dont le résultat est toujours numérique, quel que soit le type de la mesure
+const NUMERIC_RESULT: readonly Aggregation[] = ['SUM', 'AVG', 'MEDIAN', 'COUNT'];
+
+// ─── Fonctions ────────────────────────────────────────────────────────────────
+
+/**
+ * Type family of a measure.
+ *
+ * @param sqlType - DuckDB type of the measure (metadata.sqlType).
+ * @returns The family; `other` for a type without a family of its own (LIST, BLOB…).
+ */
+// Famille de type d'une mesure
+function measureFamily(sqlType: string | null | undefined): SqlTypeFamily {
+  return sqlTypeFamily(sqlType ?? '');
+}
+
+/**
+ * Aggregations allowed on a measure, by the type family of its SQL type.
+ *
+ * SUM, AVG and MEDIAN require a numeric measure; MIN and MAX a numeric or
+ * temporal one; MODE and COUNT apply to every type.
+ *
+ * @param sqlType - DuckDB type of the measure (metadata.sqlType).
+ * @returns The allowed aggregations, in the enum order.
+ */
+// Agrégations admises sur une mesure selon sa famille de type
+function allowedAggregations(sqlType: string | null | undefined): readonly Aggregation[] {
+  const allowed = ALLOWED_BY_FAMILY[measureFamily(sqlType)];
+  return AGGREGATIONS.filter((aggregation) => allowed.includes(aggregation));
+}
+
+/**
+ * Type family of the aggregated value, which drives its extent and statistics.
+ *
+ * SUM, AVG, MEDIAN and COUNT always yield a number; MIN, MAX and MODE yield a
+ * value of the measure itself.
+ *
+ * @param aggregation - Effective aggregation.
+ * @param sqlType - DuckDB type of the measure (metadata.sqlType).
+ * @returns The family of the aggregated value.
+ */
+// Famille de la valeur agrégée : numérique, ou celle de la mesure
+function aggregatedValueFamily(
+  aggregation: Aggregation,
+  sqlType: string | null | undefined,
+): SqlTypeFamily {
+  return NUMERIC_RESULT.includes(aggregation) ? 'numeric' : measureFamily(sqlType);
+}
+
+export { AGGREGATIONS, AGGREGATION_SQL, measureFamily, allowedAggregations, aggregatedValueFamily };

@@ -2,11 +2,14 @@
  * Tests for the fact GraphQL type definitions.
  *
  * Validates the DataFormat enum, all fact-related object types
- * (DimensionDetail, Fact, PaginatedFacts, DatasetMetadata, DatasetWithMetadata,
- * AggregationStatistics, AggregatedFactsMetadata, AggregatedFactsWithMetadata),
- * and the fact query fields with their argument signatures.
+ * (FieldValue, Fact, PaginatedFacts, DatasetMetadata, DatasetWithMetadata),
+ * the fact query fields with their argument signatures, and the removal of the
+ * former aggregated fact queries (replaced by getAggregates).
  */
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { schema } from '../../../../src/schema/index.js';
 import {
   assertObjectType,
@@ -15,6 +18,9 @@ import {
   isNamedType,
   GraphQLFieldMap,
 } from 'graphql';
+
+// Racine du dépôt, pour lire les sources des typedefs et le SDL versionné
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 // ─── Enums — fact ─────────────────────────────────────────────────────────────
 
@@ -40,51 +46,49 @@ describe('Enums — fact', () => {
 
 describe('Object types — fact', () => {
   /**
-   * Verification that DimensionDetail has non-null name, value, and label.
+   * Verification that Fact exposes keys and measures, both non-null lists.
    */
-  test('DimensionDetail has non-null name, value, label', () => {
-    // Extraction des champs du type DimensionDetail
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('DimensionDetail'),
-    ).getFields();
-
-    // Caractère non-null de chaque champ descriptif
-    for (const f of ['name', 'value', 'label']) {
-      expect(fields).toHaveProperty(f);
-      expect(isNonNullType(fields[f].type)).toBe(true);
-    }
-  });
-
-  /**
-   * Verification that Fact exposes measures (non-null list) and dimensionDetails.
-   */
-  test('Fact has measures and dimensionDetails (no scalar value)', () => {
+  test('Fact has keys and measures (no scalar value, no dimensionDetails)', () => {
     // Extraction des champs du type Fact
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
       schema.getType('Fact'),
     ).getFields();
 
+    expect(fields).toHaveProperty('keys');
     expect(fields).toHaveProperty('measures');
-    expect(fields).toHaveProperty('dimensionDetails');
     // Le champ scalaire mono-mesure a été retiré au profit de measures
     expect(fields).not.toHaveProperty('value');
-    // measures est une liste non-nullable
+    // La couche dimension a disparu : plus de dimensionDetails
+    expect(fields).not.toHaveProperty('dimensionDetails');
+    // Les deux listes sont non-nullables
+    expect(isNonNullType(fields.keys.type)).toBe(true);
     expect(isNonNullType(fields.measures.type)).toBe(true);
   });
 
   /**
-   * Verification that Measure exposes name (non-null) and value (JSON).
+   * Verification that the removed dimension types are gone from the schema.
    */
-  test('Measure has non-null name and a value field', () => {
-    // Extraction des champs du type Measure
+  test('DimensionDetail, Measure and Dimension no longer exist', () => {
+    for (const typeName of ['DimensionDetail', 'Measure', 'Dimension']) {
+      expect(schema.getType(typeName)).toBeUndefined();
+    }
+  });
+
+  /**
+   * Verification that FieldValue exposes name (non-null) and value (JSON).
+   */
+  test('FieldValue has non-null name and a value field', () => {
+    // Extraction des champs du type FieldValue
     const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('Measure'),
+      schema.getType('FieldValue'),
     ).getFields();
 
     expect(fields).toHaveProperty('name');
     expect(isNonNullType(fields.name.type)).toBe(true);
+    // La valeur reste nullable : une clé de hiérarchie absente vaut NULL
     expect(fields).toHaveProperty('value');
-    // Pas de label dupliqué par mesure
+    expect(isNonNullType(fields.value.type)).toBe(false);
+    // Pas de label dupliqué par colonne : la fact table porte le libellé
     expect(fields).not.toHaveProperty('label');
   });
 
@@ -136,59 +140,54 @@ describe('Object types — fact', () => {
     ).getFields();
 
     // Présence des champs structurels du dataset
-    for (const f of ['columns', 'data', 'metadata']) {
+    for (const f of ['columns', 'fields', 'data', 'metadata']) {
       expect(fields).toHaveProperty(f);
     }
   });
 
   /**
-   * Verification that AggregationStatistics exposes mean, median, stdDev, and quartiles.
+   * Verification that DatasetWithMetadata.fields is a non-null list of non-null
+   * Metadata, and that extents documents the page scope.
    */
-  test('AggregationStatistics has mean, median, stdDev, quartiles', () => {
-    // Extraction des champs du type statistiques
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregationStatistics'),
-    ).getFields();
+  test('DatasetWithMetadata.fields is [Metadata!]! and extents documents the page scope', () => {
+    const dataset = assertObjectType(schema.getType('DatasetWithMetadata'));
 
-    // Présence des indicateurs statistiques attendus
-    for (const f of ['mean', 'median', 'stdDev', 'quartiles']) {
-      expect(fields).toHaveProperty(f);
+    expect(String(dataset.getFields().fields.type)).toBe('[Metadata!]!');
+
+    // Description SDL : bornes de la PAGE, renvoi vers Metadata.stats pour les globales
+    const extents = assertObjectType(schema.getType('DatasetMetadata')).getFields().extents;
+    expect(extents.description).toMatch(/this page/i);
+    expect(extents.description).toMatch(/Metadata\.stats/);
+  });
+
+  /**
+   * Verification that the JSON scalar documents the serialization rules.
+   */
+  test('JSON scalar documents the value serialization rules', () => {
+    const description = schema.getType('JSON')?.description ?? '';
+
+    for (const rule of ['Number.isSafeInteger', 'decimal string', 'YYYY-MM-DD', 'T separator']) {
+      expect(description).toContain(rule);
     }
   });
 
   /**
-   * Verification that AggregatedFactsMetadata has all analysis fields.
+   * Verification that row counters are Float (exact up to 2^53), not 32-bit Int.
    */
-  test('AggregatedFactsMetadata has count, keyExtent, valueExtent, statistics, groupByFieldInfo, generatedAt', () => {
-    // Extraction des champs du type métadonnées d'agrégation
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFactsMetadata'),
-    ).getFields();
+  test.each([
+    ['PaginatedFacts', 'total', 'Float'],
+    ['PaginatedFacts', 'totalPages', 'Float'],
+    ['DatasetMetadata', 'total', 'Float'],
+    ['DatasetMetadata', 'totalPages', 'Float'],
+    ['PaginatedComparedFacts', 'total', 'Float!'],
+    ['PaginatedComparedFacts', 'totalPages', 'Float!'],
+    ['FieldStats', 'distinctCount', 'Float!'],
+    ['FieldStats', 'nullCount', 'Float!'],
+    ['AggregateResult', 'total', 'Float!'],
+  ])('%s.%s is %s', (typeName, field, expected) => {
+    const fields = assertObjectType(schema.getType(typeName)).getFields();
 
-    // Présence des champs d'analyse d'agrégation
-    for (const f of [
-      'count',
-      'keyExtent',
-      'valueExtent',
-      'statistics',
-      'groupByFieldInfo',
-      'generatedAt',
-    ]) {
-      expect(fields).toHaveProperty(f);
-    }
-  });
-
-  /**
-   * Verification that AggregatedFactsWithMetadata exposes data and metadata.
-   */
-  test('AggregatedFactsWithMetadata has data and metadata', () => {
-    // Extraction des champs du type agrégation enrichie
-    const fields: GraphQLFieldMap<unknown, unknown> = assertObjectType(
-      schema.getType('AggregatedFactsWithMetadata'),
-    ).getFields();
-
-    expect(fields).toHaveProperty('data');
-    expect(fields).toHaveProperty('metadata');
+    expect(String(fields[field].type)).toBe(expected);
   });
 });
 
@@ -215,6 +214,18 @@ describe('Query fields — fact', () => {
   });
 
   /**
+   * Verification that the raw SQL filters argument is gone and structuredFilters is a FilterNode.
+   */
+  test.each(['getFactTable', 'getFactTableWithMetadata', 'getAggregates'])(
+    '%s has structuredFilters: FilterNode and no filters argument',
+    (queryName) => {
+      const args = queryFields[queryName].args;
+      expect(args.find((a) => a.name === 'filters')).toBeUndefined();
+      expect(String(args.find((a) => a.name === 'structuredFilters')!.type)).toBe('FilterNode');
+    },
+  );
+
+  /**
    * Verification that getFactTableWithMetadata has a format arg defaulting to OBJECTS.
    */
   test('getFactTableWithMetadata exists and has format arg defaulting to OBJECTS', () => {
@@ -229,36 +240,62 @@ describe('Query fields — fact', () => {
   });
 
   /**
-   * Verification that getAggregatedFacts requires groupBy and measure, and accepts aggregation.
+   * Verification that the former aggregated fact queries and their types are gone.
    */
-  test('getAggregatedFacts exists with groupBy + measure (NonNull) and aggregation args', () => {
-    expect(queryFields).toHaveProperty('getAggregatedFacts');
+  test('getAggregatedFacts* and their types are removed, from the schema and the SDL', () => {
+    expect(queryFields).not.toHaveProperty('getAggregatedFacts');
+    expect(queryFields).not.toHaveProperty('getAggregatedFactsWithMetadata');
 
-    // Recherche de l'argument de regroupement obligatoire
-    const groupByArg = queryFields.getAggregatedFacts.args.find((a) => a.name === 'groupBy');
-    expect(groupByArg).toBeDefined();
-
-    // Caractère obligatoire de l'argument groupBy
-    expect(isNonNullType(groupByArg!.type)).toBe(true);
-
-    // Argument mesure obligatoire (colonne à agréger)
-    const measureArg = queryFields.getAggregatedFacts.args.find((a) => a.name === 'measure');
-    expect(measureArg).toBeDefined();
-    expect(isNonNullType(measureArg!.type)).toBe(true);
-
-    expect(queryFields.getAggregatedFacts.args.find((a) => a.name === 'aggregation')).toBeDefined();
+    const sdl = fs.readFileSync(path.join(ROOT, 'schema.graphql'), 'utf8');
+    for (const type of [
+      'AggregatedFact',
+      'AggregatedFactsMetadata',
+      'AggregatedFactsWithMetadata',
+      'AggregationStatistics',
+    ]) {
+      expect(schema.getType(type)).toBeUndefined();
+      expect(sdl).not.toMatch(new RegExp(`^type ${type} \\{`, 'm'));
+    }
   });
 
   /**
-   * Verification that getAggregatedFactsWithMetadata returns the correct named type.
+   * Verification of the signature of getAggregates.
    */
-  test('getAggregatedFactsWithMetadata returns AggregatedFactsWithMetadata', () => {
-    expect(queryFields).toHaveProperty('getAggregatedFactsWithMetadata');
+  test('getAggregates: aggregates required, groupBy defaulting to [], non-null result', () => {
+    const field = queryFields.getAggregates;
+    const arg = (name: string) => field.args.find((a) => a.name === name)!;
 
-    // Résolution du type de retour (nommé ou enveloppé dans NonNull/List)
-    const returnType = queryFields.getAggregatedFactsWithMetadata.type;
-    expect(isNamedType(returnType) ? returnType.name : returnType.ofType?.name).toBe(
-      'AggregatedFactsWithMetadata',
+    expect(isNonNullType(arg('aggregates').type)).toBe(true);
+    expect(String(arg('aggregates').type)).toBe('[AggregateInput!]!');
+    expect(String(arg('groupBy').type)).toBe('[GroupByInput!]');
+    expect(arg('groupBy').defaultValue).toEqual([]);
+    expect(arg('format').defaultValue).toBe('OBJECTS');
+    expect(arg('includeRowCount').defaultValue).toBe(true);
+    expect(isNonNullType(field.type)).toBe(true);
+    expect(isNamedType(field.type) ? field.type.name : field.type.ofType?.name).toBe(
+      'AggregateResult',
     );
+  });
+
+  /**
+   * Verification of the enums of getAggregates: formats and time grains.
+   */
+  test('AggregateFormat and TimeGrain values', () => {
+    expect(
+      assertEnumType(schema.getType('AggregateFormat'))
+        .getValues()
+        .map((value) => value.name),
+    ).toEqual(['OBJECTS', 'ARRAYS', 'LONG']);
+    expect(
+      assertEnumType(schema.getType('TimeGrain'))
+        .getValues()
+        .map((value) => value.name),
+    ).toEqual(['SECOND', 'MINUTE', 'HOUR', 'DAY', 'WEEK', 'MONTH', 'QUARTER', 'YEAR']);
+    // DataFormat de getFactTableWithMetadata reste sans LONG
+    expect(
+      assertEnumType(schema.getType('DataFormat'))
+        .getValues()
+        .map((value) => value.name),
+    ).toEqual(['OBJECTS', 'ARRAYS']);
   });
 });

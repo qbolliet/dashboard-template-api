@@ -2,18 +2,18 @@ LOGGING:
   LEVEL:
     development: debug
     production: ${LOG_LEVEL:-warn}
-  
+
   FORMAT:
     development: simple
     production: json
-  
+
   TRANSPORTS:
     console:
       enabled: true
       colorize:
         development: true
         production: false
-    
+
     file:
       enabled: ${LOG_TO_FILE:-true}
       directory: ${LOG_DIR:-./logs}
@@ -22,19 +22,19 @@ LOGGING:
       maxSize: ${LOG_MAX_SIZE:-10m}
       maxFiles: ${LOG_MAX_FILES:-30}
       compress: true
-      
+
     error:
       enabled: ${LOG_TO_FILE:-true}
       directory: ${LOG_DIR:-./logs}
       filename: 'error-%DATE%.log'
       level: error
-      
+
   SAMPLING:
     enabled:
       development: false
       production: true
-    rate: ${LOG_SAMPLING_RATE:-0.1}  # 10% des logs info/debug en prod
-    
+    rate: ${LOG_SAMPLING_RATE:-0.1} # 10% des logs info/debug en prod
+
   SANITIZATION:
     enabled: true
     fields:
@@ -44,10 +44,7 @@ LOGGING:
       - cookie
       - api_key
       - secret
-      
+
   # Performance monitoring
   PERFORMANCE:
     SLOW_QUERY_THRESHOLD: ${SLOW_QUERY_THRESHOLD:-1000}
-    LOG_SLOW_QUERIES:
-      development: true
-      production: ${LOG_SLOW_QUERIES_PROD:-false}

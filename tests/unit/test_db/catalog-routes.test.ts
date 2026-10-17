@@ -2,8 +2,8 @@
  * Unit tests for catalog-routes.js (src/db/catalog-routes.js).
  *
  * Verifies registration of POST /api/catalog/reload, that it is guarded by the
- * shared requireAdminKey middleware, and that the handler delegates to
- * databaseManager.reloadCatalogs with proper success / error responses.
+ * shared requireAdminKey middleware, and that the handler triggers an immediate
+ * freshness probe with a forced reload, with proper success / error responses.
  * Uses jest.unstable_mockModule + dynamic imports for ESM compatibility.
  */
 
@@ -52,6 +52,9 @@ const mockDatabaseManager: MockDatabaseManager = {
   getAvailableCatalogs: jest.fn().mockReturnValue(['default', 'macroeconomics']),
 };
 
+// Sondeur de fraîcheur mocké — sonde immédiate déclenchée par la route globale
+const mockFreshnessMonitor = { probeNow: jest.fn() };
+
 // Middleware d'authentification mocké — laisse passer en appelant next()
 const mockRequireAdminKey = jest.fn((_req: MockRequest, _res: MockResponse, next: jest.Mock) =>
   next(),
@@ -61,6 +64,10 @@ const mockRequireAdminKey = jest.fn((_req: MockRequest, _res: MockResponse, next
 
 jest.unstable_mockModule('../../../src/db/index.js', () => ({
   databaseManager: mockDatabaseManager,
+}));
+
+jest.unstable_mockModule('../../../src/db/catalog-freshness.js', () => ({
+  catalogFreshnessMonitor: mockFreshnessMonitor,
 }));
 
 jest.unstable_mockModule('../../../src/security/admin-auth.js', () => ({
@@ -194,20 +201,30 @@ describe('createCatalogRoutes', () => {
       handler = call![2] as typeof handler;
     });
 
-    test('delegates to databaseManager.reloadCatalogs and returns success', async () => {
-      mockDatabaseManager.reloadCatalogs.mockResolvedValueOnce(undefined);
+    test('triggers an immediate probe with a forced reload and returns the versions', async () => {
+      const versions = { default: { main: { version: '2', updatedAt: null } } };
+      mockFreshnessMonitor.probeNow.mockResolvedValueOnce({
+        changed: ['default'],
+        reloaded: true,
+        versions,
+      });
       const res = makeRes();
 
       await handler(makeReq(), res);
 
-      expect(mockDatabaseManager.reloadCatalogs).toHaveBeenCalledTimes(1);
+      expect(mockFreshnessMonitor.probeNow).toHaveBeenCalledWith({ forceReload: true });
       expect(res.json).toHaveBeenCalledWith(
-        expect.objectContaining({ success: true, timestamp: expect.any(String) }),
+        expect.objectContaining({
+          success: true,
+          timestamp: expect.any(String),
+          changed: ['default'],
+          versions,
+        }),
       );
     });
 
     test('returns 500 with the error message on reload failure', async () => {
-      mockDatabaseManager.reloadCatalogs.mockRejectedValueOnce(new Error('S3 unreachable'));
+      mockFreshnessMonitor.probeNow.mockRejectedValueOnce(new Error('S3 unreachable'));
       const res = makeRes();
 
       await handler(makeReq(), res);

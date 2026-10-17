@@ -1,47 +1,32 @@
 // Importation des modules
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
-import type { GraphQLContext } from './types.js';
-import type { SelectOption } from '../../loaders/select-options.js';
-
-// ─── Interfaces des arguments ─────────────────────────────────────────────────
-
-/** Arguments for the getSelectOptions query. */
-export interface SelectOptionsArgs {
-  fieldName: string;
-  limit?: number;
-  searchTerm?: string;
-  catalog?: string | null;
-  schema?: string | null;
-}
-
-/** Arguments for the getGroupedSelectOptions query. */
-export interface GroupedSelectOptionsArgs {
-  groupField: string;
-  optionsField: string;
-  limit?: number;
-  catalog?: string | null;
-  schema?: string | null;
-}
-
-/** Grouped result of select options (group + options arrays). */
-export interface GroupedSelectOptions {
-  group: SelectOption[];
-  options: SelectOption[];
-}
+import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
+import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
+import { validatePagination } from '../../utils/pagination.js';
+import type { SelectOptionNode } from '../../loaders/select-options.js';
+import type { QueryResolvers } from '../../generated/graphql.js';
 
 // Resolver pour la sélection des options
 /**
  * Resolvers for select options queries.
  *
- * Provides field values for dropdown menus and grouped option lists,
- * with optional full-text search filtering via searchTerm.
+ * Provides field values for dropdown menus (flat list of one column) and
+ * nested option trees of column hierarchies, both with optional
+ * case-insensitive search via searchTerm.
  */
-const selectOptionsResolvers = {
+const selectOptionsResolvers: {
+  Query: Pick<QueryResolvers, 'getSelectOptions' | 'getSelectOptionsTree'>;
+} = {
   Query: {
     /**
      * Fetches available options for a single field.
-     * Arguments follow {@link SelectOptionsArgs}.
+     * Arguments follow the generated `QueryGetSelectOptionsArgs`.
+     *
+     * The effective label column is resolved here, by resolveLabelField on the
+     * metadata of the field (read with its label columns): it is then part of
+     * the loader key, hence of the cache key — two requests rendering the same
+     * codes with different labels never share a cache entry.
      *
      * @param _ - Parent resolver result (unused at root).
      * @returns Array of select option objects.
@@ -52,55 +37,65 @@ const selectOptionsResolvers = {
         fieldName,
         limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
         searchTerm = '',
+        labelField = null,
         catalog,
         schema,
-      }: SelectOptionsArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
+      },
+      { loaders, getLoadersForCatalog },
     ) => {
-      // Sélection du loader adapté au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+      // Borne du nombre d'options, validée avant tout accès à la base
+      const effectiveLimit = limit ?? config.API.PAGINATION.SELECT_OPTIONS_LIMIT;
+      validatePagination(effectiveLimit);
+
+      // Sélection des loaders adaptés au catalogue/schéma cible
+      const activeLoaders = getLoadersForCatalog(catalog, schema) ?? loaders;
+
+      // Colonne de libellés effective ; champ inconnu : le loader lève l'erreur
+      const fieldMeta = await withTimeout(
+        activeLoaders.metadata.load(fieldName),
+        config.API.TIMEOUTS.METADATA,
+        'Metadata fetch timeout',
+      );
+      const effectiveLabelField = fieldMeta
+        ? resolveLabelField(fieldName, indexMetadataByName([fieldMeta]), labelField)
+        : null;
 
       return withTimeout(
-        loader.load({ fieldName, limit, searchTerm }),
+        activeLoaders.selectOptions.load({
+          fieldName,
+          limit: effectiveLimit,
+          searchTerm,
+          labelField: effectiveLabelField,
+        }),
         config.API.TIMEOUTS.SELECT_OPTIONS,
         'Select options fetch timeout',
       );
     },
 
     /**
-     * Fetches options for two fields simultaneously (group + options).
-     * Loads both option sets in parallel to minimise latency.
-     * Arguments follow {@link GroupedSelectOptionsArgs}.
+     * Fetches the nested option tree of a column hierarchy.
+     * Arguments follow the generated `QueryGetSelectOptionsTreeArgs`.
      *
      * @param _ - Parent resolver result (unused at root).
-     * @returns Object with group and options arrays.
+     * @returns Forest of `{ value, label, children? }` nodes.
      */
-    getGroupedSelectOptions: async (
+    getSelectOptionsTree: async (
       _: unknown,
-      {
-        groupField,
-        optionsField,
-        limit = config.API.PAGINATION.SELECT_OPTIONS_LIMIT,
-        catalog,
-        schema,
-      }: GroupedSelectOptionsArgs,
-      { loaders, getLoadersForCatalog }: GraphQLContext,
-    ): Promise<GroupedSelectOptions> => {
+      { fieldName, maxDepth = null, searchTerm = null, catalog, schema },
+      { loaders, getLoadersForCatalog },
+    ): Promise<SelectOptionNode[]> => {
       // Sélection du loader adapté au catalogue/schéma cible
       const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.selectOptions : loaders.selectOptions;
+      const loader = targetLoaders ? targetLoaders.selectOptionsTree : loaders.selectOptionsTree;
 
-      // Chargement en parallèle des deux ensembles d'options
-      const [groupOptions, fieldOptions] = await Promise.all([
-        loader.load({ fieldName: groupField, limit }),
-        loader.load({ fieldName: optionsField, limit }),
-      ]);
+      // La borne fait partie de la clé : un arbre en cache ne la contourne jamais
+      const maxNodes = config.API.SELECT_OPTIONS?.TREE_MAX_NODES ?? DEFAULT_TREE_MAX_NODES;
 
-      return {
-        group: groupOptions,
-        options: fieldOptions,
-      };
+      return withTimeout(
+        loader.load({ fieldName, maxDepth, searchTerm: searchTerm || null, maxNodes }),
+        config.API.TIMEOUTS.SELECT_OPTIONS,
+        'Select options tree fetch timeout',
+      );
     },
   },
 };

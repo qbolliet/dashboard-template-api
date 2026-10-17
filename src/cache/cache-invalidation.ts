@@ -16,8 +16,9 @@ const cacheLogger = createContextLogger({
 /**
  * Generates a Redis key glob pattern for a (catalog, schema?) pair.
  *
- * When `schema` is null/undefined, the resulting pattern matches **every**
- * schema of the catalog (the schema segment becomes a `*`). When both
+ * With a `schema`, the pattern matches every data version of that schema
+ * (`<schema>@*`). When `schema` is null/undefined, the resulting pattern
+ * matches **every** schema of the catalog (the schema segment becomes a `*`). When both
  * arguments are null, the pattern matches the legacy 'default' catalog.
  *
  * @param catalog - Catalog identifier, or null/undefined to use 'default'.
@@ -29,11 +30,12 @@ type KeyPatternFn = (catalog?: string | null, schema?: string | null) => string;
 /** Dictionary of Redis key-pattern generators indexed by cache type. */
 interface KeyPatterns {
   metadata: KeyPatternFn;
-  dimension: KeyPatternFn;
-  dimensionValue: KeyPatternFn;
+  catalogMetadata: KeyPatternFn;
+  datasetInfo: KeyPatternFn;
   facts: KeyPatternFn;
   aggregatedFacts: KeyPatternFn;
   selectOptions: KeyPatternFn;
+  fieldStats: KeyPatternFn;
   /** Global pattern — matches every cache type for the given (catalog, schema?). */
   allCatalog: KeyPatternFn;
 }
@@ -65,8 +67,13 @@ type CacheStats = Record<string, CatalogStats>;
  *  - **all**: every configured catalog in turn
  *
  * Cache keys are written by loaders in the form
- * `<type>:<catalog>:<schema>:<queryKey>` (see `BaseQueryLoader.loadWithCache`),
- * so the patterns here align with that layout.
+ * `<type>:<catalog>:<schema>@<version>:<queryKey>` (see
+ * `BaseQueryLoader.loadWithCache`), so the patterns here align with that
+ * layout and match every data version. A catalog update needs no invalidation
+ * — the version moves and older entries expire by TTL — but these
+ * routes remain for a manual flush. `scanKeys` accounts for the
+ * client's configured `keyPrefix`, which ioredis applies to GET/SET/DEL but
+ * not to SCAN's MATCH pattern nor to the keys SCAN returns.
  */
 class CacheInvalidationManager {
   // Dictionnaire des générateurs de motifs de clés par type de cache
@@ -74,40 +81,74 @@ class CacheInvalidationManager {
 
   constructor() {
     // Motifs de clés : segment catalog obligatoire, segment schema soit explicite
-    // soit wildcard (=> tous les schémas du catalogue).
-    // Note : || (et non ??) — une chaîne vide doit également retomber sur le défaut.
+    // (toutes versions de données confondues : `<schema>@*`) soit wildcard
+    // (=> tous les schémas du catalogue).
+    const namespace = (catalog?: string | null, schema?: string | null): string =>
+      `${catalog || 'default'}:${schema ? `${schema}@*` : '*'}:*`;
     this.keyPatterns = {
-      metadata: (catalog, schema) => `metadata:${catalog || 'default'}:${schema || '*'}:*`,
-      dimension: (catalog, schema) => `dimension:${catalog || 'default'}:${schema || '*'}:*`,
-      dimensionValue: (catalog, schema) =>
-        `dimension-value:${catalog || 'default'}:${schema || '*'}:*`,
-      facts: (catalog, schema) => `facts:${catalog || 'default'}:${schema || '*'}:*`,
-      aggregatedFacts: (catalog, schema) =>
-        `aggregated-facts:${catalog || 'default'}:${schema || '*'}:*`,
-      selectOptions: (catalog, schema) =>
-        `select-options:${catalog || 'default'}:${schema || '*'}:*`,
+      metadata: (catalog, schema) => `metadata:${namespace(catalog, schema)}`,
+      catalogMetadata: (catalog, schema) => `catalog-metadata:${namespace(catalog, schema)}`,
+      datasetInfo: (catalog, schema) => `dataset-info:${namespace(catalog, schema)}`,
+      facts: (catalog, schema) => `facts:${namespace(catalog, schema)}`,
+      aggregatedFacts: (catalog, schema) => `aggregated-facts:${namespace(catalog, schema)}`,
+      selectOptions: (catalog, schema) => `select-options:${namespace(catalog, schema)}`,
+      fieldStats: (catalog, schema) => `field-stats:${namespace(catalog, schema)}`,
       // Tous les types pour un (catalog, schema?) donné
-      allCatalog: (catalog, schema) => `*:${catalog || 'default'}:${schema || '*'}:*`,
+      allCatalog: (catalog, schema) => `*:${namespace(catalog, schema)}`,
     };
   }
 
   /**
-   * Iterates through all Redis keys matching a pattern using non-blocking SCAN.
+   * Returns the key prefix configured on the shared Redis client, if any.
    *
-   * Avoids the blocking KEYS command by iterating with cursor-based SCAN,
-   * collecting results in batches of 100.
+   * ioredis prepends `keyPrefix` transparently to GET/SET/DEL/etc., but not to
+   * the MATCH pattern of SCAN, and it does not strip it from the keys SCAN
+   * returns. Every caller of the raw SCAN command must therefore add the
+   * prefix to the pattern itself and remove it from the returned keys.
    *
-   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:main:*").
-   * @returns Array of all matching Redis key strings.
+   * @returns The configured prefix, or '' when the client carries none.
+   */
+  private getKeyPrefix(): string {
+    return (redis as unknown as { options?: { keyPrefix?: string } }).options?.keyPrefix ?? '';
+  }
+
+  /**
+   * Escapes the Redis glob special characters (`*`, `?`, `[`, `]`, `\`) so a
+   * literal string — such as the key prefix — can be prepended to a MATCH
+   * pattern without itself being interpreted as a wildcard.
+   *
+   * @param text - Literal text to escape.
+   * @returns Text safe to prepend to a glob pattern.
+   */
+  private escapeGlob(text: string): string {
+    return text.replace(/[*?[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Iterates through all Redis keys matching a pattern using non-blocking scan.
+   *
+   * Avoids the blocking keys command by iterating with cursor-based scan,
+   * collecting results in batches of 100. The client's `keyPrefix` (escaped)
+   * is prepended to `pattern` before scanning, and stripped back off the keys
+   * returned — so callers can pass DEL-ready keys straight through, and
+   * `redis.del(...keys)` (which re-applies the prefix) targets the right rows.
+   *
+   * @param pattern - Redis glob pattern to match (e.g. "metadata:db1:main:*"),
+   *   without the key prefix.
+   * @returns Array of all matching Redis key strings, prefix stripped.
    * @throws {Error} When the Redis SCAN command fails.
    */
   // SCAN itératif non-bloquant — évite le blocage de Redis sur de grands ensembles de clés
   async scanKeys(pattern: string): Promise<string[]> {
+    const prefix = this.getKeyPrefix();
+    const fullPattern = `${this.escapeGlob(prefix)}${pattern}`;
     const keys: string[] = [];
     let cursor = '0';
     do {
-      const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-      keys.push(...batch);
+      const [nextCursor, batch] = await redis.scan(cursor, 'MATCH', fullPattern, 'COUNT', 100);
+      keys.push(
+        ...batch.map((key) => (prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key)),
+      );
       cursor = nextCursor;
     } while (cursor !== '0');
     return keys;
@@ -169,7 +210,7 @@ class CacheInvalidationManager {
   /**
    * Invalidate a specific cache type for a given catalog (and optional schema).
    *
-   * @param cacheType - Cache type key (metadata, dimension, facts, etc.).
+   * @param cacheType - Cache type key (metadata, facts, selectOptions, etc.).
    * @param catalog - Catalog identifier. Defaults to 'default' when null.
    * @param schema - Optional schema name; null/omitted means "all schemas".
    * @throws {Error} When the cache type is unknown or the Redis operation fails.

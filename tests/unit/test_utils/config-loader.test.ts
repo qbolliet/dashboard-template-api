@@ -37,6 +37,8 @@ interface ConfigLoaderInstance {
   convertNumericValues: (value: unknown) => unknown;
   validateEnvironment: (cfg: Record<string, unknown>) => void;
   validateRequiredFields: (cfg: Record<string, unknown>) => void;
+  normalizeCatalogSchemas: (cfg: Record<string, unknown>) => Record<string, unknown>;
+  resolveAllowedCatalogs: (cfg: Record<string, unknown>) => Record<string, unknown>;
   get: (path: string, defaultValue?: unknown) => unknown;
 }
 
@@ -443,6 +445,165 @@ describe('ConfigLoader – validateRequiredFields', () => {
   test('throws when CATALOGS is missing', () => {
     const { CATALOGS: _removed, ...rest } = base;
     expect(() => configLoader.validateRequiredFields(rest)).toThrow('No catalogs configured');
+  });
+});
+
+// ─── normalizeCatalogSchemas ──────────────────────────────────────────────────
+
+describe('ConfigLoader – normalizeCatalogSchemas', () => {
+  /** Runs the normalization on a config holding one catalog block. */
+  const schemasOf = (catalog: Record<string, unknown>): unknown => {
+    const result = configLoader.normalizeCatalogSchemas({ CATALOGS: { lake: catalog } });
+    return (result.CATALOGS as Record<string, Record<string, unknown>>).lake;
+  };
+
+  test.each<[string, unknown]>([
+    ['the empty string (`${X_SCHEMAS:-}` with the variable unset)', ''],
+    ['a blank string', '   '],
+    ['null (a YAML key without value)', null],
+    ['an empty list', []],
+    ['an empty JSON list', '[]'],
+  ])('%s means "no allow-list": the key is dropped (discovery)', (_label, raw) => {
+    const catalog = schemasOf({ PATH: 'a.ducklake', SCHEMAS: raw }) as Record<string, unknown>;
+
+    expect('SCHEMAS' in catalog).toBe(false);
+    // Le reste du bloc est intact
+    expect(catalog.PATH).toBe('a.ducklake');
+  });
+
+  test('a catalog without SCHEMAS is left as is', () => {
+    expect(schemasOf({ PATH: 'a.ducklake' })).toEqual({ PATH: 'a.ducklake' });
+  });
+
+  test('a provided YAML list is kept, deduplicated, in order', () => {
+    expect(schemasOf({ SCHEMAS: ['main', 'staging', 'main'] })).toEqual({
+      SCHEMAS: ['main', 'staging'],
+    });
+  });
+
+  test('a JSON list from an environment variable becomes a list', () => {
+    expect(schemasOf({ SCHEMAS: '["main", "predictions"]' })).toEqual({
+      SCHEMAS: ['main', 'predictions'],
+    });
+  });
+
+  test.each<[string, unknown, string]>([
+    ['not JSON', 'main,staging', 'must be a JSON list of strings'],
+    ['a JSON object', '{"a": 1}', 'must be a list of non-empty strings'],
+    ['a list with a non-string', [1, 'main'], 'must be a list of non-empty strings'],
+    ['a list with an empty name', ['main', ''], 'must be a list of non-empty strings'],
+  ])('rejects %s with a message naming the setting', (_label, raw, message) => {
+    expect(() => schemasOf({ SCHEMAS: raw })).toThrow(`CATALOGS.lake.SCHEMAS ${message}`.trim());
+  });
+
+  test('does not touch a config without CATALOGS', () => {
+    const cfg = { ENVIRONMENT: 'development' };
+    expect(configLoader.normalizeCatalogSchemas(cfg)).toBe(cfg);
+  });
+});
+
+// ─── resolveAllowedCatalogs ───────────────────────────────────────────────────
+
+describe('ConfigLoader – resolveAllowedCatalogs', () => {
+  const catalogs = { default: {}, macroeconomics: {}, public_finance: {} };
+
+  /** Resolves ALLOWED_CATALOGS of a config holding the three catalogs. */
+  const allowedOf = (raw: unknown, cats: Record<string, unknown> = catalogs): unknown => {
+    const result = configLoader.resolveAllowedCatalogs({
+      CATALOGS: cats,
+      CATALOG_ROUTING: { DEFAULT_CATALOG: 'default', ALLOWED_CATALOGS: raw },
+    });
+    return (result.CATALOG_ROUTING as Record<string, unknown>).ALLOWED_CATALOGS;
+  };
+
+  test.each<[string, unknown]>([
+    ['the empty string (`${ALLOWED_CATALOGS:-}` with the variable unset)', ''],
+    ['null', null],
+    ['undefined', undefined],
+    ['an empty list', []],
+  ])('%s defaults to the keys of CATALOGS', (_label, raw) => {
+    expect(allowedOf(raw)).toEqual(['default', 'macroeconomics', 'public_finance']);
+  });
+
+  test('an explicit JSON list narrows the allowed catalogs', () => {
+    expect(allowedOf('["default"]')).toEqual(['default']);
+  });
+
+  test('an explicit YAML list is kept', () => {
+    expect(allowedOf(['default', 'public_finance'])).toEqual(['default', 'public_finance']);
+  });
+
+  test('rejects a malformed value', () => {
+    expect(() => allowedOf('default')).toThrow('CATALOG_ROUTING.ALLOWED_CATALOGS');
+  });
+
+  test('stays unset without any catalog, so that validation reports it', () => {
+    expect(allowedOf('', {})).toBe('');
+  });
+});
+
+// ─── loadConfig : listes vides par défaut ─────────────────────────────────────
+
+describe('ConfigLoader – loadConfig with empty defaults', () => {
+  let savedConfig: Record<string, unknown> | null;
+
+  beforeAll(() => {
+    savedConfig = configLoader.config;
+  });
+
+  afterEach(() => {
+    configLoader.config = savedConfig;
+    mockYamlParse.mockReturnValue(validConfig);
+    delete process.env.TEST_LAKE_SCHEMAS;
+    delete process.env.TEST_ALLOWED;
+  });
+
+  /** Loads a config whose SCHEMAS and ALLOWED_CATALOGS come from placeholders. */
+  const load = (): { catalogs: Record<string, Record<string, unknown>>; allowed: unknown } => {
+    mockYamlParse.mockReturnValue({
+      ...validConfig,
+      CATALOG_ROUTING: {
+        DEFAULT_CATALOG: 'lake',
+        ALLOWED_CATALOGS: '${TEST_ALLOWED:-}',
+      },
+      CATALOGS: {
+        lake: { PATH: 'a.ducklake', SCHEMAS: '${TEST_LAKE_SCHEMAS:-}' },
+        other: { PATH: 'b.ducklake', SCHEMAS: '${TEST_OTHER_SCHEMAS:-}' },
+      },
+    });
+    configLoader.config = null;
+    const loaded = configLoader.loadConfig() as unknown as {
+      CATALOGS: Record<string, Record<string, unknown>>;
+      CATALOG_ROUTING: { ALLOWED_CATALOGS: unknown };
+    };
+    return { catalogs: loaded.CATALOGS, allowed: loaded.CATALOG_ROUTING.ALLOWED_CATALOGS };
+  };
+
+  test('with no variable set, no catalog has SCHEMAS and every catalog is allowed', () => {
+    const { catalogs, allowed } = load();
+
+    expect('SCHEMAS' in catalogs.lake).toBe(false);
+    expect('SCHEMAS' in catalogs.other).toBe(false);
+    expect(allowed).toEqual(['lake', 'other']);
+  });
+
+  test('a variable set to a JSON list gives that catalog an allow-list, the others none', () => {
+    process.env.TEST_LAKE_SCHEMAS = '["main", "staging"]';
+    process.env.TEST_ALLOWED = '["lake"]';
+    const { catalogs, allowed } = load();
+
+    expect(catalogs.lake.SCHEMAS).toEqual(['main', 'staging']);
+    expect('SCHEMAS' in catalogs.other).toBe(false);
+    expect(allowed).toEqual(['lake']);
+  });
+
+  test('a variable set but empty behaves like an unset one', () => {
+    process.env.TEST_LAKE_SCHEMAS = '';
+    process.env.TEST_ALLOWED = '';
+    const { catalogs, allowed } = load();
+
+    expect('SCHEMAS' in catalogs.lake).toBe(false);
+    expect(allowed).toEqual(['lake', 'other']);
   });
 });
 

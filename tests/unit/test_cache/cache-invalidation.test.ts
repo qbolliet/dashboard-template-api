@@ -61,11 +61,10 @@ interface MockConfig {
 /** Fonctions de génération de patterns de clés Redis par type de cache. */
 interface KeyPatterns {
   metadata: (catalog?: string | null, schema?: string | null) => string;
-  dimension: (catalog?: string | null, schema?: string | null) => string;
-  dimensionValue: (catalog?: string | null, schema?: string | null) => string;
   facts: (catalog?: string | null, schema?: string | null) => string;
   aggregatedFacts: (catalog?: string | null, schema?: string | null) => string;
   selectOptions: (catalog?: string | null, schema?: string | null) => string;
+  fieldStats: (catalog?: string | null, schema?: string | null) => string;
   allCatalog: (catalog?: string | null, schema?: string | null) => string;
 }
 
@@ -221,10 +220,12 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 let CacheInvalidationManager: CacheInvalidationManagerConstructor;
 let cacheInvalidationManager: CacheInvalidationManagerInstance;
 let createCacheInvalidationRoutes: (app: MockApp) => void;
+let buildCacheKey: typeof import('../../../src/cache/cache-keys.js').buildCacheKey;
 
 beforeAll(async () => {
   ({ CacheInvalidationManager, cacheInvalidationManager, createCacheInvalidationRoutes } =
     (await import('../../../src/cache/cache-invalidation.js')) as unknown as CacheInvalidationModule);
+  ({ buildCacheKey } = await import('../../../src/cache/cache-keys.js'));
 });
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -244,11 +245,10 @@ describe('CacheInvalidationManager', () => {
     test('exposes key-pattern functions for all cache types', () => {
       const expected: Array<keyof KeyPatterns> = [
         'metadata',
-        'dimension',
-        'dimensionValue',
         'facts',
         'aggregatedFacts',
         'selectOptions',
+        'fieldStats',
         'allCatalog',
       ];
       for (const type of expected) {
@@ -257,21 +257,54 @@ describe('CacheInvalidationManager', () => {
     });
 
     test('generates correct (catalog, schema) patterns when both are provided', () => {
-      expect(manager.keyPatterns.metadata('main', 'main')).toBe('metadata:main:main:*');
-      expect(manager.keyPatterns.dimension('test', 'analytics')).toBe('dimension:test:analytics:*');
-      expect(manager.keyPatterns.dimensionValue('main', 'foo')).toBe('dimension-value:main:foo:*');
-      expect(manager.keyPatterns.facts('analytics', 'main')).toBe('facts:analytics:main:*');
+      // Segment schéma `<schéma>@*` : toutes les versions de données du schéma
+      expect(manager.keyPatterns.metadata('main', 'main')).toBe('metadata:main:main@*:*');
+      expect(manager.keyPatterns.facts('analytics', 'main')).toBe('facts:analytics:main@*:*');
       expect(manager.keyPatterns.aggregatedFacts('main', 'main')).toBe(
-        'aggregated-facts:main:main:*',
+        'aggregated-facts:main:main@*:*',
       );
-      expect(manager.keyPatterns.selectOptions('main', 'main')).toBe('select-options:main:main:*');
-      expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main:*');
+      expect(manager.keyPatterns.selectOptions('main', 'main')).toBe(
+        'select-options:main:main@*:*',
+      );
+      expect(manager.keyPatterns.fieldStats('main', 'main')).toBe('field-stats:main:main@*:*');
+      expect(manager.keyPatterns.allCatalog('main', 'main')).toBe('*:main:main@*:*');
     });
 
     test('omits schema → wildcard, matching every schema of the catalog', () => {
       expect(manager.keyPatterns.metadata('main')).toBe('metadata:main:*:*');
       expect(manager.keyPatterns.allCatalog('test')).toBe('*:test:*:*');
       expect(manager.keyPatterns.facts('analytics', null)).toBe('facts:analytics:*:*');
+      expect(manager.keyPatterns.fieldStats('analytics')).toBe('field-stats:analytics:*:*');
+    });
+
+    test('the field-stats pattern covers the keys written by the field stats loader', () => {
+      // Clé écrite par BaseQueryLoader.loadWithCache :
+      // <préfixe>:<catalogue>:<schéma>@<version>:<variante><hash>
+      const escapeRegExp = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const globToRegExp = (glob: string): RegExp =>
+        new RegExp(`^${glob.split('*').map(escapeRegExp).join('.*')}$`);
+      const versionOf = (): string => '1767225600123456';
+      const filteredKey = buildCacheKey(
+        { prefix: 'field-stats', catalog: 'main', schema: 'geography', variant: '', hash: 'a1' },
+        versionOf,
+      );
+      const plainKey = buildCacheKey(
+        { prefix: 'field-stats', catalog: 'main', schema: 'geography', hash: 'b2' },
+        () => 'none',
+      );
+
+      for (const key of [filteredKey, plainKey]) {
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main', 'geography')).test(key)).toBe(
+          true,
+        );
+        // Tous les schémas du catalogue, puis tous les types : l'invalidation par préfixe
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main')).test(key)).toBe(true);
+        expect(globToRegExp(manager.keyPatterns.allCatalog('main')).test(key)).toBe(true);
+        // Un autre catalogue n'est pas touché
+        expect(globToRegExp(manager.keyPatterns.fieldStats('other')).test(key)).toBe(false);
+        // Un schéma dont le nom est un préfixe (geo ⊂ geography) n'est pas touché
+        expect(globToRegExp(manager.keyPatterns.fieldStats('main', 'geo')).test(key)).toBe(false);
+      }
     });
 
     test('falls back to "default" catalog when catalog is falsy', () => {
@@ -345,7 +378,13 @@ describe('CacheInvalidationManager', () => {
 
       await manager.invalidateCatalog('main', 'analytics');
 
-      expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
+      expect(mockRedis.scan).toHaveBeenCalledWith(
+        '0',
+        'MATCH',
+        '*:main:analytics@*:*',
+        'COUNT',
+        100,
+      );
       expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
     });
 
@@ -384,7 +423,7 @@ describe('CacheInvalidationManager', () => {
 
   describe('invalidateCacheType', () => {
     test('deletes keys for the specified type, catalog and schema', async () => {
-      const keys = ['metadata:main:main:field1', 'metadata:main:main:field2'];
+      const keys = ['metadata:main:main@1:field1', 'metadata:main:main@2:field2'];
       mockRedis.scan.mockResolvedValueOnce(['0', keys]);
       mockRedis.del.mockResolvedValueOnce(2);
 
@@ -393,7 +432,7 @@ describe('CacheInvalidationManager', () => {
       expect(mockRedis.scan).toHaveBeenCalledWith(
         '0',
         'MATCH',
-        'metadata:main:main:*',
+        'metadata:main:main@*:*',
         'COUNT',
         100,
       );
@@ -425,20 +464,13 @@ describe('CacheInvalidationManager', () => {
     test('skips del when no matching keys exist', async () => {
       mockRedis.scan.mockResolvedValueOnce(['0', []]);
 
-      await manager.invalidateCacheType('dimension', 'test', 'main');
+      await manager.invalidateCacheType('metadata', 'test', 'main');
 
       expect(mockRedis.del).not.toHaveBeenCalled();
     });
 
     test('handles all supported cache types without error', async () => {
-      const types = [
-        'metadata',
-        'dimension',
-        'dimensionValue',
-        'facts',
-        'aggregatedFacts',
-        'selectOptions',
-      ];
+      const types = ['metadata', 'facts', 'aggregatedFacts', 'selectOptions'];
       for (const type of types) {
         mockRedis.scan.mockResolvedValueOnce(['0', []]);
         await expect(manager.invalidateCacheType(type, 'main', 'main')).resolves.not.toThrow();
@@ -490,32 +522,37 @@ describe('CacheInvalidationManager', () => {
   describe('getCacheStats', () => {
     test('returns nested catalog → schema → type counts', async () => {
       // 3 catalogues : main a 2 schémas (main, analytics), les autres 1 (main)
-      // Donc 4 (schema, catalog) combinaisons × 6 types = 24 appels scan
+      // Donc 4 (schema, catalog) combinaisons × 7 types = 28 appels scan
       // Ordre des schémas dans main : main puis analytics (cf. defaultSchemasByCatalog)
-      // Ordre des types : metadata, dimension, dimensionValue, facts, aggregatedFacts, selectOptions
+      // Ordre des types : metadata, catalogMetadata, datasetInfo, facts,
+      // aggregatedFacts, selectOptions, fieldStats
       const scanResults: [string, string[]][] = [
-        // main / main : 2, 1, 0, 3, 0, 1
+        // main / main : 2, 1, 1, 3, 0, 1, 2
         ['0', ['m1', 'm2']],
-        ['0', ['d1']],
-        ['0', []],
+        ['0', ['cm1']],
+        ['0', ['di1']],
         ['0', ['f1', 'f2', 'f3']],
         ['0', []],
         ['0', ['s1']],
-        // main / analytics : 0, 0, 0, 4, 0, 0
+        ['0', ['fs1', 'fs2']],
+        // main / analytics : 0, 0, 0, 4, 0, 0, 0
         ['0', []],
         ['0', []],
         ['0', []],
         ['0', ['f10', 'f11', 'f12', 'f13']],
         ['0', []],
         ['0', []],
-        // test / main : 1, 0, 0, 1, 0, 0
+        ['0', []],
+        // test / main : 1, 0, 0, 1, 0, 0, 0
         ['0', ['m3']],
         ['0', []],
         ['0', []],
         ['0', ['f4']],
         ['0', []],
         ['0', []],
+        ['0', []],
         // analytics / main : tout à 0
+        ['0', []],
         ['0', []],
         ['0', []],
         ['0', []],
@@ -533,44 +570,48 @@ describe('CacheInvalidationManager', () => {
         main: {
           main: {
             metadata: 2,
-            dimension: 1,
-            dimensionValue: 0,
+            catalogMetadata: 1,
+            datasetInfo: 1,
             facts: 3,
             aggregatedFacts: 0,
             selectOptions: 1,
+            fieldStats: 2,
           },
           analytics: {
             metadata: 0,
-            dimension: 0,
-            dimensionValue: 0,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 4,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
         test: {
           main: {
             metadata: 1,
-            dimension: 0,
-            dimensionValue: 0,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 1,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
         analytics: {
           main: {
             metadata: 0,
-            dimension: 0,
-            dimensionValue: 0,
+            catalogMetadata: 0,
+            datasetInfo: 0,
             facts: 0,
             aggregatedFacts: 0,
             selectOptions: 0,
+            fieldStats: 0,
           },
         },
       });
-      // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 6 types)
-      expect(mockRedis.scan).toHaveBeenCalledTimes(24);
+      // Vérifie qu'on a bien sondé chaque schéma de chaque catalogue (4 paires × 7 types)
+      expect(mockRedis.scan).toHaveBeenCalledTimes(28);
     });
 
     test('uses databaseManager.getSchemas to enumerate per-catalog schemas', async () => {
@@ -813,16 +854,12 @@ describe('createCacheInvalidationRoutes', () => {
         main: {
           main: {
             metadata: 2,
-            dimension: 0,
-            dimensionValue: 0,
             facts: 5,
             aggregatedFacts: 1,
             selectOptions: 0,
           },
           analytics: {
             metadata: 0,
-            dimension: 0,
-            dimensionValue: 0,
             facts: 3,
             aggregatedFacts: 0,
             selectOptions: 0,
@@ -869,7 +906,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
 
     const ops = [
       manager.invalidateCacheType('metadata', 'main', 'main'),
-      manager.invalidateCacheType('dimension', 'test', 'main'),
+      manager.invalidateCacheType('metadata', 'test', 'main'),
       manager.invalidateCacheType('facts', 'analytics', 'main'),
     ];
 
@@ -885,7 +922,7 @@ describe('CacheInvalidationManager — additional scenarios', () => {
     await manager.invalidateCatalog('main', 'analytics');
 
     // Le motif cible un seul schéma — le SCAN ne ramène pas le schéma "main"
-    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics:*', 'COUNT', 100);
+    expect(mockRedis.scan).toHaveBeenCalledWith('0', 'MATCH', '*:main:analytics@*:*', 'COUNT', 100);
     expect(mockRedis.del).toHaveBeenCalledWith(...keysToDelete);
   });
 

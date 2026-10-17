@@ -19,7 +19,7 @@ interface MockResponse {
 
 /** Requête HTTP mockée — simulation de req.headers. */
 interface MockRequest {
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
 }
 
 /** Module admin-auth.js après import dynamique. */
@@ -42,7 +42,7 @@ describe('requireAdminKey middleware', () => {
   const next: jest.Mock = jest.fn();
 
   // Constructeurs de stubs légers pour req et res
-  const makeReq = (headers: Record<string, string> = {}): MockRequest => ({ headers });
+  const makeReq = (headers: Record<string, string | string[]> = {}): MockRequest => ({ headers });
   const makeRes = (): MockResponse => {
     const res = { status: jest.fn(), json: jest.fn() } as MockResponse;
     (res.status as jest.Mock).mockReturnValue(res);
@@ -79,6 +79,25 @@ describe('requireAdminKey middleware', () => {
     process.env.ADMIN_API_KEY = 'secret';
     const res = makeRes();
     requireAdminKey(makeReq({ 'x-admin-key': 'wrong' }), res, next);
+
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 without throwing when the key length differs', () => {
+    process.env.ADMIN_API_KEY = 'secret';
+    for (const provided of ['', 's', 'secret-but-much-longer-than-the-real-one']) {
+      const res = makeRes();
+      expect(() => requireAdminKey(makeReq({ 'x-admin-key': provided }), res, next)).not.toThrow();
+      expect(res.status).toHaveBeenCalledWith(401);
+    }
+    expect(next).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when x-admin-key is repeated (array header)', () => {
+    process.env.ADMIN_API_KEY = 'secret';
+    const res = makeRes();
+    requireAdminKey(makeReq({ 'x-admin-key': ['secret', 'secret'] }), res, next);
 
     expect(res.status).toHaveBeenCalledWith(401);
     expect(next).not.toHaveBeenCalled();

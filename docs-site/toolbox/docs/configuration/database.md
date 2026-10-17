@@ -1,0 +1,162 @@
+---
+title: database.yaml
+sidebar_position: 3
+---
+
+# `config/database.yaml`
+
+Defines the DuckLake catalogs the API serves and the connection pool settings.
+
+## Catalogs
+
+```yaml
+CATALOGS:
+  default:
+    PATH: ${DEFAULT_CATALOG_PATH:-../dashboard-template-database/outputs/default.ducklake}
+    DATA_PATH: ${DEFAULT_DATA_PATH:-../dashboard-template-database/outputs/default_data/}
+    READ_ONLY: ${DEFAULT_READ_ONLY:-true}
+    SCHEMAS: ${DEFAULT_SCHEMAS:-}
+  macroeconomics:
+    PATH: ${MACROECONOMICS_CATALOG_PATH:-...}
+    DATA_PATH: ${MACROECONOMICS_DATA_PATH:-...}
+    READ_ONLY: ${MACROECONOMICS_READ_ONLY:-true}
+    SCHEMAS: ${MACROECONOMICS_SCHEMAS:-}
+  public_finance:
+    PATH: ${PUBLIC_FINANCE_CATALOG_PATH:-...}
+    DATA_PATH: ${PUBLIC_FINANCE_DATA_PATH:-...}
+    READ_ONLY: ${PUBLIC_FINANCE_READ_ONLY:-true}
+    SCHEMAS: ${PUBLIC_FINANCE_SCHEMAS:-}
+```
+
+Each catalog entry takes:
+
+| Key         | Description                                                                                                                                                                                                                                        |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PATH`      | Path to the `.ducklake` catalog file                                                                                                                                                                                                               |
+| `DATA_PATH` | Path to the associated data directory                                                                                                                                                                                                              |
+| `READ_ONLY` | Should always be `true` in production                                                                                                                                                                                                              |
+| `SCHEMAS`   | Optional allow-list of the schemas to serve. Empty or absent (the default): every schema of the catalog is served. Otherwise a YAML list or a JSON-encoded string from an env var; the first element is the default when a request omits `schema`. |
+
+### Adding a catalog
+
+1. Add a new key under `CATALOGS` in `config/database.yaml`
+2. Set the path env vars or hardcode the paths
+3. Restart the server — the new catalog will be registered automatically
+
+### Multi-schema catalogs
+
+A catalog can host **one or several schemas**. By default the API serves all of
+them: nothing has to be declared, and a schema added to the catalog by the
+updater is served by every pod within one freshness probe interval (a dropped one
+disappears the same way), without any call. `SCHEMAS` is only an allow-list, for a
+catalog that holds schemas you do not want to expose.
+
+```yaml
+CATALOGS:
+  default:
+    PATH: ...
+    DATA_PATH: ...
+    SCHEMAS: ['main', 'staging'] # optional; 'main' is then the default
+```
+
+How the API treats `SCHEMAS`:
+
+1. **At startup and at every reload** the API queries `information_schema.schemata`
+   on the live DuckLake instance to discover what each catalog actually exposes. The
+   freshness probe runs the same query on its own instance and applies the same
+   reconciliation: when the result differs from the served list, the pod reloads.
+2. If `SCHEMAS` is **absent or empty** (the default: an unset `<NAME>_SCHEMAS`
+   variable is the same as an empty one), the discovered list is adopted: `main`
+   first, which makes it the default schema, then the others alphabetically
+   (falls back to `["main"]` when discovery returns nothing).
+3. If `SCHEMAS` is **set**, it acts as an **allow-list**: only the
+   intersection (configured ∩ discovered) is exposed. Configured-but-missing
+   schemas trigger a warning in the logs and are simply ignored at runtime.
+4. Whatever the list, `getCatalogs` only exposes the schemas whose
+   `dataset_metadata.schema_version` is supported. A schema in another format, or
+   without a `dataset_metadata` table, is **warned about in the logs when the
+   catalog is attached** and left out of `getCatalogs`; a query that targets it
+   explicitly fails with `SCHEMA_VERSION_UNSUPPORTED` (rather than "unknown
+   schema"). The default schema of a catalog is its first supported schema.
+
+Routing in resolvers:
+
+- GraphQL argument: `getFactTable(catalog: "default", schema: "staging") { … }`
+- HTTP header: `X-Schema-ID: staging` (paired with `X-Catalog-ID`)
+- The schema argument is validated against the per-catalog allow-list — an
+  unknown schema returns a `GraphQLError` with the list of allowed values.
+
+Reload semantics: after every reload — automatic (catalog freshness probe),
+`POST /api/catalog/reload` or `POST /api/catalog/reload/{name}` — the discovery
+query is re-run, the allow-list is re-reconciled and the data versions are
+re-read. No restart needed.
+
+## Routing
+
+```yaml
+CATALOG_ROUTING:
+  DEFAULT_CATALOG: ${DEFAULT_CATALOG:-default}
+  ALLOWED_CATALOGS: ${ALLOWED_CATALOGS:-}
+  ALLOW_CROSS_CATALOG_QUERIES: ${ALLOW_CROSS_CATALOG_QUERIES:-false}
+```
+
+| Key                           | Default                 | Description                                                                                                           |
+| ----------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_CATALOG`             | `default`               | Catalog used when no `catalog` argument or header is provided                                                         |
+| `ALLOWED_CATALOGS`            | every key of `CATALOGS` | Whitelist of catalog IDs that can be queried. Empty or absent: all the catalogs of `CATALOGS`; a JSON list narrows it |
+| `ALLOW_CROSS_CATALOG_QUERIES` | `false`                 | Enable `compareFacts` / `compareAggregatedFacts`                                                                      |
+
+:::tip
+Set `ALLOW_CROSS_CATALOG_QUERIES=true` to enable the cross-catalog comparison queries.
+:::
+
+## Connection pool
+
+```yaml
+DATABASE:
+  POOL:
+    MAX_CONNECTIONS: ${DB_MAX_CONNECTIONS:-5}
+    ACQUIRE_TIMEOUT: ${DB_ACQUIRE_TIMEOUT:-60000}
+    POOL_RETRY_DELAY: ${DB_POOL_RETRY_DELAY:-500}
+```
+
+| Key                | Default     | Description                                                 |
+| ------------------ | ----------- | ----------------------------------------------------------- |
+| `MAX_CONNECTIONS`  | `5`         | Hard cap on open DuckDB connections of the shared pool      |
+| `ACQUIRE_TIMEOUT`  | `60 000 ms` | Maximum wait in the FIFO queue for a connection             |
+| `POOL_RETRY_DELAY` | `500 ms`    | Polling interval of the drain that follows a catalog reload |
+
+Acquisition does not poll: a caller that finds the pool full joins a FIFO
+queue and receives the next released connection directly. The queue length
+and the acquisition waits are reported under `database` in `/metrics`
+(`waiting`, `acquire.waitMs.{avg,p95,max}`, `acquire.timeouts`).
+
+## Catalog freshness
+
+```yaml
+CATALOG_FRESHNESS:
+  ENABLED: ${CATALOG_FRESHNESS_ENABLED:-true}
+  INTERVAL_MS: ${CATALOG_FRESHNESS_INTERVAL_MS:-60000}
+```
+
+| Key           | Default     | Description                                                                                                   |
+| ------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
+| `ENABLED`     | `true`      | Each pod probes its catalogs and reloads itself when `dataset_metadata.updated_at` or the schema list changed |
+| `INTERVAL_MS` | `60 000 ms` | Interval between two probes: the maximum delay before a pod sees an update (plus reload)                      |
+
+With the probe enabled, a catalog update reaches every replica without any call from the
+updater, and the Redis keys switch to the new data version. Disable it only for a single
+replica that is reloaded explicitly. See [Data refresh](../deployment/data-refresh).
+
+## S3 storage (optional)
+
+```yaml
+S3:
+  ENABLED: ${S3_ENABLED:-false}
+  ACCESS_KEY: ${AWS_ACCESS_KEY_ID:-}
+  SECRET_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  REGION: ${AWS_REGION:-eu-west-1}
+  ENDPOINT: ${S3_ENDPOINT:-}
+```
+
+Set `S3_ENABLED=true` to enable DuckDB's S3 extension for reading data files hosted in object storage.
