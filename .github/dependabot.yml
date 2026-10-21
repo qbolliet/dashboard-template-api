@@ -17,6 +17,18 @@ updates:
     labels:
       - dependencies
       - docs
+    groups:
+      # react and react-dom must always share the exact same version
+      react:
+        patterns:
+          - 'react'
+          - 'react-dom'
+          - '@types/react'
+          - '@types/react-dom'
+      # Docusaurus packages are pinned to the same version
+      docusaurus:
+        patterns:
+          - '@docusaurus/*'
 
   - package-ecosystem: docker
     directory: '/'
