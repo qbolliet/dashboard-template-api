@@ -92,9 +92,9 @@ class RateLimiter {
   constructor(rateLimitConfig: Partial<Record<string, unknown>> = {}) {
     // Normalisation de la configuration avec les valeurs par défaut
     this.config = {
-      maxRequests: (rateLimitConfig['MAX_REQUESTS'] as number) ?? 100,
+      maxRequests: (rateLimitConfig['MAX_REQUESTS'] as number) ?? 1000,
       windowMs: (rateLimitConfig['WINDOW_MS'] as number) ?? 15 * 60 * 1000,
-      maxBurstRequests: (rateLimitConfig['MAX_BURST_REQUESTS'] as number) ?? 20,
+      maxBurstRequests: (rateLimitConfig['MAX_BURST_REQUESTS'] as number) ?? 60,
       burstWindowMs: (rateLimitConfig['BURST_WINDOW_MS'] as number) ?? 60 * 1000,
       keyGenerator:
         (rateLimitConfig['KEY_GENERATOR'] as (req: HttpRequest) => string) ??

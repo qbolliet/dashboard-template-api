@@ -12,19 +12,19 @@ Controls all application-level security checks.
 ```yaml
 SECURITY:
   RATE_LIMIT:
-    MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+    MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1000}
     WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000} # 15 minutes
-    MAX_BURST_REQUESTS: ${RATE_LIMIT_BURST:-20}
+    MAX_BURST_REQUESTS: ${RATE_LIMIT_BURST:-60}
     BURST_WINDOW_MS: ${RATE_LIMIT_BURST_WINDOW:-60000} # 1 minute
     TRUSTED_PROXIES: ${TRUSTED_PROXIES:-[]}
 ```
 
 Two independent sliding windows are applied per client IP on `/graphql` and `/api/export` (one shared budget):
 
-| Window    | Default limit    | Purpose               |
-| --------- | ---------------- | --------------------- |
-| Sustained | 100 req / 15 min | Prevent data scraping |
-| Burst     | 20 req / 1 min   | Prevent sudden spikes |
+| Window    | Default limit     | Purpose               |
+| --------- | ----------------- | --------------------- |
+| Sustained | 1000 req / 15 min | Prevent data scraping |
+| Burst     | 60 req / 1 min    | Prevent sudden spikes |
 
 The client is identified by **its IP alone**. The User-Agent is not part of the key, so rotating it does not reset the budget. The flip side is that clients behind the same NAT share one budget.
 

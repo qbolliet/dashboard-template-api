@@ -20,10 +20,10 @@ The API exposes **only queries** (no mutations, no subscriptions). All DuckLake 
 
 Every client IP is subject to two sliding-window limits configured in `config/security.yaml`:
 
-| Limit          | Default          | Config key                                                   |
-| -------------- | ---------------- | ------------------------------------------------------------ |
-| Sustained rate | 100 req / 15 min | `SECURITY.RATE_LIMIT.MAX_REQUESTS` / `WINDOW_MS`             |
-| Burst rate     | 20 req / 1 min   | `SECURITY.RATE_LIMIT.MAX_BURST_REQUESTS` / `BURST_WINDOW_MS` |
+| Limit          | Default           | Config key                                                   |
+| -------------- | ----------------- | ------------------------------------------------------------ |
+| Sustained rate | 1000 req / 15 min | `SECURITY.RATE_LIMIT.MAX_REQUESTS` / `WINDOW_MS`             |
+| Burst rate     | 60 req / 1 min    | `SECURITY.RATE_LIMIT.MAX_BURST_REQUESTS` / `BURST_WINDOW_MS` |
 
 When a limit is hit the server returns HTTP `429 Too Many Requests`.
 
