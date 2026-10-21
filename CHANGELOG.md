@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/qbolliet/dashboard-template-api/compare/v0.3.0...v0.3.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* improve rate limits for frontend use ([5911a7e](https://github.com/qbolliet/dashboard-template-api/commit/5911a7e4a2dc9de5ccfc899dd6acc038ab9773e9))
+* react-dom version after react update ([5e3b5d2](https://github.com/qbolliet/dashboard-template-api/commit/5e3b5d22cfe074a51a42d2923bccd72232897e54))
+
 ## [0.3.0](https://github.com/qbolliet/dashboard-template-api/compare/v0.2.0...v0.3.0) (2026-10-17)
 
 
