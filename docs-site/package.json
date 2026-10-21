@@ -14,7 +14,7 @@
     "serve": "docusaurus serve --config docusaurus.config.api.ts --dir build/site"
   },
   "dependencies": {
-    "@docusaurus/core": "3.10.1",
+    "@docusaurus/core": "3.10.2",
     "@docusaurus/preset-classic": "3.10.1",
     "@graphql-markdown/docusaurus": "^1.35.0",
     "@graphql-tools/graphql-file-loader": "^8.0.20",
