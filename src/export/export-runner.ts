@@ -3,6 +3,7 @@ import { createReadStream } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
 import { once } from 'events';
+import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { RecordBatchStreamWriter } from 'apache-arrow';
 import type { Response } from 'express';
@@ -329,6 +330,24 @@ async function runArrowExport(ctx: ExportRunContext): Promise<number> {
     const prepared = await prepareBound(ctx.connection, ctx.query.sql, ctx.query.params);
     return prepared.stream();
   });
+  // DuckDB 2.0 : un résultat en flux non lu jusqu'au bout bloque sa connexion
+  // (rendue au pool ensuite) tant qu'il n'est pas fermé, d'où la fermeture
+  // systématique, abandon ou erreur compris
+  try {
+    return await streamArrowResult(ctx, result);
+  } finally {
+    result.closeSync();
+  }
+}
+
+/**
+ * Writes a streamed result to the response as Arrow IPC batches.
+ *
+ * @param ctx - Export context.
+ * @param result - Streamed result, closed by the caller.
+ * @returns The number of exported rows.
+ */
+async function streamArrowResult(ctx: ExportRunContext, result: DuckDBResult): Promise<number> {
   const layout = buildArrowLayout(
     result.columnNames(),
     result.columnTypes(),
@@ -337,7 +356,9 @@ async function runArrowExport(ctx: ExportRunContext): Promise<number> {
 
   ctx.sendHeaders(null);
   const writer = new RecordBatchStreamWriter();
-  const sent = pipeline(writer.toNodeStream(), ctx.res, { signal: ctx.signal });
+  // Readable.from plutôt que toNodeStream : sur un abandon, le flux d'apache-arrow
+  // laisse une promesse rejetée sans gestionnaire (unhandledRejection)
+  const sent = pipeline(Readable.from(writer), ctx.res, { signal: ctx.signal });
   // Gestionnaire immédiat : un abandon rejette `sent` avant qu'il ne soit attendu
   sent.catch(() => undefined);
 

@@ -3,7 +3,7 @@ import { BaseQueryLoader } from './base-loader.js';
 import { databaseManager } from '../db/index.js';
 import { assertSchemaSupported } from '../db/schema-version.js';
 import { config } from '../utils/config-loader.js';
-import { qualifiedTable } from '../utils/identifiers.js';
+import { qualifiedTable, SCHEMA_PATHS_CTE } from '../utils/identifiers.js';
 import { createContextLogger } from '../utils/logger.js';
 import {
   METADATA_SELECT,
@@ -16,10 +16,15 @@ import type { FieldMetadata } from '../utils/metadata-mapping.js';
 
 const catalogLogger = createContextLogger({ component: 'loaders', module: 'catalog' });
 
-// Position (1, 2, …) de chaque colonne de la table des faits d'un schéma
+// Position (1, 2, …) de chaque colonne de la table des faits d'un schéma ; le
+// schéma est comparé par son chemin complet, `duckdb_columns().schema_name` ne
+// portant que le dernier niveau d'un schéma imbriqué (`europe` pour `sales.europe`)
 const COLUMN_POSITIONS_SQL =
-  'SELECT column_name, column_index FROM duckdb_columns() ' +
-  "WHERE database_name = ? AND schema_name = ? AND table_name = 'fact_table'";
+  `${SCHEMA_PATHS_CTE} ` +
+  'SELECT c.column_name, c.column_index FROM duckdb_columns() c ' +
+  'JOIN schema_paths p ON c.schema_oid = p.schema_oid ' +
+  'WHERE p.parent_oid IS NULL AND c.database_name = ? AND p.schema_path = ? ' +
+  "AND c.table_name = 'fact_table'";
 
 // ─── Interfaces des résultats catalog ────────────────────────────────────────
 
@@ -140,5 +145,5 @@ const createCatalogMetadataLoader = () => {
   );
 };
 
-export { createCatalogMetadataLoader, CatalogMetadataLoader };
+export { createCatalogMetadataLoader, CatalogMetadataLoader, COLUMN_POSITIONS_SQL };
 export type { CatalogSchemaKey };

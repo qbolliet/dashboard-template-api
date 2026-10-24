@@ -30,6 +30,24 @@ const AGGREGATION_SQL: Readonly<Record<Aggregation, string>> = {
   MODE: 'MODE',
 };
 
+/**
+ * SQL expression of an aggregation over a quoted column.
+ *
+ * MODE is ordered by the column: among equally frequent values it returns the
+ * smallest one. Without it, DuckDB 2.0 picks any of them depending on the
+ * parallel scan, so the same query could return a different value from one
+ * call to the next (and differ between getAggregates and getAggregatedFacts).
+ *
+ * @param aggregation - Aggregation checked by GraphQL.
+ * @param column - Column already quoted.
+ * @returns The aggregate expression, without alias.
+ */
+// Expression SQL d'une agrégation, MODE départagé de façon déterministe
+function aggregateExpression(aggregation: Aggregation, column: string): string {
+  const fn = AGGREGATION_SQL[aggregation];
+  return aggregation === 'MODE' ? `${fn}(${column} ORDER BY ${column})` : `${fn}(${column})`;
+}
+
 // Agrégations admises par famille de type de la mesure ; la famille « other »
 // (TIME, INTERVAL, BLOB, LIST…) n'admet que celles qui valent pour tous les
 // types (MODE, COUNT)
@@ -90,4 +108,11 @@ function aggregatedValueFamily(
   return NUMERIC_RESULT.includes(aggregation) ? 'numeric' : measureFamily(sqlType);
 }
 
-export { AGGREGATIONS, AGGREGATION_SQL, measureFamily, allowedAggregations, aggregatedValueFamily };
+export {
+  AGGREGATIONS,
+  AGGREGATION_SQL,
+  aggregateExpression,
+  measureFamily,
+  allowedAggregations,
+  aggregatedValueFamily,
+};

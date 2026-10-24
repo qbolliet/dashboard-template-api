@@ -59,10 +59,19 @@ CATALOGS:
     SCHEMAS: ['main', 'staging'] # optional; 'main' is then the default
 ```
 
+**Nested schemas** (DuckLake 1.1, e.g. `CREATE SCHEMA lake.sales.europe`) are named by
+their full path, levels joined with a dot: `sales.europe`, in `SCHEMAS` as in the `schema`
+argument of the queries. A qualified table name reads the catalog before the first dot,
+the table after the last one and the schema in between (`"lake"."sales"."europe"."fact_table"`).
+A parent schema that only holds other schemas (`sales`) is discovered like any schema, and
+refused by the version guard as long as it has no `dataset_metadata`. A flat schema whose
+own name contains a dot (`CREATE SCHEMA lake."a.b"`) is read as a nested path and cannot be
+served.
+
 How the API treats `SCHEMAS`:
 
-1. **At startup and at every reload** the API queries `information_schema.schemata`
-   on the live DuckLake instance to discover what each catalog actually exposes. The
+1. **At startup and at every reload** the API queries `duckdb_schemas()` on the live
+   DuckLake instance to discover what each catalog actually exposes. The
    freshness probe runs the same query on its own instance and applies the same
    reconciliation: when the result differs from the served list, the pod reloads.
 2. If `SCHEMAS` is **absent or empty** (the default: an unset `<NAME>_SCHEMAS`

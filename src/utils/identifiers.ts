@@ -22,22 +22,51 @@ function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+/** Separator of the levels of a nested schema path (`sales.europe`). */
+const SCHEMA_PATH_SEPARATOR = '.';
+
 /**
  * Builds the fully qualified name of a DuckLake table.
  *
  * Catalog and schema come from allow-lists (configuration, discovery), the
- * table from a constant; all three are quoted all the same, so a schema whose
+ * table from a constant; every part is quoted all the same, so a schema whose
  * name is not a bare identifier still resolves.
  *
+ * The schema is a path: since DuckLake 1.1, schemas can be nested, and a
+ * nested schema is named by its levels joined with a dot (`sales.europe`, as
+ * reported by {@link SCHEMA_PATHS_CTE}). Each level is quoted on its own, so
+ * the qualified name reads: the catalog before the first dot, the table after
+ * the last one, the schema in between. A flat schema whose own name contains
+ * a dot is therefore read as a nested path, and cannot be served.
+ *
  * @param catalog - Catalog alias.
- * @param schema - Schema within the catalog.
+ * @param schema - Schema path within the catalog (`main`, `sales.europe`).
  * @param table - Table name (fact_table, metadata, dataset_metadata).
- * @returns `"catalog"."schema"."table"`.
+ * @returns `"catalog"."schema"."table"`, or `"catalog"."sales"."europe"."table"`.
  */
-// Nom qualifié d'une table : catalogue, schéma et table quotés
+// Nom qualifié d'une table : catalogue, niveaux du schéma et table quotés
 function qualifiedTable(catalog: string, schema: string, table: string): string {
-  return [catalog, schema, table].map(quoteIdent).join('.');
+  return [catalog, ...schema.split(SCHEMA_PATH_SEPARATOR), table].map(quoteIdent).join('.');
 }
+
+/**
+ * Recursive CTE `schema_paths` giving the full path of every schema of the
+ * attached databases.
+ *
+ * `duckdb_schemas()` and `information_schema.schemata` only report the last
+ * level of a nested schema (`europe` for `sales.europe`): the path is rebuilt
+ * by walking up `parent_schema_oid`. Columns: `database_name`, `schema_oid`,
+ * `parent_oid` and `schema_path`; only the rows with `parent_oid IS NULL`
+ * carry a complete path (the others are intermediate steps of the walk).
+ */
+// Chemin complet de chaque schéma, en remontant ses parents
+const SCHEMA_PATHS_CTE = `WITH RECURSIVE schema_paths(database_name, schema_oid, parent_oid, schema_path) AS (
+  SELECT database_name, oid, parent_schema_oid, schema_name FROM duckdb_schemas()
+  UNION ALL
+  SELECT p.database_name, p.schema_oid, s.parent_schema_oid,
+         s.schema_name || '${SCHEMA_PATH_SEPARATOR}' || p.schema_path
+  FROM schema_paths p JOIN duckdb_schemas() s ON s.oid = p.parent_oid
+)`;
 
 /**
  * Checks that every requested column is declared in the metadata table.
@@ -74,4 +103,4 @@ function assertColumns(
   }
 }
 
-export { quoteIdent, qualifiedTable, assertColumns };
+export { quoteIdent, qualifiedTable, assertColumns, SCHEMA_PATHS_CTE, SCHEMA_PATH_SEPARATOR };

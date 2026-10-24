@@ -34,6 +34,15 @@ describe('qualifiedTable', () => {
     expect(qualifiedTable('default', 'main', 'fact_table')).toBe('"default"."main"."fact_table"');
   });
 
+  test('un schéma imbriqué : catalogue avant le premier point, table après le dernier', () => {
+    expect(qualifiedTable('lake', 'sales.europe', 'fact_table')).toBe(
+      '"lake"."sales"."europe"."fact_table"',
+    );
+    expect(qualifiedTable('lake', 'sales.europe.west', 'metadata')).toBe(
+      '"lake"."sales"."europe"."west"."metadata"',
+    );
+  });
+
   test('un schéma au nom non réduit à un identifiant nu reste résoluble', () => {
     expect(qualifiedTable('cat"a', 'mon schéma', 'metadata')).toBe(
       '"cat""a"."mon schéma"."metadata"',

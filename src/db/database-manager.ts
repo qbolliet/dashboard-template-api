@@ -608,7 +608,7 @@ class DatabaseManager {
    * with {@link getSchemas} to detect an added or removed schema.
    *
    * @param catalogId - Catalog alias.
-   * @param discovered - Schemas reported by `information_schema.schemata` for it.
+   * @param discovered - Schemas discovered in it (nested ones by their full path).
    * @returns The schemas the catalog would serve, the first one being the default.
    */
   reconcileSchemas(catalogId: string, discovered: string[]): string[] {

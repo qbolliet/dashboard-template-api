@@ -1,7 +1,7 @@
 // Importation des modules
 import { DuckDBInstance, DuckDBConnection, DuckDBResult, Json } from '@duckdb/node-api';
 import { config } from '../utils/config-loader.js';
-import { quoteIdent } from '../utils/identifiers.js';
+import { quoteIdent, SCHEMA_PATHS_CTE } from '../utils/identifiers.js';
 import { computeExtents, jsonValueConverter } from './json-conversion.js';
 import type { ColumnExtent } from './json-conversion.js';
 import { createContextLogger } from '../utils/logger.js';
@@ -278,9 +278,11 @@ export const createConfiguredInstance = async (
 };
 
 /**
- * Lists the schemas of attached catalogs from `information_schema.schemata`.
+ * Lists the schemas of attached catalogs, nested ones by their full path.
  *
- * One query, filtering out the engine's internal schemas. It only reads the
+ * One query on `duckdb_schemas()` through {@link SCHEMA_PATHS_CTE}, filtering
+ * out the engine's internal schemas: a nested schema comes back as
+ * `sales.europe`, its parent `sales` as a schema of its own. It only reads the
  * DuckLake catalog metadata loaded by the ATTACH, never a data file. Shared by
  * the pool (schema discovery on the live instance) and the freshness probe
  * (the same discovery on its throw-away instance, under the probe aliases).
@@ -296,9 +298,10 @@ export const listCatalogSchemas = async (
   aliases: string[],
 ): Promise<Record<string, string[]>> => {
   const result = await conn.run(
-    `SELECT catalog_name, schema_name
-     FROM information_schema.schemata
-     WHERE schema_name NOT IN ('information_schema', 'pg_catalog')`,
+    `${SCHEMA_PATHS_CTE}
+     SELECT database_name AS catalog_name, schema_path AS schema_name
+     FROM schema_paths
+     WHERE parent_oid IS NULL AND schema_path NOT IN ('information_schema', 'pg_catalog')`,
   );
   const rows = await result.getRowObjectsJson();
 
@@ -559,8 +562,9 @@ class DuckDBPool {
   /**
    * Discover the list of schemas actually exposed by each attached catalog.
    *
-   * Runs a single query against `information_schema.schemata` on the live shared
-   * instance, filtering out the engine's internal schemas. The result is the
+   * Runs a single query on the live shared instance ({@link listCatalogSchemas}),
+   * filtering out the engine's internal schemas; nested schemas come back by
+   * their full path. The result is the
    * authoritative inventory of what DuckLake reports; the `DatabaseManager`
    * then reconciles it with the configured allow-list (intersection + warn for
    * configured-but-missing schemas).

@@ -61,9 +61,11 @@ const referenceRows = (
   measure: string,
   aggregation: string,
 ): Promise<Record<string, unknown>[]> =>
+  // MODE départagé par la valeur, comme getAggregates : sans ORDER BY, DuckDB 2.0
+  // rend n'importe lequel des ex-aequo selon le scan parallèle
   query(`
     SELECT ${quoteIdent(groupBy)} AS key,
-           ${aggregation}(${quoteIdent(measure)}) AS aggregatedValue,
+           ${aggregation}(${quoteIdent(measure)}${aggregation === 'MODE' ? ` ORDER BY ${quoteIdent(measure)}` : ''}) AS aggregatedValue,
            COUNT(*) AS count
     FROM ${qualifiedTable('default', schema, 'fact_table')}
     GROUP BY ${quoteIdent(groupBy)}
