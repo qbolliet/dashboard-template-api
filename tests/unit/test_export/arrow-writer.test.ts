@@ -45,10 +45,16 @@ const roundTrip = async (
   description?: ExportDescription,
 ): Promise<{ table: Table; batches: number }> => {
   const result = await connection.stream(sql);
-  const layout = buildArrowLayout(result.columnNames(), result.columnTypes(), description);
   const batches: RecordBatch[] = [];
-  for await (const chunk of result) {
-    if (chunk.rowCount > 0) batches.push(chunkToRecordBatch(chunk, layout));
+  let layout: ReturnType<typeof buildArrowLayout>;
+  // Fermeture du flux même sur un refus de conversion : sinon DuckDB 2.0 bloque la connexion
+  try {
+    layout = buildArrowLayout(result.columnNames(), result.columnTypes(), description);
+    for await (const chunk of result) {
+      if (chunk.rowCount > 0) batches.push(chunkToRecordBatch(chunk, layout));
+    }
+  } finally {
+    result.closeSync();
   }
   if (batches.length === 0) batches.push(emptyRecordBatch(layout));
   const bytes = RecordBatchStreamWriter.writeAll(batches).toUint8Array(true);

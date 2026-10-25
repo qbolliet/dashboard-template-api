@@ -1036,7 +1036,7 @@ describe('DuckDBPool', () => {
         retryDelay: 20,
       });
 
-    test('queries information_schema.schemata and filters out engine internals', async () => {
+    test('queries the full schema paths and filters out engine internals', async () => {
       const pool = makePool2Catalogs();
       mockQueryResult.getRowObjectsJson.mockResolvedValueOnce([
         { catalog_name: 'main', schema_name: 'main' },
@@ -1046,9 +1046,9 @@ describe('DuckDBPool', () => {
 
       const result = await pool.discoverCatalogSchemas();
 
-      // La requête SQL doit cibler information_schema.schemata et exclure les schémas internes
+      // La requête SQL doit reconstruire les chemins (schémas imbriqués) et exclure les schémas internes
       const sqlCalls = mockDuckConn.run.mock.calls.map(([sql]) => sql as string);
-      const discoverySql = sqlCalls.find((s) => s.includes('information_schema.schemata'));
+      const discoverySql = sqlCalls.find((s) => s.includes('schema_paths'));
       expect(discoverySql).toBeDefined();
       expect(discoverySql).toContain("'information_schema'");
       expect(discoverySql).toContain("'pg_catalog'");

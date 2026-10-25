@@ -1057,7 +1057,7 @@ async function setupTestData(): Promise<void> {
     try {
       await conn.run('LOAD ducklake;');
     } catch (_) {
-      await conn.run('FORCE INSTALL ducklake FROM community; LOAD ducklake;');
+      await conn.run('INSTALL ducklake FROM core; LOAD ducklake;');
     }
 
     // Catalogue par défaut

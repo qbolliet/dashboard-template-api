@@ -7,7 +7,7 @@ import { buildWhere, normalizeSqlType } from './filter-tree.js';
 import { resolveLabelField, typeFamilyOf } from './metadata-mapping.js';
 import {
   AGGREGATIONS,
-  AGGREGATION_SQL,
+  aggregateExpression,
   aggregatedValueFamily,
   allowedAggregations,
   measureFamily,
@@ -564,7 +564,7 @@ function buildAggregateSelect(
       ),
     ...aggregates.map(
       ({ measure, aggregation, alias }) =>
-        `${AGGREGATION_SQL[aggregation]}(${quoteIdent(measure)}) AS ${quoteIdent(alias)}`,
+        `${aggregateExpression(aggregation, quoteIdent(measure))} AS ${quoteIdent(alias)}`,
     ),
     ...(includeRowCount ? [`COUNT(*) AS ${quoteIdent(ROW_COUNT_COLUMN)}`] : []),
   ];

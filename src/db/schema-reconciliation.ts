@@ -23,7 +23,7 @@ interface SchemaReconciliation {
 /**
  * Orders discovered schemas: `main` first, the others alphabetically.
  *
- * `information_schema.schemata` gives no ordering guarantee, and the first
+ * The schema discovery gives no ordering guarantee, and the first
  * schema of the list is the default one.
  *
  * @param discovered - Schema names as reported by the engine.
@@ -53,7 +53,7 @@ function orderDiscovered(discovered: string[]): string[] {
  * (`DatabaseManager.initSchemas`) and the freshness probe both use it, so the
  * probe compares like with like and a fallback never looks like a change.
  *
- * @param discovered - Schemas reported by `information_schema.schemata` for the catalog.
+ * @param discovered - Schemas discovered in the catalog (nested ones by their full path).
  * @param policy - Configured list and whether it is an explicit allow-list.
  * @returns The schemas to serve, and the configured schemas that are missing.
  */
