@@ -152,7 +152,7 @@ describe('logGraphQLError', () => {
   test('logs an internal error once, as an error with the stack of its cause', () => {
     const log = spyLogger();
     const cause = new Error('Binder Error');
-    const error = new GraphQLError('Binder Error', { originalError: cause });
+    const error = new GraphQLError('Binder Error', { cause });
 
     logGraphQLError(log, error, 'id-5');
 

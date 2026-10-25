@@ -15,7 +15,14 @@ import {
   assertScalarType,
   isNonNullType,
   GraphQLFieldMap,
+  print,
 } from 'graphql';
+import type { GraphQLDefaultInput } from 'graphql';
+
+// Défaut SDL d'un argument ou d'un champ d'entrée, imprimé (graphql 17 : le
+// littéral est dans `default`, `defaultValue` reste indéfini)
+const sdlDefault = (input: { default?: GraphQLDefaultInput }): string | undefined =>
+  input.default?.literal ? print(input.default.literal) : undefined;
 
 // ─── Validité du schéma ───────────────────────────────────────────────────────
 
@@ -110,7 +117,7 @@ describe('Input types — common', () => {
 
     expect(String(fields.connector.type)).toBe('FilterConnector');
     expect(String(fields.negate.type)).toBe('Boolean');
-    expect(fields.negate.defaultValue).toBe(false);
+    expect(sdlDefault(fields.negate)).toBe('false');
     expect(String(fields.criterion.type)).toBe('FilterCriterion');
     expect(String(fields.children.type)).toBe('[FilterNode!]');
   });

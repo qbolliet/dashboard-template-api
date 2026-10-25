@@ -41,7 +41,7 @@ Rejects queries whose selection set nesting exceeds `MAX_QUERY_DEPTH` (7 in prod
 
 Run in Apollo's `didResolveOperation` hook, after validation and before any resolver: a rejected operation never reaches the database. Both answer HTTP `400`.
 
-- **Operation type** — only `query` operations run; a mutation or subscription gets `OPERATION_TYPE_NOT_ALLOWED`.
+- **Operation type** — only `query` operations run. The schema declaring no `Mutation` nor `Subscription` type, GraphQL.js 17 (`KnownOperationTypesRule`) already rejects them at validation (`GRAPHQL_VALIDATION_FAILED`); the `OPERATION_TYPE_NOT_ALLOWED` check of the security manager stays as defence in depth.
 - **Complexity** — see below; an over-budget operation gets `QUERY_COMPLEXITY_EXCEEDED`.
 
 ### Complexity scale (`src/security/complexity-analyzer.ts`)

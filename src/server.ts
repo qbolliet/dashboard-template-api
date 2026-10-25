@@ -150,11 +150,12 @@ function createApolloServer(
             // variable omise ou nulle n'apparaît pas dans opRequest.variables. Si la
             // coercion échoue, valeurs brutes : l'exécution rejettera la requête.
             const rawVariables = (opRequest.variables ?? {}) as Record<string, unknown>;
-            const { coerced } = getVariableValues(
+            const { variableValues } = getVariableValues(
               schema,
               operation.variableDefinitions ?? [],
               rawVariables,
             );
+            const coerced = variableValues?.coerced as Record<string, unknown> | undefined;
 
             // Nombre de colonnes (prix de Metadata.stats) lu par les loaders de
             // la requête : les resolvers réutilisent la même lecture

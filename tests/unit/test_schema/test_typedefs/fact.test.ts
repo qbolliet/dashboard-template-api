@@ -17,7 +17,14 @@ import {
   isNonNullType,
   isNamedType,
   GraphQLFieldMap,
+  print,
 } from 'graphql';
+import type { GraphQLDefaultInput } from 'graphql';
+
+// Défaut SDL d'un argument ou d'un champ d'entrée, imprimé (graphql 17 : le
+// littéral est dans `default`, `defaultValue` reste indéfini)
+const sdlDefault = (input: { default?: GraphQLDefaultInput }): string | undefined =>
+  input.default?.literal ? print(input.default.literal) : undefined;
 
 // Racine du dépôt, pour lire les sources des typedefs et le SDL versionné
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -236,7 +243,7 @@ describe('Query fields — fact', () => {
     expect(formatArg).toBeDefined();
 
     // Valeur par défaut du format de sérialisation
-    expect(formatArg!.defaultValue).toBe('OBJECTS');
+    expect(sdlDefault(formatArg!)).toBe('OBJECTS');
   });
 
   /**
@@ -268,9 +275,9 @@ describe('Query fields — fact', () => {
     expect(isNonNullType(arg('aggregates').type)).toBe(true);
     expect(String(arg('aggregates').type)).toBe('[AggregateInput!]!');
     expect(String(arg('groupBy').type)).toBe('[GroupByInput!]');
-    expect(arg('groupBy').defaultValue).toEqual([]);
-    expect(arg('format').defaultValue).toBe('OBJECTS');
-    expect(arg('includeRowCount').defaultValue).toBe(true);
+    expect(sdlDefault(arg('groupBy'))).toBe('[]');
+    expect(sdlDefault(arg('format'))).toBe('OBJECTS');
+    expect(sdlDefault(arg('includeRowCount'))).toBe('true');
     expect(isNonNullType(field.type)).toBe(true);
     expect(isNamedType(field.type) ? field.type.name : field.type.ofType?.name).toBe(
       'AggregateResult',

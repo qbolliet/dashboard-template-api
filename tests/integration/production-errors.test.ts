@@ -137,11 +137,16 @@ describe('/graphql en production', () => {
       expect(body.errors?.[0]?.message).toContain('mutation_rate');
     });
 
-    test('a mutation is refused by the operation-type check, with its message', async () => {
+    // graphql 17 (KnownOperationTypesRule) refuse l'opération dès la validation, le
+    // schéma n'ayant pas de type Mutation : le contrôle du type d'opération du
+    // SecurityManager reste une défense en profondeur
+    test('a mutation is refused at validation, with its message', async () => {
       const { status, body } = await post('mutation { getCatalogs { id } }');
       expect(status).toBe(400);
-      expect(body.errors?.[0]?.extensions?.code).toBe('OPERATION_TYPE_NOT_ALLOWED');
-      expect(body.errors?.[0]?.message).toBe('Only queries are allowed, got mutation');
+      expect(body.errors?.[0]?.extensions?.code).toBe('GRAPHQL_VALIDATION_FAILED');
+      expect(body.errors?.[0]?.message).toBe(
+        'The mutation operation is not supported by the schema.',
+      );
     });
 
     test('introspection is refused by Apollo (introspection: false)', async () => {

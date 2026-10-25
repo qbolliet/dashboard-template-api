@@ -45,7 +45,7 @@
   "author": "Quentin Bolliet",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "lint-staged": {
     "*.{js,ts}": [
@@ -67,7 +67,7 @@
     "dataloader": "^2.2.3",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
-    "graphql": "^16.14.0",
+    "graphql": "^17.0.2",
     "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.1",
     "uuid": "^14.0.0",
@@ -106,5 +106,10 @@
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.11.0",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "@apollo/server": {
+      "graphql": "$graphql"
+    }
   }
 }

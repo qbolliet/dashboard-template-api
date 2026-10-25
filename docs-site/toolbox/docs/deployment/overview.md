@@ -31,7 +31,7 @@ This section covers running the API in production. Three deployment modes are su
                 │  Deployment — N replicas (HPA 2..6)  │
                 │  ┌────────────────┐                  │
                 │  │ API container  │ /health /ready   │
-                │  │ Node 20        │ /metrics         │
+                │  │ Node 26        │ /metrics         │
                 │  └───────┬────────┘                  │
                 └──────────┼───────────────────────────┘
                            │

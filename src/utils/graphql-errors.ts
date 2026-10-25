@@ -107,7 +107,7 @@ function logGraphQLError(log: ContextLogger, error: unknown, errorId: string): v
     message?: string;
     path?: readonly (string | number)[];
     extensions?: Record<string, unknown>;
-    originalError?: Error;
+    cause?: { stack?: string };
     stack?: string;
   };
   const code = errorCodeOf(graphqlError.extensions);
@@ -118,7 +118,7 @@ function logGraphQLError(log: ContextLogger, error: unknown, errorId: string): v
   } else {
     log.error(`GraphQL error: ${graphqlError.message}`, error, {
       ...details,
-      stack: graphqlError.originalError?.stack ?? graphqlError.stack,
+      stack: graphqlError.cause?.stack ?? graphqlError.stack,
     });
   }
 }

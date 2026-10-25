@@ -38,7 +38,7 @@ function toLoaderError(error: unknown): Error {
     const [firstLine] = error.message.split('\n');
     return new GraphQLError(firstLine, {
       extensions: { code: 'BAD_USER_INPUT' },
-      originalError: error,
+      cause: error,
     });
   }
   return error;

@@ -8,12 +8,18 @@
 
 import { schema } from '../../../../src/schema/index.js';
 import { JSONScalar } from '../../../../src/schema/scalars.js';
-import { assertScalarType, parseValue as parseGraphQLValue } from 'graphql';
-import type { ValueNode } from 'graphql';
+import {
+  assertScalarType,
+  getVariableValues,
+  parse,
+  parseConstValue,
+  parseValue as parseGraphQLValue,
+  replaceVariables,
+} from 'graphql';
+import type { ConstValueNode, OperationDefinitionNode } from 'graphql';
 
-// Lecture d'un littéral GraphQL isolé
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const literal = (source: string): ValueNode => parseGraphQLValue(source) as any;
+// Lecture d'un littéral GraphQL constant isolé
+const literal = (source: string): ConstValueNode => parseConstValue(source);
 
 describe('JSON scalar', () => {
   /**
@@ -22,8 +28,8 @@ describe('JSON scalar', () => {
    */
   test('is registered on the executable schema', () => {
     const type = assertScalarType(schema.getType('JSON'));
-    expect(type.parseLiteral(literal('{k: [1]}'), {})).toEqual({ k: [1] });
-    expect(type.parseValue({ k: [1] })).toEqual({ k: [1] });
+    expect(type.coerceInputLiteral?.(literal('{k: [1]}'))).toEqual({ k: [1] });
+    expect(type.coerceInputValue({ k: [1] })).toEqual({ k: [1] });
   });
 
   /**
@@ -39,26 +45,50 @@ describe('JSON scalar', () => {
    */
   test('passes serialized and variable values through', () => {
     const value = { a: 1, b: ['x', null, true], c: '9007199254740993' };
-    expect(JSONScalar.serialize(value)).toBe(value);
-    expect(JSONScalar.parseValue(value)).toBe(value);
-    expect(JSONScalar.serialize(null)).toBeNull();
+    expect(JSONScalar.coerceOutputValue(value)).toBe(value);
+    expect(JSONScalar.coerceInputValue(value)).toBe(value);
+    expect(JSONScalar.coerceOutputValue(null)).toBeNull();
   });
 
   /**
-   * Inline literals are read as plain JSON, variables substituted.
+   * Inline literals are read as plain JSON.
    */
-  test('parses inline literals, substituting variables', () => {
-    expect(JSONScalar.parseLiteral(literal('{min: 1, max: 9.5}'), {})).toEqual({
+  test('parses inline literals', () => {
+    expect(JSONScalar.coerceInputLiteral?.(literal('{min: 1, max: 9.5}'))).toEqual({
       min: 1,
       max: 9.5,
     });
-    expect(JSONScalar.parseLiteral(literal('["a", 2, null, false]'), {})).toEqual([
+    expect(JSONScalar.coerceInputLiteral?.(literal('["a", 2, null, false]'))).toEqual([
       'a',
       2,
       null,
       false,
     ]);
-    expect(JSONScalar.parseLiteral(literal('"2024-03-05"'), {})).toBe('2024-03-05');
-    expect(JSONScalar.parseLiteral(literal('{min: $lo}'), { lo: 3 })).toEqual({ min: 3 });
+    expect(JSONScalar.coerceInputLiteral?.(literal('"2024-03-05"'))).toBe('2024-03-05');
+  });
+
+  /**
+   * Variables nested in a literal are substituted by GraphQL.js (replaceVariables)
+   * before the scalar reads it.
+   */
+  test('reads literals once their variables are substituted', () => {
+    const operation = parse('query ($lo: Int) { __typename }')
+      .definitions[0] as OperationDefinitionNode;
+    const { variableValues } = getVariableValues(schema, operation.variableDefinitions ?? [], {
+      lo: 3,
+    });
+    const node = replaceVariables(parseGraphQLValue('{min: $lo}'), variableValues);
+    expect(JSONScalar.coerceInputLiteral?.(node)).toEqual({ min: 3 });
+  });
+
+  /**
+   * The deprecated hooks (removed in graphql 18) stay derived from the new ones.
+   */
+  test('keeps the deprecated hooks working', () => {
+    expect(JSONScalar.serialize({ k: 1 })).toEqual({ k: 1 });
+    expect(JSONScalar.parseValue({ k: 1 })).toEqual({ k: 1 });
+    expect(JSONScalar.parseLiteral(parseGraphQLValue('{min: $lo}'), { lo: 3 })).toEqual({
+      min: 3,
+    });
   });
 });
