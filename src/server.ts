@@ -38,6 +38,7 @@ import { createCatalogRoutes } from './db/catalog-routes.js';
 import { catalogFreshnessMonitor } from './db/catalog-freshness.js';
 import { createExportRoutes } from './export/export-routes.js';
 import { formatGraphQLError, logGraphQLError } from './utils/graphql-errors.js';
+import { GraphQLTracing } from './utils/graphql-tracing.js';
 import { createShutdown, drainBudgetMs } from './shutdown.js';
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
@@ -216,7 +217,9 @@ function createApolloServer(
     // Introspection : autorisée en développement seulement (NoIntrospection d'Apollo sinon)
     introspection: overrides.introspection ?? config.API.GRAPHQL.INTROSPECTION,
     // Formatage des erreurs : message conservé pour une erreur client, masqué
-    // en production pour une erreur interne ; errorId toujours présent
+    // en production pour une erreur interne ; errorId toujours présent ;
+    // suggestions « Did you mean » retirées si API.GRAPHQL.HIDE_SCHEMA_DETAILS
+    // (plutôt que hideSchemaDetailsFromClientErrors d'Apollo, limité à la validation)
     formatError: (formattedError, error) => {
       // Identifiant posé (et journalisé) par didEncounterErrors ; à défaut —
       // erreur levée hors du pipeline de la requête —, généré et journalisé ici
@@ -228,6 +231,7 @@ function createApolloServer(
       return formatGraphQLError(formattedError, {
         errorId,
         production: config.ENVIRONMENT === 'production',
+        hideSchemaDetails: config.API.GRAPHQL.HIDE_SCHEMA_DETAILS ?? false,
       });
     },
     // Règles de validation ajoutées à celles d'Apollo : profondeur maximale
@@ -379,6 +383,13 @@ async function startServer(): Promise<void> {
     maxStoredTimes: 1000,
   };
 
+  // Durées des phases GraphQL.js (parse, validate, execute) et, sur option, des
+  // resolvers, lues sur ses canaux node:diagnostics_channel (graphql 17)
+  const graphqlTracing = new GraphQLTracing({
+    resolvers: config.API.GRAPHQL.TRACE_RESOLVERS === true,
+  });
+  graphqlTracing.enable();
+
   // GET /health — vérification de la disponibilité du serveur
   app.get('/health', (_req: Request, res: Response): void => {
     res.json({
@@ -445,6 +456,7 @@ async function startServer(): Promise<void> {
             : '0',
       },
       responseTime: { avg, p95, p99, samples: times.length },
+      graphql: graphqlTracing.snapshot(),
       database: dbStats.sharedPool,
       // Dernier marqueur vu et date de la dernière sonde, par schéma
       catalogFreshness: catalogFreshnessMonitor.getStatus(),
@@ -522,6 +534,7 @@ async function startServer(): Promise<void> {
       { name: 'database pool', close: () => closeAllConnections() },
       { name: 'security manager', close: () => securityManager.cleanup() },
       { name: 'redis', close: () => redis.quit() },
+      { name: 'graphql tracing', close: () => graphqlTracing.disable() },
     ],
   });
   shutdown = currentShutdown;

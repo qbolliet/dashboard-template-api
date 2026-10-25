@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "start:prod": "node dist/index.js",
-    "dev": "tsx watch src/index.js",
+    "dev": "tsx watch --conditions=development src/index.js",
     "build": "tsc",
     "type:check": "tsc --noEmit",
     "lint": "eslint src/ --ext .ts,.js",

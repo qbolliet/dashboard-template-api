@@ -63,12 +63,12 @@ The server starts with auto-reload via `tsx watch`. The API is available at **ht
 
 ## Available endpoints
 
-| Endpoint   | Method | Description                                                                     |
-| ---------- | ------ | ------------------------------------------------------------------------------- |
-| `/graphql` | POST   | GraphQL endpoint                                                                |
-| `/health`  | GET    | Liveness probe — returns `{ status: "ok" }`                                     |
-| `/ready`   | GET    | Readiness probe — DB + Redis; minimal body, `503` on shutdown                   |
-| `/metrics` | GET    | Performance metrics (p95/p99, error rate, memory) — `x-admin-key` or allowed IP |
+| Endpoint   | Method | Description                                                                                              |
+| ---------- | ------ | -------------------------------------------------------------------------------------------------------- |
+| `/graphql` | POST   | GraphQL endpoint                                                                                         |
+| `/health`  | GET    | Liveness probe — returns `{ status: "ok" }`                                                              |
+| `/ready`   | GET    | Readiness probe — DB + Redis; minimal body, `503` on shutdown                                            |
+| `/metrics` | GET    | Performance metrics (p95/p99, error rate, GraphQL phase durations, memory) — `x-admin-key` or allowed IP |
 
 ## Production build
 

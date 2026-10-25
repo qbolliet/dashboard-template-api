@@ -64,7 +64,7 @@ one by one: filter values are bound parameters, the size of a filter tree is bou
 `SECURITY.FILTER_TREE` (`MAX_CRITERIA`, `MAX_DEPTH`, `MAX_IN_VALUES`) and the whole body by
 `MAX_REQUEST_SIZE`. Error messages that echo a client value truncate it to 80 characters.
 
-## GraphQL introspection & playground
+## GraphQL introspection, playground & tracing
 
 ```yaml
 API:
@@ -75,9 +75,26 @@ API:
     PLAYGROUND:
       development: true
       production: false
+    HIDE_SCHEMA_DETAILS:
+      development: false
+      production: true
+    TRACE_RESOLVERS: ${GRAPHQL_TRACE_RESOLVERS:-false}
 ```
 
 Introspection and Apollo Sandbox are disabled in production by default to reduce the attack surface.
+
+`HIDE_SCHEMA_DETAILS` strips the GraphQL.js suggestions (`Did you mean "id"?`) from the
+messages sent to the client, so that a misspelled field, argument, enum value or input
+field does not reveal schema names while introspection is closed. It covers validation
+errors and variable coercion errors (which Apollo's `hideSchemaDetailsFromClientErrors`
+leaves untouched); the logs keep the full message.
+
+`/metrics` always reports the durations of the GraphQL.js phases (`graphql.phases.parse`,
+`validate`, `execute`: count, errors, mean and p95 in ms), read on the
+`node:diagnostics_channel` tracing channels of GraphQL.js 17. `TRACE_RESOLVERS: true` adds
+`graphql.resolvers`, the ten slowest custom resolvers (`Type.field`, count, errors, mean and
+max). GraphQL.js then publishes an event for every field of every response: enable it for a
+diagnosis rather than permanently.
 
 ## Pagination
 

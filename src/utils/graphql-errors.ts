@@ -32,6 +32,12 @@ const PUBLIC_ERROR_CODES: ReadonlySet<string> = new Set([
 // Message renvoyé à la place d'un message interne en production
 const MASKED_MESSAGE = 'An error occurred';
 
+// Suggestions de GraphQL.js (« Did you mean "id"? »), en fin de message ou au
+// milieu (coercion des variables : « … Did you mean "negate"? Found: … ») : elles
+// révèlent des noms du schéma (champs, arguments, types, valeurs d'enum), qui ne
+// contiennent jamais de « ? »
+const SUGGESTION_PATTERN = / ?Did you mean [^?]*\?/g;
+
 // ─── Utilitaires ─────────────────────────────────────────────────────────────
 
 /**
@@ -65,12 +71,17 @@ function isPublicErrorCode(code: string): boolean {
  * present, to be quoted when reporting a problem; the stack trace never is.
  *
  * @param formatted - Error formatted by Apollo Server.
- * @param options - Identifier of the error and environment.
+ * @param options - Identifier of the error, environment, and whether "Did you
+ *   mean" suggestions (schema names) are stripped from client messages.
  * @returns The error sent to the client.
  */
 function formatGraphQLError(
   formatted: GraphQLFormattedError,
-  { errorId, production }: { errorId: string; production: boolean },
+  {
+    errorId,
+    production,
+    hideSchemaDetails = false,
+  }: { errorId: string; production: boolean; hideSchemaDetails?: boolean },
 ): GraphQLFormattedError {
   const code = errorCodeOf(formatted.extensions);
 
@@ -83,8 +94,16 @@ function formatGraphQLError(
   const extensions: Record<string, unknown> = { ...formatted.extensions };
   delete extensions['stacktrace'];
 
+  // Suggestions retirées quand le schéma n'est pas public (introspection fermée) :
+  // validation comme coercion des variables, que le plugin d'Apollo
+  // (hideSchemaDetailsFromClientErrors) ne couvre pas. Le journal garde le
+  // message complet, écrit avant ce formatage
+  const message = hideSchemaDetails
+    ? formatted.message.replace(SUGGESTION_PATTERN, '')
+    : formatted.message;
+
   return {
-    message: formatted.message,
+    message,
     ...(formatted.locations ? { locations: formatted.locations } : {}),
     ...(formatted.path ? { path: formatted.path } : {}),
     extensions: { ...extensions, code, errorId },

@@ -112,6 +112,30 @@ describe('formatGraphQLError', () => {
     });
   });
 
+  describe('hideSchemaDetails', () => {
+    const suggested = (message: string): GraphQLFormattedError => ({
+      message,
+      extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+    });
+
+    test('strips the "Did you mean" suggestion of a client error', () => {
+      const result = formatGraphQLError(
+        suggested('Cannot query field "idd" on type "Catalog". Did you mean "id" or "ids"?'),
+        { errorId: 'id-6', production: true, hideSchemaDetails: true },
+      );
+      expect(result.message).toBe('Cannot query field "idd" on type "Catalog".');
+    });
+
+    test('keeps the suggestion when the schema is public', () => {
+      const message = 'Cannot query field "idd" on type "Catalog". Did you mean "id"?';
+      const result = formatGraphQLError(suggested(message), {
+        errorId: 'id-7',
+        production: false,
+      });
+      expect(result.message).toBe(message);
+    });
+  });
+
   test('never sends the stack trace of a client error', () => {
     const result = formatGraphQLError(formatted('BAD_USER_INPUT'), {
       errorId: 'id-3',
