@@ -691,6 +691,23 @@ describe('GET /api/export — errors', () => {
     expect(await eventually(() => gate.activeCount() === 0)).toBe(true);
   });
 
+  test.each(['csv', 'parquet', 'arrow'])(
+    'slot and temporary files are released before the client sees the end (%s)',
+    async (format) => {
+      // Un seul créneau : un client qui enchaîne les exports ne doit jamais se heurter au précédent
+      const { app, gate } = buildApp({ maxConcurrentPerIp: 1, maxConcurrentTotal: 1 });
+      const query = { catalog: 'default', schema: 'geography', format };
+
+      for (let i = 0; i < 5; i++) {
+        const res = await exportRequest(app, query);
+        expect(res.status).toBe(200);
+        // Sans attente : tout est déjà rendu à la réception de la réponse
+        expect(gate.activeCount()).toBe(0);
+        expect(leftovers()).toEqual([]);
+      }
+    },
+  );
+
   test('429 when the global ceiling is reached', async () => {
     const { app, gate } = buildApp({ maxConcurrentPerIp: 5, maxConcurrentTotal: 1 });
     const other = gate.tryAcquire('203.0.113.7');

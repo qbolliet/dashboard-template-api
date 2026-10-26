@@ -61,6 +61,13 @@ interface ExportRunContext {
    * it no longer needs DuckDB, and never uses `connection` afterwards.
    */
   releaseConnection: () => void;
+  /**
+   * Ends the response once the runner is done with everything it holds: gives the
+   * connection back, releases the concurrency slot and ends the response, with
+   * `tail` as its last bytes. Called after the cleanup and never on failure, where
+   * the route releases and reports the error itself.
+   */
+  finish: (tail?: Buffer) => void;
 }
 
 /** Format options of a csv / parquet export. */
@@ -197,6 +204,8 @@ async function runCopyExport(
 ): Promise<number> {
   await fs.mkdir(tmpDir, { recursive: true });
   const dir = await fs.mkdtemp(path.join(tmpDir, TMP_PREFIX));
+  let rowCount: number;
+  let tail: Buffer | undefined;
   try {
     const file = path.join(dir, `export.${FORMAT_SPECS[format].extension}`);
     // Chemin en « / » (accepté par DuckDB sur tous les OS) et échappé
@@ -217,16 +226,45 @@ async function runCopyExport(
     ctx.releaseConnection();
     throwIfAborted(ctx.signal);
 
-    const rowCount = Number(result.rowsChanged);
+    rowCount = Number(result.rowsChanged);
     const bom = format === 'csv' && options.bom === true;
     const { size } = await fs.stat(file);
     ctx.sendHeaders(rowCount, size + (bom ? UTF8_BOM.length : 0));
     if (bom) ctx.res.write(UTF8_BOM);
-    await pipeline(createReadStream(file), ctx.res, { signal: ctx.signal });
-    return rowCount;
+    // Le dernier octet est retenu : avec un Content-Length, le client considère la réponse
+    // terminée dès qu'il le reçoit, donc le nettoyage et la libération du créneau doivent
+    // le précéder (un client qui enchaîne les pages ne se heurte plus à son export précédent)
+    tail = await readLastByte(file, size);
+    if (size > 1) {
+      await pipeline(createReadStream(file, { end: size - 2 }), ctx.res, {
+        signal: ctx.signal,
+        end: false,
+      });
+    }
   } finally {
     // Nouvelles tentatives : sous Windows le descripteur peut se fermer avec retard
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+  ctx.finish(tail);
+  return rowCount;
+}
+
+/**
+ * Reads the last byte of a file.
+ *
+ * @param file - File path.
+ * @param size - File size in bytes.
+ * @returns The last byte, or undefined for an empty file.
+ */
+async function readLastByte(file: string, size: number): Promise<Buffer | undefined> {
+  if (size === 0) return undefined;
+  const handle = await fs.open(file, 'r');
+  try {
+    const byte = Buffer.alloc(1);
+    await handle.read(byte, 0, 1, size - 1);
+    return byte;
+  } finally {
+    await handle.close();
   }
 }
 
@@ -358,7 +396,8 @@ async function streamArrowResult(ctx: ExportRunContext, result: DuckDBResult): P
   const writer = new RecordBatchStreamWriter();
   // Readable.from plutôt que toNodeStream : sur un abandon, le flux d'apache-arrow
   // laisse une promesse rejetée sans gestionnaire (unhandledRejection)
-  const sent = pipeline(Readable.from(writer), ctx.res, { signal: ctx.signal });
+  // end: false : `finish` clôt la réponse une fois le créneau rendu
+  const sent = pipeline(Readable.from(writer), ctx.res, { signal: ctx.signal, end: false });
   // Gestionnaire immédiat : un abandon rejette `sent` avant qu'il ne soit attendu
   sent.catch(() => undefined);
 
@@ -379,6 +418,7 @@ async function streamArrowResult(ctx: ExportRunContext, result: DuckDBResult): P
     if (rowCount === 0) writer.write(emptyRecordBatch(layout));
     writer.close();
     await sent;
+    ctx.finish();
     return rowCount;
   } catch (error) {
     // Flux tronqué côté client (pas de marqueur de fin IPC) : c'est le signal d'erreur

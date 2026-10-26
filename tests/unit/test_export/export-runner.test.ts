@@ -68,21 +68,26 @@ const makeContext = (
   sql: string,
   signal: AbortSignal,
   res: Writable = new PassThrough().resume() as unknown as Writable,
-): { ctx: ExportRunContext; sendHeaders: jest.Mock; releaseConnection: jest.Mock } => {
+): {
+  ctx: ExportRunContext;
+  sendHeaders: jest.Mock;
+  releaseConnection: jest.Mock;
+  finish: jest.Mock;
+} => {
   const sendHeaders = jest.fn();
   const releaseConnection = jest.fn();
-  return {
-    ctx: {
-      connection,
-      query: { sql, params: [], description: DESCRIPTION } as unknown as ExportRunContext['query'],
-      res: res as unknown as Response,
-      signal,
-      sendHeaders: sendHeaders as unknown as ExportRunContext['sendHeaders'],
-      releaseConnection,
-    },
-    sendHeaders,
+  // Comme la route : clôt la réponse avec les derniers octets retenus par le runner
+  const finish = jest.fn((tail?: Buffer) => (ctx.res as unknown as Writable).end(tail));
+  const ctx: ExportRunContext = {
+    connection,
+    query: { sql, params: [], description: DESCRIPTION } as unknown as ExportRunContext['query'],
+    res: res as unknown as Response,
+    signal,
+    sendHeaders: sendHeaders as unknown as ExportRunContext['sendHeaders'],
     releaseConnection,
+    finish,
   };
+  return { ctx, sendHeaders, releaseConnection, finish };
 };
 
 /**
@@ -111,6 +116,37 @@ describe('runCopyExport', () => {
     // Taille exacte du fichier : « i\n0\n…9\n » = 2 + 10 × 2 octets
     expect(sendHeaders).toHaveBeenCalledWith(10, 22);
     expect(fs.readdirSync(tmpDir)).toEqual([]);
+  });
+
+  test('finish runs once the temporary directory is removed and holds back the last byte', async () => {
+    const chunks: Buffer[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _enc, done) {
+        chunks.push(chunk);
+        done();
+      },
+    });
+    const { ctx, finish } = makeContext(
+      'SELECT i FROM range(3) t(i)',
+      new AbortController().signal,
+      sink,
+    );
+    const stateAtFinish: { dirs: string[]; bytesBefore: number }[] = [];
+    finish.mockImplementation((tail?: Buffer) => {
+      stateAtFinish.push({
+        dirs: fs.readdirSync(tmpDir),
+        bytesBefore: Buffer.concat(chunks).length,
+      });
+      sink.end(tail);
+    });
+
+    await runCopyExport(ctx, 'csv', tmpDir);
+
+    expect(finish).toHaveBeenCalledTimes(1);
+    // « i\n0\n1\n2\n » = 8 octets : 7 avant finish, le dernier retenu, le dossier déjà supprimé
+    expect(stateAtFinish).toEqual([{ dirs: [], bytesBefore: 7 }]);
+    expect(finish.mock.calls[0][0]).toEqual(Buffer.from('\n'));
+    expect(Buffer.concat(chunks).toString()).toBe('i\n0\n1\n2\n');
   });
 
   test('bom prefixes the csv and is counted in the announced size', async () => {

@@ -315,6 +315,11 @@ const createExportRoutes = (
         res,
         signal: controller.signal,
         releaseConnection,
+        finish: (tail) => {
+          releaseConnection();
+          releaseSlot?.();
+          res.end(tail);
+        },
         sendHeaders: (rowCount, contentLength) => {
           // Premier octet : le budget de la requête cède la place à celui de l'envoi
           armTimer(
