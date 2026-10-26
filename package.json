@@ -25,7 +25,7 @@
     "codegen:check": "npm run codegen && node scripts/schema-check.mjs src/generated/graphql.ts npm run codegen",
     "docs:typedoc": "typedoc && node docs-site/scripts/dedupe-typedoc.mjs",
     "docs:schema": "npm run schema:generate && node docs-site/scripts/generate-schema.mjs",
-    "docs:graphql": "cross-env DOCUSAURUS_CLI_CONFIG=docusaurus.config.api.ts npm --prefix docs-site run graphql-to-doc",
+    "docs:graphql": "node docs-site/scripts/copy-doc-templates.mjs api && cross-env DOCUSAURUS_CLI_CONFIG=docusaurus.config.api.ts npm --prefix docs-site run graphql-to-doc",
     "docs:dictionary": "node docs-site/scripts/generate-data-dictionary.mjs",
     "docs:dictionary:test": "tsx scripts/with-test-api.ts -- node docs-site/scripts/generate-data-dictionary.mjs",
     "docs:build:toolbox": "npm run docs:typedoc && node docs-site/scripts/copy-doc-templates.mjs toolbox && npm --prefix docs-site run build:toolbox",
