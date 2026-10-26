@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/qbolliet/dashboard-template-api/compare/v0.3.0...v0.4.0) (2026-10-26)
+
+
+### Features
+
+* hide schema suggestions, trace GraphQL phases, run graphql in dev mode ([497c401](https://github.com/qbolliet/dashboard-template-api/commit/497c40168759e0c8ac932eb40571aa7926cf6553))
+
+
+### Bug Fixes
+
+* **docs:** create the data dictionary folder before graphql-to-doc ([305b816](https://github.com/qbolliet/dashboard-template-api/commit/305b81634b8e18bf6df45f059bdad01ea23b4daa))
+* **export:** release the slot and temp files before the response ends ([#69](https://github.com/qbolliet/dashboard-template-api/issues/69)) ([b554517](https://github.com/qbolliet/dashboard-template-api/commit/b55451753ed7d939f4b1844e5270d4c137c8f51b))
+* improve rate limits for frontend use ([5911a7e](https://github.com/qbolliet/dashboard-template-api/commit/5911a7e4a2dc9de5ccfc899dd6acc038ab9773e9))
+* react-dom version after react update ([5e3b5d2](https://github.com/qbolliet/dashboard-template-api/commit/5e3b5d22cfe074a51a42d2923bccd72232897e54))
+
 ## [0.3.0](https://github.com/qbolliet/dashboard-template-api/compare/v0.2.0...v0.3.0) (2026-10-17)
 
 
