@@ -1,0 +1,6 @@
+Ajouter une version d'apollo compatible avec graphql 17 et supprimer l'overwrites
+Ajouter un favicon à la doc + faire en sorte que le styling soit cohérent avec celui du frontend (idem pour database)
+Faire en sorte que la documentation graphQL voyager et graphql-markdown soit dans un site séparé déployable par le repo plateforme
+Codegen frontend. Pas de schéma GraphQL généré pour le client (Apollo Codegen, GraphQL Code Generator) — à publier en même temps que le schema.graphql pour faciliter l'adoption tierce.
+Format Arrow / Parquet stream. Pour des exports volumineux (>100k lignes), un endpoint REST Content-Type: application/vnd.apache.arrow.stream ferait gagner un ordre de grandeur sur la sérialisation/transfert vs JSON via GraphQL.
+Ajouter la possibilité d'avoir plusieurs opérations associées à plusieurs colonnes dans aggregated_facts, comme dans pandas.agg

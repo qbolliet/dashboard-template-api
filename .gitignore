@@ -42,5 +42,3 @@ CLAUDE.md
 
 # Dépendances Helm téléchargées
 helm/**/charts/*.tgz
-
-TODO
