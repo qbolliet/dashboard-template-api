@@ -31,6 +31,14 @@ API:
     PLAYGROUND:
       development: true
       production: false
+    # Suggestions « Did you mean … ? » retirées des erreurs renvoyées au client
+    # (noms du schéma) ; à garder aligné sur l'introspection fermée
+    HIDE_SCHEMA_DETAILS:
+      development: false
+      production: true
+    # Durées par resolver dans /metrics (canal graphql:resolve de GraphQL.js) :
+    # un événement par champ de chaque réponse, à activer pour un diagnostic
+    TRACE_RESOLVERS: ${GRAPHQL_TRACE_RESOLVERS:-false}
 
   COMPRESSION:
     ENABLED: true

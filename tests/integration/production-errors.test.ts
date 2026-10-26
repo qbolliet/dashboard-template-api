@@ -108,6 +108,30 @@ describe('/graphql en production', () => {
   test('runs with the production configuration', () => {
     expect(config.ENVIRONMENT).toBe('production');
     expect(config.API.GRAPHQL.INTROSPECTION).toBe(false);
+    expect(config.API.GRAPHQL.HIDE_SCHEMA_DETAILS).toBe(true);
+  });
+
+  // Introspection fermée : les suggestions « Did you mean » ne doivent pas
+  // révéler les noms du schéma, ni à la validation ni à la coercion des variables
+  describe('suggestions de noms du schéma retirées', () => {
+    test('a misspelled field is refused without suggesting the right name', async () => {
+      const { status, body } = await post('{ getCatalogs { idd } }');
+      expect(status).toBe(400);
+      expect(body.errors?.[0]?.extensions?.code).toBe('GRAPHQL_VALIDATION_FAILED');
+      expect(body.errors?.[0]?.message).toBe('Cannot query field "idd" on type "Catalog".');
+    });
+
+    test('a misspelled input field in a variable is refused without suggestion', async () => {
+      const { status, body } = await post(
+        'query F($f: FilterNode) { getFactTable(structuredFilters: $f, limit: 1) { total } }',
+        { f: { negat: true } },
+      );
+      expect(status).toBe(400);
+      const message = body.errors?.[0]?.message ?? '';
+      expect(message).toContain('negat');
+      expect(message).not.toMatch(/Did you mean/);
+      expect(message).not.toContain('"negate"');
+    });
   });
 
   describe('plus aucun motif appliqué au texte de la requête', () => {
@@ -137,11 +161,16 @@ describe('/graphql en production', () => {
       expect(body.errors?.[0]?.message).toContain('mutation_rate');
     });
 
-    test('a mutation is refused by the operation-type check, with its message', async () => {
+    // graphql 17 (KnownOperationTypesRule) refuse l'opération dès la validation, le
+    // schéma n'ayant pas de type Mutation : le contrôle du type d'opération du
+    // SecurityManager reste une défense en profondeur
+    test('a mutation is refused at validation, with its message', async () => {
       const { status, body } = await post('mutation { getCatalogs { id } }');
       expect(status).toBe(400);
-      expect(body.errors?.[0]?.extensions?.code).toBe('OPERATION_TYPE_NOT_ALLOWED');
-      expect(body.errors?.[0]?.message).toBe('Only queries are allowed, got mutation');
+      expect(body.errors?.[0]?.extensions?.code).toBe('GRAPHQL_VALIDATION_FAILED');
+      expect(body.errors?.[0]?.message).toBe(
+        'The mutation operation is not supported by the schema.',
+      );
     });
 
     test('introspection is refused by Apollo (introspection: false)', async () => {

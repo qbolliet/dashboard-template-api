@@ -112,6 +112,30 @@ describe('formatGraphQLError', () => {
     });
   });
 
+  describe('hideSchemaDetails', () => {
+    const suggested = (message: string): GraphQLFormattedError => ({
+      message,
+      extensions: { code: 'GRAPHQL_VALIDATION_FAILED' },
+    });
+
+    test('strips the "Did you mean" suggestion of a client error', () => {
+      const result = formatGraphQLError(
+        suggested('Cannot query field "idd" on type "Catalog". Did you mean "id" or "ids"?'),
+        { errorId: 'id-6', production: true, hideSchemaDetails: true },
+      );
+      expect(result.message).toBe('Cannot query field "idd" on type "Catalog".');
+    });
+
+    test('keeps the suggestion when the schema is public', () => {
+      const message = 'Cannot query field "idd" on type "Catalog". Did you mean "id"?';
+      const result = formatGraphQLError(suggested(message), {
+        errorId: 'id-7',
+        production: false,
+      });
+      expect(result.message).toBe(message);
+    });
+  });
+
   test('never sends the stack trace of a client error', () => {
     const result = formatGraphQLError(formatted('BAD_USER_INPUT'), {
       errorId: 'id-3',
@@ -152,7 +176,7 @@ describe('logGraphQLError', () => {
   test('logs an internal error once, as an error with the stack of its cause', () => {
     const log = spyLogger();
     const cause = new Error('Binder Error');
-    const error = new GraphQLError('Binder Error', { originalError: cause });
+    const error = new GraphQLError('Binder Error', { cause });
 
     logGraphQLError(log, error, 'id-5');
 

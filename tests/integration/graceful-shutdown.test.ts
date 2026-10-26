@@ -150,7 +150,11 @@ describe('Graceful shutdown (child process)', () => {
 
       const keyed = await get(server.port, '/metrics', { 'x-admin-key': 'shutdown-test-key' });
       expect(keyed.status).toBe(200);
-      expect(JSON.parse(keyed.body).requests).toBeDefined();
+      const metrics = JSON.parse(keyed.body);
+      expect(metrics.requests).toBeDefined();
+      // Durées des phases GraphQL.js lues sur ses canaux de tracing
+      expect(Object.keys(metrics.graphql.phases)).toEqual(['parse', 'validate', 'execute']);
+      expect(metrics.graphql.phases.execute).toMatchObject({ count: expect.any(Number) });
     },
     START_TIMEOUT_MS + 10_000,
   );

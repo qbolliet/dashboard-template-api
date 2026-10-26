@@ -61,9 +61,13 @@ export default {
   // Timeout pour les tests (utile pour les tests de base de données)
   testTimeout: 30000,
 
-  // Variables d'environnement pour les tests
+  // Variables d'environnement pour les tests ; condition d'export
+  // « development » : GraphQL.js 17 charge sa build __dev__, qui échoue
+  // bruyamment si deux instances de graphql coexistent (risque créé par
+  // l'override de package.json pour @apollo/server)
   testEnvironmentOptions: {
     NODE_ENV: 'test',
+    customExportConditions: ['node', 'node-addons', 'development'],
   },
 
   // Setup des tests

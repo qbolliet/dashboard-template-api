@@ -1,7 +1,8 @@
 // Importation des types GraphQL nécessaires à l'analyse AST
-import { valueFromASTUntyped } from 'graphql';
+import { coerceInputLiteral, coerceInputValue, valueFromASTUntyped } from 'graphql';
 import type {
   FieldNode,
+  GraphQLArgument,
   FragmentDefinitionNode,
   GraphQLSchema,
   InlineFragmentNode,
@@ -15,6 +16,25 @@ import type {
 import { createContextLogger } from '../utils/logger.js';
 import { config } from '../utils/config-loader.js';
 import type { ContextLogger } from '../utils/logger.js';
+
+// Valeur par défaut d'un argument du schéma
+/**
+ * Reads the coerced default value of a schema argument.
+ *
+ * Since graphql 17 the SDL default is stored as a literal in `arg.default`
+ * (`arg.defaultValue`, deprecated, stays undefined for SDL-built schemas).
+ *
+ * @param arg - Argument of a schema field.
+ * @returns The coerced default value, or undefined when the argument has none.
+ */
+function argumentDefaultOf(arg: GraphQLArgument): unknown {
+  if (!arg.default) {
+    return undefined;
+  }
+  return arg.default.literal
+    ? coerceInputLiteral(arg.default.literal, arg.type)
+    : coerceInputValue(arg.default.value, arg.type);
+}
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -358,8 +378,9 @@ class QueryComplexityAnalyzer {
       return undefined;
     }
     // Argument sans défaut SDL : taille de page par défaut de l'API
-    return typeof limitArg.defaultValue === 'number'
-      ? limitArg.defaultValue
+    const defaultLimit = argumentDefaultOf(limitArg);
+    return typeof defaultLimit === 'number'
+      ? defaultLimit
       : (config.API?.PAGINATION?.DEFAULT_LIMIT ?? 100);
   }
 

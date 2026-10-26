@@ -158,6 +158,10 @@ interface CompressionConfig {
 interface GraphqlConfig {
   INTROSPECTION: boolean;
   PLAYGROUND: boolean;
+  /** Strips the "Did you mean" suggestions (schema names) from client errors. */
+  HIDE_SCHEMA_DETAILS?: boolean;
+  /** Adds per-resolver durations to /metrics (graphql:resolve tracing channel). */
+  TRACE_RESOLVERS?: boolean;
 }
 
 /** DataLoader configuration (batch size and cache timeouts). */

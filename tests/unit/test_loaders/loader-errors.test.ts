@@ -40,7 +40,7 @@ describe('toLoaderError', () => {
     expect(mapped).toBeInstanceOf(GraphQLError);
     expect((mapped as GraphQLError).extensions.code).toBe('BAD_USER_INPUT');
     expect(mapped.message).toBe(firstLine);
-    expect((mapped as GraphQLError).originalError).toBe(original);
+    expect((mapped as GraphQLError).cause).toBe(original);
   });
 
   test.each([

@@ -48,7 +48,7 @@ describe('Query fields — select', () => {
     expect(isNonNullType(args.get('fieldName')!.type)).toBe(true);
     expect(isNonNullType(args.get('maxDepth')!.type)).toBe(false);
     // Pas de défaut SDL : maxDepth absent = toute la chaîne
-    expect(args.get('maxDepth')!.defaultValue).toBeUndefined();
+    expect(args.get('maxDepth')!.default).toBeUndefined();
 
     // Forme hiérarchique unique : scalaire JSON non nul
     expect(isNonNullType(field.type)).toBe(true);

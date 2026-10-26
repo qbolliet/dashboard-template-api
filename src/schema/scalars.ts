@@ -29,14 +29,16 @@ function jsonScalarDescription(): string | undefined {
  * layer (safe integers as numbers, larger ones as strings, ISO dates…), so the
  * scalar passes them through unchanged. Literals written inline in a query
  * (`value: {min: 1, max: 9}`) and variables are read as plain JSON, the
- * variables of the operation being substituted.
+ * variables of the operation being substituted by GraphQL.js before
+ * `coerceInputLiteral` (graphql 17 hooks; the deprecated `serialize`,
+ * `parseValue` and `parseLiteral` are derived from them).
  */
 const JSONScalar = new GraphQLScalarType<unknown, unknown>({
   name: 'JSON',
   description: jsonScalarDescription(),
-  serialize: (value: unknown): unknown => value,
-  parseValue: (value: unknown): unknown => value,
-  parseLiteral: (ast, variables): unknown => valueFromASTUntyped(ast, variables),
+  coerceOutputValue: (value: unknown): unknown => value,
+  coerceInputValue: (value: unknown): unknown => value,
+  coerceInputLiteral: (ast): unknown => valueFromASTUntyped(ast),
 });
 
 export { JSONScalar };

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "start:prod": "node dist/index.js",
-    "dev": "tsx watch src/index.js",
+    "dev": "tsx watch --conditions=development src/index.js",
     "build": "tsc",
     "type:check": "tsc --noEmit",
     "lint": "eslint src/ --ext .ts,.js",
@@ -25,7 +25,7 @@
     "codegen:check": "npm run codegen && node scripts/schema-check.mjs src/generated/graphql.ts npm run codegen",
     "docs:typedoc": "typedoc && node docs-site/scripts/dedupe-typedoc.mjs",
     "docs:schema": "npm run schema:generate && node docs-site/scripts/generate-schema.mjs",
-    "docs:graphql": "cross-env DOCUSAURUS_CLI_CONFIG=docusaurus.config.api.ts npm --prefix docs-site run graphql-to-doc",
+    "docs:graphql": "node docs-site/scripts/copy-doc-templates.mjs api && cross-env DOCUSAURUS_CLI_CONFIG=docusaurus.config.api.ts npm --prefix docs-site run graphql-to-doc",
     "docs:dictionary": "node docs-site/scripts/generate-data-dictionary.mjs",
     "docs:dictionary:test": "tsx scripts/with-test-api.ts -- node docs-site/scripts/generate-data-dictionary.mjs",
     "docs:build:toolbox": "npm run docs:typedoc && node docs-site/scripts/copy-doc-templates.mjs toolbox && npm --prefix docs-site run build:toolbox",
@@ -45,7 +45,7 @@
   "author": "Quentin Bolliet",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "lint-staged": {
     "*.{js,ts}": [
@@ -67,7 +67,7 @@
     "dataloader": "^2.2.3",
     "dotenv": "^16.4.7",
     "express": "^5.2.1",
-    "graphql": "^16.14.0",
+    "graphql": "^17.0.2",
     "graphql-tag": "^2.12.6",
     "ioredis": "^5.4.1",
     "uuid": "^14.0.0",
@@ -106,5 +106,10 @@
     "typedoc": "^0.28.19",
     "typedoc-plugin-markdown": "^4.11.0",
     "typescript": "^6.0.3"
+  },
+  "overrides": {
+    "@apollo/server": {
+      "graphql": "$graphql"
+    }
   }
 }
