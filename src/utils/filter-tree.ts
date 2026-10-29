@@ -912,6 +912,25 @@ function buildWhere(compiled: CompiledFilter | null | undefined): string {
 }
 
 /**
+ * Builds the predicate to append to a WHERE clause that already has a condition.
+ *
+ * The compiled root is not parenthesized (`a OR b` stays bare), so it is
+ * wrapped here: ANDed to the existing conditions it would otherwise bind
+ * only to its nearest operand.
+ *
+ * @param compiled - Compiled filter, or null/undefined when there is none.
+ * @returns ` AND (<predicate>)` with its parameters, or an empty fragment.
+ */
+// Prédicat à ajouter après une condition existante de la clause WHERE
+function buildFilterPredicate(compiled: CompiledFilter | null | undefined): {
+  sql: string;
+  params: unknown[];
+} {
+  if (!compiled || !compiled.sql) return { sql: '', params: [] };
+  return { sql: ` AND (${compiled.sql})`, params: compiled.params };
+}
+
+/**
  * Validates a filter tree, loads the metadata of its columns and compiles it.
  *
  * Structure and bounds are checked before any metadata lookup, so an abusive
@@ -960,6 +979,7 @@ export {
   collectFilterVariables,
   treeToSQL,
   buildWhere,
+  buildFilterPredicate,
   compileFilterTree,
 };
 export type {

@@ -451,6 +451,23 @@ export type Query = {
    * except for a code column with label columns (`Metadata.labelFields`):
    * `value` is the code (cast to text), `label` its label — the code itself
    * when the label is NULL. `searchTerm` then matches the code or the label.
+   *
+   * `structuredFilters` makes the menu depend on the other filters of the
+   * dashboard: the same `FilterNode` as `getFieldStats`, compiled into a
+   * parameterized WHERE clause. It restricts the rows read *before* the
+   * `SELECT DISTINCT`, so only the values held by at least one row satisfying
+   * the filter are returned; `searchTerm` and `limit` then apply to those
+   * values, unchanged. Absent or null: every row is read, exactly as without
+   * the argument. An invalid tree (unknown variable, operation not allowed on
+   * the column type, bound exceeded) is rejected with BAD_USER_INPUT, as on
+   * every query taking a `FilterNode`.
+   *
+   * Example: the communes of the region `Île-de-France` —
+   * `getSelectOptions(fieldName: "commune", schema: "geography",
+   * structuredFilters: { children: [{ criterion: { variable: "region",
+   * operation: EQ, value: "Île-de-France" } }] })` returns
+   * `[{ value: "Meaux", label: "Meaux" }, { value: "Melun", label: "Melun" },
+   * { value: "Paris", label: "Paris" }]`.
    */
   getSelectOptions: Array<SelectOption>;
   /**
@@ -484,9 +501,28 @@ export type Query = {
    * first by alphabetical order; use `getSelectOptions(labelField: …)` on the
    * leaf level for another label column.
    *
+   * `structuredFilters` (the `FilterNode` of `getFieldStats`, compiled into a
+   * parameterized WHERE clause) restricts the rows *before* the chain is walked
+   * up: only the branches holding at least one row that satisfies the filter
+   * are returned, the others are pruned. `searchTerm`, `maxDepth` and
+   * `labelField` rules apply to those rows, unchanged, and the node bound
+   * counts what is left after the filter. Absent or null: every row is read,
+   * exactly as without the argument. An invalid tree (unknown variable,
+   * operation not allowed on the column type…) is rejected with BAD_USER_INPUT.
+   *
+   * Example on the chain `region → departement → commune`:
+   * `getSelectOptionsTree(fieldName: "commune", structuredFilters: { children:
+   * [{ criterion: { variable: "is_urban", operation: IS_TRUE } }] })` keeps
+   * the urban rows only and returns `[{ value: "Bourgogne-Franche-Comté",
+   * label: "Bourgogne-Franche-Comté", children: [{ value: "Côte-d'Or",
+   * label: "Côte-d'Or", children: [{ value: "Dijon", label: "Dijon" }] }] },
+   * …]` — the other communes, and the departements left without any, are
+   * pruned.
+   *
    * Trees larger than the configured node bound (API.SELECT_OPTIONS.TREE_MAX_NODES)
    * are rejected with BAD_USER_INPUT, never truncated: narrow them with
-   * `searchTerm` or `maxDepth`, or use `getSelectOptions` on the leaf level.
+   * `searchTerm`, `maxDepth` or `structuredFilters`, or use `getSelectOptions`
+   * on the leaf level.
    */
   getSelectOptionsTree: Scalars['JSON']['output'];
   /** Retourne les champs communs à plusieurs paires (catalogue, schéma) — utile pour choisir les joinFields d'une requête cross-catalog. Seules les colonnes CATÉGORIELLES présentes dans toutes les cibles sous le même nom et avec la même famille de type SQL (numérique, date, texte, booléen) sont retournées ; les colonnes de libellés sont exclues (la jointure porte sur le code). */
@@ -612,6 +648,7 @@ export type QueryGetSelectOptionsArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
   schema?: InputMaybe<Scalars['String']['input']>;
   searchTerm?: InputMaybe<Scalars['String']['input']>;
+  structuredFilters?: InputMaybe<FilterNode>;
 };
 
 
@@ -621,6 +658,7 @@ export type QueryGetSelectOptionsTreeArgs = {
   maxDepth?: InputMaybe<Scalars['Int']['input']>;
   schema?: InputMaybe<Scalars['String']['input']>;
   searchTerm?: InputMaybe<Scalars['String']['input']>;
+  structuredFilters?: InputMaybe<FilterNode>;
 };
 
 

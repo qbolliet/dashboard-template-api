@@ -2,6 +2,7 @@
 import { GraphQLError } from 'graphql';
 import { BaseQueryLoader } from './base-loader.js';
 import { config } from '../utils/config-loader.js';
+import { buildFilterPredicate } from '../utils/filter-tree.js';
 import { quoteIdent } from '../utils/identifiers.js';
 import { previewValue } from '../utils/preview-value.js';
 import {
@@ -12,6 +13,7 @@ import {
   withLabelFields,
 } from '../utils/metadata-mapping.js';
 import type { DuckDBConnection } from './base-loader.js';
+import type { CompiledFilter } from '../utils/filter-tree.js';
 
 // ─── Interfaces des options de sélection ─────────────────────────────────────
 
@@ -25,6 +27,12 @@ interface SelectOptionsParams {
    * null renders `label = value`. Part of the key, hence of the cache key.
    */
   labelField?: string | null;
+  /**
+   * Filter compiled by treeToSQL (never built from raw client SQL), restricting
+   * the rows read before the DISTINCT. Absent when there is no filter: the key,
+   * hence the cache key, is then the one of an unfiltered request.
+   */
+  where?: CompiledFilter | null;
 }
 
 /** Select option with value and label. */
@@ -43,6 +51,12 @@ interface SelectOptionsTreeParams {
   searchTerm: string | null;
   /** Hard bound on the node count; part of the key so a cached tree never bypasses it. */
   maxNodes: number;
+  /**
+   * Filter compiled by treeToSQL, restricting the rows before the chain is
+   * climbed: only the branches holding a satisfying row survive. Absent when
+   * there is no filter.
+   */
+  where?: CompiledFilter | null;
 }
 
 /** One level of a tree chain: the code column and its effective label column. */
@@ -207,6 +221,24 @@ class SelectOptionsLoader extends BaseQueryLoader {
     });
   }
 
+  // TTL long sans filtre, court avec filtre
+  /**
+   * Returns the TTL of a key: long when unfiltered, short when filtered.
+   *
+   * The unfiltered result only changes with a data update (which moves the
+   * version carried by the key); a filtered one is one of many combinations of
+   * the dashboard filters and rarely asked twice, as for `getFieldStats`.
+   *
+   * @param key - DataLoader key ({@link SelectOptionsParams} or {@link SelectOptionsTreeParams}).
+   * @returns SELECT_OPTIONS_CACHE_TIMEOUT without filter, FACT_CACHE_TIMEOUT with one.
+   */
+  override cacheTimeoutFor(key: unknown): number {
+    const { where } = key as { where?: CompiledFilter | null };
+    return where && where.sql
+      ? config.API.LOADERS.FACT_CACHE_TIMEOUT
+      : config.API.LOADERS.SELECT_OPTIONS_CACHE_TIMEOUT;
+  }
+
   // Méthode de chargement des valeurs distinctes d'une colonne
   /**
    * Loads the distinct values of a fact table column as select options.
@@ -215,6 +247,10 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * of a column hierarchy. The search term is bound as a parameter and its
    * LIKE wildcards are escaped.
    *
+   * With a compiled filter, only the rows satisfying it are read: the filter
+   * comes first in the WHERE clause, so the search term and the limit apply to
+   * the values left.
+   *
    * With a label column, the code and its label are read by the same
    * `SELECT DISTINCT`: the functional dependency code → label guaranteed by
    * the writer makes `DISTINCT (code, label)` equal to `DISTINCT code`. The
@@ -222,15 +258,15 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * NULL label falls back to the code (`SelectOption.label` is non-null).
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Object with fieldName, limit, optional searchTerm and the
-   *   effective labelField.
+   * @param params - Object with fieldName, limit, optional searchTerm, the
+   *   effective labelField and the optional compiled filter.
    * @returns Array of SelectOption; `label = value` without a label column.
    * @throws {GraphQLError} BAD_USER_INPUT when the column does not exist in the
    *   schema's metadata table.
    */
   async loadSelectOptions(
     connection: DuckDBConnection,
-    { fieldName, limit, searchTerm, labelField = null }: SelectOptionsParams,
+    { fieldName, limit, searchTerm, labelField = null, where }: SelectOptionsParams,
   ): Promise<SelectOption[]> {
     // La colonne doit être déclarée dans metadata : contrôle explicite pour
     // renvoyer une erreur utilisable plutôt que de laisser fuiter DuckDB. Le
@@ -246,7 +282,14 @@ class SelectOptionsLoader extends BaseQueryLoader {
     }
 
     if (labelField) {
-      return this.loadLabelledSelectOptions(connection, fieldName, labelField, limit, searchTerm);
+      return this.loadLabelledSelectOptions(
+        connection,
+        fieldName,
+        labelField,
+        limit,
+        searchTerm,
+        where,
+      );
     }
 
     // Construction de la requête : valeurs distinctes, NULL exclus, triées
@@ -255,6 +298,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
       `SELECT DISTINCT ${column} AS value FROM ${this.qualifyTable('fact_table')} ` +
       `WHERE ${column} IS NOT NULL`;
     const params: unknown[] = [];
+
+    // Filtre des autres colonnes, avant le DISTINCT ; ses paramètres précèdent ceux de la recherche
+    const filter = buildFilterPredicate(where);
+    query += filter.sql;
+    params.push(...filter.params);
 
     // Recherche insensible à la casse, jokers du terme neutralisés
     if (searchTerm) {
@@ -283,6 +331,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * @param labelField - Effective label column, declared in metadata.
    * @param limit - Maximum number of options.
    * @param searchTerm - Case-insensitive filter on the code or the label.
+   * @param where - Compiled filter restricting the rows, or absent.
    * @returns Options ordered by code as VARCHAR, `label` falling back to the code.
    */
   private async loadLabelledSelectOptions(
@@ -291,6 +340,7 @@ class SelectOptionsLoader extends BaseQueryLoader {
     labelField: string,
     limit: number,
     searchTerm?: string | null,
+    where?: CompiledFilter | null,
   ): Promise<SelectOption[]> {
     // Couple (code, libellé) lu dans la même ligne de la fact table
     const code = quoteIdent(fieldName);
@@ -299,6 +349,11 @@ class SelectOptionsLoader extends BaseQueryLoader {
       `SELECT DISTINCT CAST(${code} AS VARCHAR) AS value, ${label} AS label ` +
       `FROM ${this.qualifyTable('fact_table')} WHERE ${code} IS NOT NULL`;
     const params: unknown[] = [];
+
+    // Filtre des autres colonnes, avant le DISTINCT
+    const filter = buildFilterPredicate(where);
+    query += filter.sql;
+    params.push(...filter.params);
 
     // Recherche dans le code ou le libellé, même échappement des jokers
     if (searchTerm) {
@@ -381,21 +436,24 @@ class SelectOptionsLoader extends BaseQueryLoader {
    * memory. NULL root values are excluded and a NULL level ends its branch.
    * Each level with a label column adds that column to the same DISTINCT —
    * the functional dependency code → label keeps one row per code path, so
-   * a node is still one code. With a searchTerm, only rows whose leaf code or
-   * leaf label matches are read, so only the branches leading to a retained
-   * leaf survive. The query is capped at
+   * a node is still one code. With a compiled filter, only the rows satisfying
+   * it are read, before the chain is climbed: a branch survives when at least
+   * one of its rows does, and the node bound counts what is left. With a
+   * searchTerm, only rows whose leaf code or leaf label matches are read, so
+   * only the branches leading to a retained leaf survive. The query is capped at
    * maxNodes + 1 rows: each distinct row ends on a distinct node, so reaching
    * the cap already proves the tree too large.
    *
    * @param connection - Active DuckDB connection from the pool.
-   * @param params - Object with fieldName, maxDepth, searchTerm and maxNodes.
+   * @param params - Object with fieldName, maxDepth, searchTerm, maxNodes and
+   *   the optional compiled filter.
    * @returns Forest of `{ value, label, children? }` nodes.
    * @throws {GraphQLError} BAD_USER_INPUT when maxDepth < 1, fieldName is
    *   unknown, or the tree exceeds maxNodes.
    */
   async loadSelectOptionsTree(
     connection: DuckDBConnection,
-    { fieldName, maxDepth, searchTerm, maxNodes }: SelectOptionsTreeParams,
+    { fieldName, maxDepth, searchTerm, maxNodes, where }: SelectOptionsTreeParams,
   ): Promise<SelectOptionNode[]> {
     if (maxDepth !== null && maxDepth < 1) {
       throw new GraphQLError('maxDepth must be greater than or equal to 1', {
@@ -416,11 +474,16 @@ class SelectOptionsLoader extends BaseQueryLoader {
     const leafLabel = chain[chain.length - 1].labelColumn;
     const leaf = quoteIdent(fieldName);
 
-    // Construction de la requête : racine non NULL, feuille éventuellement filtrée
+    // Construction de la requête : racine non NULL, lignes filtrées, feuille éventuellement filtrée
     let query =
       `SELECT DISTINCT ${projection} FROM ${this.qualifyTable('fact_table')} ` +
       `WHERE ${quoteIdent(chain[0].column)} IS NOT NULL`;
     const params: unknown[] = [];
+
+    // Filtre des autres colonnes, appliqué aux lignes avant la remontée de la chaîne
+    const filter = buildFilterPredicate(where);
+    query += filter.sql;
+    params.push(...filter.params);
 
     // Recherche sur le code de la feuille, ou sur son libellé quand il existe
     if (searchTerm) {

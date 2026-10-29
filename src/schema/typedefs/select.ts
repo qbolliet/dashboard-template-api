@@ -10,7 +10,9 @@ import type { DocumentNode } from 'graphql';
  * Declares the two query entry points: getSelectOptions (flat list of one
  * column, with search and limit) and getSelectOptionsTree (nested tree of a
  * column hierarchy declared through metadata.parent_name). Both render a code
- * column with its label column (metadata.label_for) when it has one.
+ * column with its label column (metadata.label_for) when it has one, and both
+ * accept the optional `structuredFilters` FilterNode of getFieldStats to make
+ * the options depend on the other filters of a dashboard.
  */
 const selectTypeDefs: DocumentNode = gql`
   extend type Query {
@@ -19,6 +21,23 @@ const selectTypeDefs: DocumentNode = gql`
     except for a code column with label columns (\`Metadata.labelFields\`):
     \`value\` is the code (cast to text), \`label\` its label — the code itself
     when the label is NULL. \`searchTerm\` then matches the code or the label.
+
+    \`structuredFilters\` makes the menu depend on the other filters of the
+    dashboard: the same \`FilterNode\` as \`getFieldStats\`, compiled into a
+    parameterized WHERE clause. It restricts the rows read *before* the
+    \`SELECT DISTINCT\`, so only the values held by at least one row satisfying
+    the filter are returned; \`searchTerm\` and \`limit\` then apply to those
+    values, unchanged. Absent or null: every row is read, exactly as without
+    the argument. An invalid tree (unknown variable, operation not allowed on
+    the column type, bound exceeded) is rejected with BAD_USER_INPUT, as on
+    every query taking a \`FilterNode\`.
+
+    Example: the communes of the region \`Île-de-France\` —
+    \`getSelectOptions(fieldName: "commune", schema: "geography",
+    structuredFilters: { children: [{ criterion: { variable: "region",
+    operation: EQ, value: "Île-de-France" } }] })\` returns
+    \`[{ value: "Meaux", label: "Meaux" }, { value: "Melun", label: "Melun" },
+    { value: "Paris", label: "Paris" }]\`.
     """
     getSelectOptions(
       fieldName: String!
@@ -28,6 +47,8 @@ const selectTypeDefs: DocumentNode = gql`
       labelField: String
       catalog: String
       schema: String
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause that restricts the rows before the DISTINCT: only the values of rows satisfying it are returned. Absent or null: no restriction."
+      structuredFilters: FilterNode
     ): [SelectOption!]!
 
     """
@@ -61,9 +82,28 @@ const selectTypeDefs: DocumentNode = gql`
     first by alphabetical order; use \`getSelectOptions(labelField: …)\` on the
     leaf level for another label column.
 
+    \`structuredFilters\` (the \`FilterNode\` of \`getFieldStats\`, compiled into a
+    parameterized WHERE clause) restricts the rows *before* the chain is walked
+    up: only the branches holding at least one row that satisfies the filter
+    are returned, the others are pruned. \`searchTerm\`, \`maxDepth\` and
+    \`labelField\` rules apply to those rows, unchanged, and the node bound
+    counts what is left after the filter. Absent or null: every row is read,
+    exactly as without the argument. An invalid tree (unknown variable,
+    operation not allowed on the column type…) is rejected with BAD_USER_INPUT.
+
+    Example on the chain \`region → departement → commune\`:
+    \`getSelectOptionsTree(fieldName: "commune", structuredFilters: { children:
+    [{ criterion: { variable: "is_urban", operation: IS_TRUE } }] })\` keeps
+    the urban rows only and returns \`[{ value: "Bourgogne-Franche-Comté",
+    label: "Bourgogne-Franche-Comté", children: [{ value: "Côte-d'Or",
+    label: "Côte-d'Or", children: [{ value: "Dijon", label: "Dijon" }] }] },
+    …]\` — the other communes, and the departements left without any, are
+    pruned.
+
     Trees larger than the configured node bound (API.SELECT_OPTIONS.TREE_MAX_NODES)
     are rejected with BAD_USER_INPUT, never truncated: narrow them with
-    \`searchTerm\` or \`maxDepth\`, or use \`getSelectOptions\` on the leaf level.
+    \`searchTerm\`, \`maxDepth\` or \`structuredFilters\`, or use \`getSelectOptions\`
+    on the leaf level.
     """
     getSelectOptionsTree(
       "Deepest level displayed (the leaves of the tree)."
@@ -74,6 +114,8 @@ const selectTypeDefs: DocumentNode = gql`
       searchTerm: String
       catalog: String
       schema: String
+      "Filter tree (root = group), compiled server-side into a parameterized WHERE clause that restricts the rows before the chain is walked up: only the branches holding a satisfying row are returned. Absent or null: no restriction."
+      structuredFilters: FilterNode
     ): JSON!
   }
 `;

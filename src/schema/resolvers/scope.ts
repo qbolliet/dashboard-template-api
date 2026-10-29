@@ -2,8 +2,10 @@
 import { GraphQLError } from 'graphql';
 import { previewValue } from '../../utils/preview-value.js';
 import { databaseManager } from '../../db/index.js';
+import { compileFilterTree } from '../../utils/filter-tree.js';
 import type { GraphQLContext } from './types.js';
 import type { LoadersCollection } from '../../loaders/index.js';
+import type { CompiledFilter, FilterNodeInput } from '../../utils/filter-tree.js';
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────
 
@@ -147,4 +149,28 @@ export function loadersForScope(context: GraphQLContext, scope: FieldScope): Loa
     byScope.set(key, loaders);
   }
   return loaders;
+}
+
+// ─── Filtre d'un scope ────────────────────────────────────────────────────────
+
+/**
+ * Validates a filter tree and compiles it into a parameterized WHERE predicate.
+ *
+ * The single entry point of the queries that restrict the rows of one scope
+ * by a `FilterNode` (getFieldStats, getSelectOptions, getSelectOptionsTree):
+ * the columns are read through the metadata DataLoader of the scope, the
+ * compilation is `compileFilterTree`, and no SQL ever comes from the client.
+ *
+ * @param loaders - Loaders of the scope the filter bears on.
+ * @param structuredFilters - Filter tree, or null/undefined for no filter.
+ * @returns The compiled filter, or null when there is none.
+ * @throws {GraphQLError} BAD_USER_INPUT on an unknown column, a disallowed
+ *   operation or an exceeded bound.
+ */
+// Compilation d'un arbre de filtres sur les colonnes d'un scope
+export async function compileScopeFilter(
+  loaders: LoadersCollection,
+  structuredFilters: FilterNodeInput | null | undefined,
+): Promise<CompiledFilter | null> {
+  return compileFilterTree(structuredFilters, (names) => loaders.metadata.loadMany(names));
 }

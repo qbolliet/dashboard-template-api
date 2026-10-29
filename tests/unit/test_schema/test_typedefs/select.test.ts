@@ -43,7 +43,7 @@ describe('Query fields — select', () => {
     // Seul fieldName est obligatoire
     const args = new Map(field.args.map((a) => [a.name, a]));
     expect([...args.keys()].sort()).toEqual(
-      ['catalog', 'fieldName', 'maxDepth', 'schema', 'searchTerm'].sort(),
+      ['catalog', 'fieldName', 'maxDepth', 'schema', 'searchTerm', 'structuredFilters'].sort(),
     );
     expect(isNonNullType(args.get('fieldName')!.type)).toBe(true);
     expect(isNonNullType(args.get('maxDepth')!.type)).toBe(false);
@@ -59,6 +59,30 @@ describe('Query fields — select', () => {
     expect(field.description).toContain('children');
     expect(field.description).toContain('maxDepth: 2');
   });
+
+  /**
+   * Verification that both queries take the optional FilterNode of getFieldStats,
+   * documented with an example.
+   */
+  test.each(['getSelectOptions', 'getSelectOptionsTree'])(
+    '%s has an optional structuredFilters: FilterNode, described with an example',
+    (name) => {
+      const field = queryFields[name];
+      const arg = field.args.find((a) => a.name === 'structuredFilters');
+
+      // Même type que getFieldStats, facultatif et sans défaut : absent = pas de filtre
+      expect(String(arg!.type)).toBe('FilterNode');
+      expect(arg!.default).toBeUndefined();
+      expect(
+        String(queryFields.getFieldStats.args.find((a) => a.name === 'structuredFilters')!.type),
+      ).toBe('FilterNode');
+
+      // La description de la requête et celle de l'argument documentent le filtre
+      expect(arg!.description).toContain('before');
+      expect(field.description).toContain('structuredFilters: { children');
+      expect(field.description).toContain('BAD_USER_INPUT');
+    },
+  );
 
   /**
    * Verification that the uncorrelated grouped query is gone, type included.

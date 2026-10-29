@@ -33,6 +33,8 @@ TTL values per data type (`API.LOADERS` in `config/api.yaml`, see [cache.yaml](.
 | Metadata                       | 600 s       |
 | Select options, field stats    | 600 s       |
 
+A request carrying `structuredFilters` (`getFieldStats`, `getSelectOptions`, `getSelectOptionsTree`) is one of many combinations of the dashboard filters and rarely asked twice: it takes the short facts TTL instead, and the compiled filter is part of its key. Without a filter the key is the one of an unfiltered request.
+
 All cache keys are prefixed with `REDIS_KEY_PREFIX` (`graphql-api:` by default) to allow coexistence with other apps in the same Redis instance.
 
 ## Versioned namespaces

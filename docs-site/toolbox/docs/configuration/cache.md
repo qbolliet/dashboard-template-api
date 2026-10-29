@@ -54,6 +54,8 @@ The TTL of a Redis entry is set by the loader that writes it, from `API.LOADERS`
 | Select options, field stats    | `SELECT_OPTIONS_CACHE_TIMEOUT` | 600 s          |
 | Catalog and dataset info       | `DEFAULT_CACHE_TIMEOUT`        | 300 s          |
 
+Select options and field stats computed under `structuredFilters` use `FACT_CACHE_TIMEOUT` instead of `SELECT_OPTIONS_CACHE_TIMEOUT`.
+
 ## Cache invalidation
 
 `cache.yaml` has no invalidation setting. A catalog update needs none: cache keys carry the data version each pod serves (`<type>:<catalog>:<schema>@<version>:…`), so they move on their own when a pod picks the update up (see [Caching](../architecture/caching#versioned-namespaces)). The admin routes `POST /api/cache/invalidate-all` and `POST /api/cache/invalidate/:catalog[/:schema]` flush manually, with a non-blocking `SCAN` + `DEL`. After a code deployment, see [Kubernetes & Helm](../deployment/kubernetes-helm#after-a-code-deployment-flush-the-cache).

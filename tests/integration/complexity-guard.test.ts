@@ -155,6 +155,12 @@ const REALISTIC_QUERIES: Record<string, string> = {
     date: getFieldStats(fieldName: "date", structuredFilters: {}) { min max }
     horizon: getFieldStats(fieldName: "horizon", structuredFilters: {}) { min max distinctCount nullCount }
   }`,
+  // Menus dépendants des autres filtres du tableau de bord (structuredFilters)
+  dependentMenus: `{
+    country: getSelectOptions(fieldName: "country", structuredFilters: {}) { value label }
+    indicator: getSelectOptions(fieldName: "indicator", structuredFilters: {}, searchTerm: "gdp") { value label }
+    tree: getSelectOptionsTree(fieldName: "commune", maxDepth: 2, structuredFilters: {})
+  }`,
   fullPage: `{
     table: getFactTableWithMetadata(limit: 100, structuredFilters: {}, sort: []) {
       columns
@@ -235,6 +241,15 @@ describe('Barème de complexité (config/security.yaml)', () => {
         expect(rootFields(source)).toBeLessThanOrEqual(complexityConfig.MAX_ROOT_FIELDS);
       },
     );
+
+    test.each([
+      ['getSelectOptions', 'getSelectOptions(fieldName: "country"'],
+      ['getSelectOptionsTree', 'getSelectOptionsTree(fieldName: "commune", maxDepth: 2'],
+    ])('un structuredFilters ajoute le coût fixe d’un filtre à %s', async (_name, call) => {
+      // Même barème que les autres requêtes à FilterNode : 2, quelle que soit la requête
+      const bare = await score(`{ ${call}) }`);
+      expect(await score(`{ ${call}, structuredFilters: {}) }`)).toBe(bare + 2);
+    });
 
     test('les colonnes et leurs bornes d’un schéma de 16 colonnes restent sous la moitié du plafond', async () => {
       // `stats` sur tout un schéma : le chemin coûteux (une requête SQL par colonne)

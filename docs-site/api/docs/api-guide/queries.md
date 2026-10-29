@@ -668,8 +668,17 @@ getSelectOptions(
   searchTerm: String = ""
   catalog: String
   schema: String
+  structuredFilters: FilterNode   # restricts the rows before the DISTINCT
 ): [SelectOption!]!
 ```
+
+`structuredFilters` makes the menu depend on the other filters of the dashboard. It is the same
+`FilterNode` as `getFieldStats`, validated and compiled into a parameterized `WHERE` clause by the same
+function: only the values held by at least one row that satisfies the filter are returned. `searchTerm`
+and `limit` then apply to those values, unchanged. Absent or `null`, every row is read, exactly as before.
+An invalid tree (unknown variable, operation not allowed on the column type, bound exceeded) is rejected
+with `BAD_USER_INPUT`, as on every query taking a `FilterNode`. A request with a filter adds the usual
+filter cost to its complexity score and is cached for the short facts TTL.
 
 ### `getSelectOptionsTree`
 
@@ -682,6 +691,7 @@ getSelectOptionsTree(
   searchTerm: String    # case-insensitive filter on the fieldName level
   catalog: String
   schema: String
+  structuredFilters: FilterNode   # restricts the rows before the chain is walked up
 ): JSON!                # [{ value, label, children? }]
 ```
 
@@ -689,6 +699,9 @@ getSelectOptionsTree(
 - A NULL level ends its branch: the parent becomes a leaf, no empty node is produced.
 - A column without `parentName` yields a one-level tree.
 - With `searchTerm`, only branches leading to a matching leaf are kept (ancestors included).
+- With `structuredFilters`, the filter applies to the rows **before** the chain is walked up: only the branches
+  that hold at least one satisfying row are returned (a departement whose communes are all filtered out disappears
+  with them). `searchTerm` and `maxDepth` then apply to those rows, and the node bound counts what is left.
 - `maxDepth: 2` on `commune` (chain `region → departement → commune`) returns departements holding their own communes — the group-options format.
 - `maxDepth < 1`, an unknown field, or a tree larger than `API.SELECT_OPTIONS.TREE_MAX_NODES` (default 5000) is rejected with `BAD_USER_INPUT` — never truncated.
 
