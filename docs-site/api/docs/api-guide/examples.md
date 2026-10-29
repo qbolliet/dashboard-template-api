@@ -461,6 +461,72 @@ Excerpt of the result:
 A departement without communal level (`commune` NULL) is a leaf. Add
 `searchTerm` to filter the leaves; their ancestors are kept.
 
+## Menus that depend on the other filters
+
+Pass the filter tree of the dashboard as `structuredFilters` (the same `FilterNode` as
+`getFieldStats`) and a menu only offers the values that still exist under the other filters.
+The filter applies to the rows before the `SELECT DISTINCT`; `searchTerm` and `limit` come after.
+
+```graphql
+query {
+  getSelectOptions(
+    fieldName: "commune"
+    schema: "geography"
+    structuredFilters: {
+      children: [{ criterion: { variable: "region", operation: EQ, value: "Île-de-France" } }]
+    }
+  ) {
+    value
+    label
+  }
+}
+```
+
+```json
+[
+  { "value": "Meaux", "label": "Meaux" },
+  { "value": "Melun", "label": "Melun" },
+  { "value": "Paris", "label": "Paris" }
+]
+```
+
+On a tree, the filter applies before the chain is walked up, so only the branches with at least one
+satisfying row remain. Here the urban rows only (`is_urban` is a boolean column):
+
+```graphql
+query {
+  getSelectOptionsTree(
+    fieldName: "commune"
+    maxDepth: 2
+    schema: "geography"
+    structuredFilters: { children: [{ criterion: { variable: "is_urban", operation: IS_TRUE } }] }
+  )
+}
+```
+
+```json
+[
+  {
+    "value": "Côte-d'Or",
+    "label": "Côte-d'Or",
+    "children": [{ "value": "Dijon", "label": "Dijon" }]
+  },
+  {
+    "value": "Hérault",
+    "label": "Hérault",
+    "children": [{ "value": "Montpellier", "label": "Montpellier" }]
+  },
+  {
+    "value": "Seine-et-Marne",
+    "label": "Seine-et-Marne",
+    "children": [{ "value": "Meaux", "label": "Meaux" }]
+  }
+]
+```
+
+An invalid tree (unknown variable, operation not allowed on the column type) is rejected with
+`BAD_USER_INPUT`.
+
 ## Cross-database comparison
 
 Each side is aggregated by the group columns before the join: one row per

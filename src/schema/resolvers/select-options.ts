@@ -4,8 +4,25 @@ import { config } from '../../utils/config-loader.js';
 import { DEFAULT_TREE_MAX_NODES } from '../../loaders/select-options.js';
 import { indexMetadataByName, resolveLabelField } from '../../utils/metadata-mapping.js';
 import { validatePagination } from '../../utils/pagination.js';
+import { compileScopeFilter } from './scope.js';
 import type { SelectOptionNode } from '../../loaders/select-options.js';
+import type { CompiledFilter } from '../../utils/filter-tree.js';
 import type { QueryResolvers } from '../../generated/graphql.js';
+
+/**
+ * Builds the loader-key fragment carrying the compiled filter.
+ *
+ * A null `where` must not appear in the key at all: the cache key hashes the
+ * key object, and `where: null` would differ from an absent field, so a
+ * request without filter would stop sharing the entries it had before.
+ *
+ * @param where - Compiled filter, or null when the request has none.
+ * @returns `{ where }` when there is a filter, an empty object otherwise.
+ */
+// Fragment de clé du loader : le filtre n'y figure que s'il existe
+function whereKey(where: CompiledFilter | null): { where?: CompiledFilter } {
+  return where && where.sql ? { where } : {};
+}
 
 // Resolver pour la sélection des options
 /**
@@ -40,6 +57,7 @@ const selectOptionsResolvers: {
         labelField = null,
         catalog,
         schema,
+        structuredFilters,
       },
       { loaders, getLoadersForCatalog },
     ) => {
@@ -60,12 +78,17 @@ const selectOptionsResolvers: {
         ? resolveLabelField(fieldName, indexMetadataByName([fieldMeta]), labelField)
         : null;
 
+      // Même validation et même compilation que getFieldStats : SQL paramétré, jamais de SQL client
+      const where = await compileScopeFilter(activeLoaders, structuredFilters);
+
       return withTimeout(
         activeLoaders.selectOptions.load({
           fieldName,
           limit: effectiveLimit,
           searchTerm,
           labelField: effectiveLabelField,
+          // Absent sans filtre : la clé, donc le SQL et le cache, restent ceux d'avant
+          ...whereKey(where),
         }),
         config.API.TIMEOUTS.SELECT_OPTIONS,
         'Select options fetch timeout',
@@ -81,18 +104,27 @@ const selectOptionsResolvers: {
      */
     getSelectOptionsTree: async (
       _: unknown,
-      { fieldName, maxDepth = null, searchTerm = null, catalog, schema },
+      { fieldName, maxDepth = null, searchTerm = null, catalog, schema, structuredFilters },
       { loaders, getLoadersForCatalog },
     ): Promise<SelectOptionNode[]> => {
-      // Sélection du loader adapté au catalogue/schéma cible
-      const targetLoaders = getLoadersForCatalog(catalog, schema);
-      const loader = targetLoaders ? targetLoaders.selectOptionsTree : loaders.selectOptionsTree;
+      // Sélection des loaders adaptés au catalogue/schéma cible
+      const targetLoaders = getLoadersForCatalog(catalog, schema) ?? loaders;
 
       // La borne fait partie de la clé : un arbre en cache ne la contourne jamais
       const maxNodes = config.API.SELECT_OPTIONS?.TREE_MAX_NODES ?? DEFAULT_TREE_MAX_NODES;
 
+      // Même validation et même compilation que getFieldStats : SQL paramétré, jamais de SQL client
+      const where = await compileScopeFilter(targetLoaders, structuredFilters);
+
       return withTimeout(
-        loader.load({ fieldName, maxDepth, searchTerm: searchTerm || null, maxNodes }),
+        targetLoaders.selectOptionsTree.load({
+          fieldName,
+          maxDepth,
+          searchTerm: searchTerm || null,
+          maxNodes,
+          // Absent sans filtre : la clé, donc le SQL et le cache, restent ceux d'avant
+          ...whereKey(where),
+        }),
         config.API.TIMEOUTS.SELECT_OPTIONS,
         'Select options tree fetch timeout',
       );

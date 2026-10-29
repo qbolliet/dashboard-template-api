@@ -3,8 +3,7 @@ import { GraphQLError } from 'graphql';
 import { previewValue } from '../../utils/preview-value.js';
 import { withTimeout } from '../../utils/timeout.js';
 import { config } from '../../utils/config-loader.js';
-import { compileFilterTree } from '../../utils/filter-tree.js';
-import { contextScope, loadersForScope } from './scope.js';
+import { compileScopeFilter, contextScope, loadersForScope } from './scope.js';
 import type { GraphQLContext } from './types.js';
 import type { FieldScope, ScopeFields } from './scope.js';
 import type { FieldStats } from '../../loaders/field-stats.js';
@@ -63,9 +62,7 @@ async function loadFieldStats(
   }
 
   // Même compilation que les requêtes de faits : SQL paramétré, jamais de SQL client
-  const where = await compileFilterTree(structuredFilters, (names) =>
-    loaders.metadata.loadMany(names),
-  );
+  const where = await compileScopeFilter(loaders, structuredFilters);
 
   return withTimeout(
     loaders.fieldStats.load({ fieldName, where }),
