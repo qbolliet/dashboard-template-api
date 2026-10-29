@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/qbolliet/dashboard-template-api/compare/v0.4.0...v0.5.0) (2026-10-29)
+
+
+### Features
+
+* **schema:** add structuredFilters to getSelectOptions and getSelectOptionsTree ([332010f](https://github.com/qbolliet/dashboard-template-api/commit/332010f34ac448cf5f3e1cbaff3965f01cf822c3))
+* **schema:** add structuredFilters to getSelectOptions and getSelectOptionsTree ([71d98f6](https://github.com/qbolliet/dashboard-template-api/commit/71d98f6653a600356fffe5c0257b40f9018a1bfa))
+
 ## [0.4.0](https://github.com/qbolliet/dashboard-template-api/compare/v0.3.0...v0.4.0) (2026-10-26)
 
 
