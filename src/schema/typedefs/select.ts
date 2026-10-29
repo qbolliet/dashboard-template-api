@@ -36,8 +36,7 @@ const selectTypeDefs: DocumentNode = gql`
     \`getSelectOptions(fieldName: "commune", schema: "geography",
     structuredFilters: { children: [{ criterion: { variable: "region",
     operation: EQ, value: "Île-de-France" } }] })\` returns
-    \`[{ value: "Meaux", label: "Meaux" }, { value: "Melun", label: "Melun" },
-    { value: "Paris", label: "Paris" }]\`.
+    \`[{ value: "Meaux", label: "Meaux" }, { value: "Melun", label: "Melun" }, { value: "Paris", label: "Paris" }]\`.
     """
     getSelectOptions(
       fieldName: String!
